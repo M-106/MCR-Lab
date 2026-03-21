@@ -1,0 +1,9 @@
+numpy
+pandas
+matplotlib
+tqdm
+scipy
+open3d
+pyransac3d
+# pytorch3d -> must fit to the torch version
+# torch 
