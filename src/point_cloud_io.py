@@ -6,6 +6,7 @@ import os
 import numpy as np
 import laspy
 import open3d as o3d
+import open3d.core as ocore
 from torch.utils.data import Dataset, DataLoader
 
 
@@ -13,7 +14,15 @@ from torch.utils.data import Dataset, DataLoader
 # ---------
 # > Utils <
 # ---------
-def load_point_cloud(path, is_triangle_mesh=False):
+def get_device(device):
+    if device:
+        return device
+    else:
+        return ocore.Device("CPU:0")
+
+
+
+def load_point_cloud(path, load_as_tensor=False, is_triangle_mesh=False):
     if path.endwith(".las") or path.endwith(".laz"):
         las = laspy.read(path)
         points = np.vstack((las.x, las.y, las.z)).transpose()
@@ -31,14 +40,26 @@ def load_point_cloud(path, is_triangle_mesh=False):
             point_cloud = o3d.io.read_triangle_mesh(path)
             point_cloud.compute_vertex_normals()
         else:
-            point_cloud = o3d.io.read_point_cloud(path)
+            if load_as_tensor:
+                point_cloud = o3d.t.io.read_point_cloud("labeled_cloud.pcd")
+
+                # point_cloud.to(o3d.core.Device("CUDA:0"))
+
+                # DEBUGGING -> remove me later -> Check if the labels made it back
+                if "labels" in point_cloud.point:
+                    print("Labels successfully loaded!")
+                    print(point_cloud.point["labels"])
+                else:
+                    print("No labels found in the file.")
+            else:
+                point_cloud = o3d.io.read_point_cloud(path)
     
     return point_cloud
 
 
 
-def save_point_cloud(path, point_cloud):
-    if path.endwith(".las") or path.endwith(".laz"):
+def save_point_cloud(path, point_cloud, load_as_tensor=False,):
+    if path.endswith(".las") or path.endswith(".laz"):
         header = laspy.LasHeader(point_format=3, version="1.2")
         export_las = laspy.LasData(header)
 
@@ -55,6 +76,8 @@ def save_point_cloud(path, point_cloud):
         # FIXME -> and other informations?!
 
         export_las.write(path)
+    elif path.endswith(".pcd"):
+        o3d.t.io.write_point_cloud(path, point_cloud)
     else:
         success = o3d.io.write_point_cloud(path, point_cloud)
 

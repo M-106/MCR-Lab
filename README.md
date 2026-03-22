@@ -26,6 +26,7 @@ On Windows:
     docker run --gpus all -it --rm -v .:/app mcr-lab bash
     ```
 5. Then connect with VSCode and the Docker Dev extension.
+6. Run code via jupyter or with the docker console `python ./src/main.py`.
 
 > For training directly sart train.py?
 
