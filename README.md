@@ -61,5 +61,6 @@ Cold-Practise-Phase:
 - [Mask2Former-Instance-Segmentation](https://github.com/M-106/AI/blob/main/docs/model_usage.md#segmentation-example) (+ RANSAC shape-fitting to get center?)
 - [SAM-Segmentation + Classification-Head](https://github.com/M-106/AI/blob/main/docs/model_usage.md#segmentation-example) (manhole or not) (+ RANSAC shape-fitting to get center?)
 - Point Transformer v3 (+ RANSAC shape-fitting to get center?) -> or direct regression?
+    - maybe try https://huggingface.co/bryanchang/PTv3_laneline_segemenation_signal before you try use the official repo/pointcept
 
 
