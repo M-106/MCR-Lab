@@ -1,0 +1,18 @@
+mode: tryout    # train, test, tryout
+
+train:
+  batch_size: 32
+  epochs: 10
+  datapath: "./data/benchmark"
+
+test:
+  datapath: "./data/benchmark"
+
+model:
+  name: resnet
+
+
+
+
+
+

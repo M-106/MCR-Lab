@@ -6,5 +6,8 @@ scipy
 open3d
 pyransac3d
 laspy
+pydantic  # config
+pyyaml
+transformers
 # pytorch3d -> must fit to the torch version
 # torch 

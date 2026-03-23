@@ -1,0 +1,35 @@
+[project]
+name = "mcrlab"
+version = "0.1.0"
+description = "Point Cloud Manhole Center Regression Pipeline"
+authors = [
+  { name="Tobia Ippolito" }
+]
+readme = "README.md"
+# requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "tqdm",
+    "scipy",
+    "open3d",
+    "pyransac3d",
+    "laspy",
+    "pydantic",  # config
+    "pyyaml",
+    "transformers",
+    "torch"    # afterwards in install your torch version 
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+# [tool.setuptools.packages.find]
+# where = ["."]
+
+[project.scripts]
+mcrlab = "mcrlab.main:main"
+
+

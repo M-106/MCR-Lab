@@ -1,0 +1,19 @@
+# don't copy following:
+# Python cache
+__pycache__/
+*.pyc
+
+# Git
+.git/
+.gitignore
+
+# Virtual environments
+venv/
+.env/
+
+# Data and outputs
+data/
+outputs/
+
+
+
