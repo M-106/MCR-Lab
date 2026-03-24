@@ -56,35 +56,35 @@ def add_color_from_height(point_cloud):
 
 #     return pc_tensor
 
-# def filter_ground(point_cloud, distance_threshold=0.2, ransac_n=3, num_iterations=1000):
-#     # get points
-#     points = point_cloud.point["positions"].numpy()
+def filter_ground_with_RANSAC(point_cloud, distance_threshold=0.2, ransac_n=3, num_iterations=1000):
+    # get points
+    points = point_cloud.point["positions"].numpy()
 
-#     # legacy for plane fitting
-#     pc_legacy = o3d.geometry.PointCloud()
-#     pc_legacy.points = o3d.utility.Vector3dVector(points)
+    # legacy for plane fitting
+    pc_legacy = o3d.geometry.PointCloud()
+    pc_legacy.points = o3d.utility.Vector3dVector(points)
 
-#     plane_model, inliers = pc_legacy.segment_plane(
-#         distance_threshold=distance_threshold,
-#         ransac_n=ransac_n,
-#         num_iterations=num_iterations
-#     )
+    plane_model, inliers = pc_legacy.segment_plane(
+        distance_threshold=distance_threshold,
+        ransac_n=ransac_n,
+        num_iterations=num_iterations
+    )
 
-#     mask = np.zeros(len(points), dtype=bool)
-#     mask[inliers] = True  # ground = True
+    mask = np.zeros(len(points), dtype=bool)
+    mask[inliers] = True  # ground = True
 
-#     # build new tensor point cloud with ALL attributes
-#     pc_ground = o3d.t.geometry.PointCloud()
+    # build new tensor point cloud with ALL attributes
+    pc_ground = o3d.t.geometry.PointCloud()
 
-#     for key in point_cloud.point:
-#         data = point_cloud.point[key].numpy()
-#         pc_ground.point[key] = o3d.core.Tensor(data[mask])
+    for key in point_cloud.point:
+        data = point_cloud.point[key].numpy()
+        pc_ground.point[key] = o3d.core.Tensor(data[mask])
 
-#     return pc_ground
+    return pc_ground
 
 
 
-def filter_ground(point_cloud, threshold=0.3):
+def filter_ground_with_height(point_cloud, threshold=0.3):
     points = point_cloud.point["positions"].numpy()
 
     # naive approximation: subtract global minimum
@@ -110,6 +110,8 @@ def filter_ground(point_cloud, threshold=0.3):
 def bev_projection(point_cloud):
     # ... -> tile based bev images from pc
     return point_cloud
+
+
 
 def bev_back_projection(image_number, pixel):
     # ... -> back-projection from from one specific pixel tile based bev images from pc

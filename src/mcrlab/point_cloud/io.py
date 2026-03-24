@@ -13,7 +13,7 @@ import open3d as o3d
 import open3d.core as ocore
 
 from mcrlab.point_cloud.utils import add_color_from_intensity, add_color_from_height, \
-                                     filter_ground
+                                     filter_ground_with_height, filter_ground_with_RANSAC
 
 
 
@@ -121,7 +121,14 @@ class ToTensorTransform:
         # sample or pad points to fixed size
         cur_number_of_points = data.shape[0]
         if cur_number_of_points > self.num_points:
-            idxs = np.random.choice(cur_number_of_points, self.num_points, replace=False)
+            # idxs = np.random.choice(cur_number_of_points, self.num_points, replace=False)
+            
+            z = data[:, 2]
+            idx_sorted = np.argsort(z)     # sorted low to high
+
+            # remove top N
+            N_remove = 500
+            idxs = idx_sorted[:-N_remove]
         else:
             extra_idxs = np.random.choice(cur_number_of_points, (self.num_points-cur_number_of_points), replace=True)
             idxs = np.hstack((np.arange(cur_number_of_points), extra_idxs))  # result also 1 dimensional
@@ -142,12 +149,18 @@ class ExtractLabelsAsTensorTransform:
 
 
 class RoadExtractionTransform:
-    def __init__(self):
-        pass
+    def __init__(self, mode="height"):  # height, ransac
+        self.mode = mode
 
     def __call__(self, point_cloud):
         point_before = len(point_cloud.point["positions"])
-        point_cloud = filter_ground(point_cloud, threshold=10.0)
+
+        if self.mode == "height":
+            point_cloud = filter_ground_with_height(point_cloud, threshold=10.0)
+        elif self.mode == "ransac":
+            point_cloud = filter_ground_with_RANSAC(point_cloud, distance_threshold=1.0, ransac_n=3, num_iterations=3000)
+        else:
+            raise ValueError(f"No `{self.mode}` mode for Road Extraction.")
         point_after = len(point_cloud.point["positions"])
         print(f"Road Extraction filtered {point_before-point_after} points.")
         return point_cloud
