@@ -3,13 +3,16 @@ mode: tryout    # train, test, tryout
 train:
   batch_size: 32
   epochs: 10
-  datapath: "./data/benchmark"
 
 test:
-  datapath: "./data/benchmark"
+  metrices: []
 
 model:
   name: resnet
+
+data:
+  name: "paris"  # paris, fipm
+  path: "C:/Users/tippolito/Data/Benchmark"
 
 
 

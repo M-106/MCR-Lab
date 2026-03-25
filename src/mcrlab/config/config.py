@@ -20,12 +20,11 @@ def load_config(path):
 class TrainConfig(BaseModel):
     batch_size: int
     epochs: int
-    datapath: str
 
 
 
 class TestConfig(BaseModel):
-    datapath: str
+    metrices: list
 
 
 
@@ -34,11 +33,18 @@ class ModelConfig(BaseModel):
 
 
 
+class DataConfig(BaseModel):
+    name: str
+    path: str
+
+
+
 class Config(BaseModel):
     mode: str
     train: TrainConfig
     test: TestConfig
     model: ModelConfig
+    data: DataConfig
 
 
 

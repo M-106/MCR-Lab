@@ -5,8 +5,8 @@ import argparse
 from mcrlab.config.config import Config, load_config
 from mcrlab.train import train
 from mcrlab.test import test
-from mcrlab.point_cloud.io import ParisLille3DDataset, get_paris_data_loader, get_basic_transform
-from mcrlab.point_cloud.inspect import get_info, get_metrics, visualize
+from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform
+from mcrlab.point_cloud.inspect import print_pc, visualize
 
 import open3d as o3d
 
@@ -18,9 +18,15 @@ def main():
 
     config = load_config(args.config)
 
-    print(config.mode)
-    print(config.model)
-    print(config.train.batch_size)
+    # print(config.mode)
+    # print(config.model)
+    # print(config.train.batch_size)
+    # print(config.data.path)
+    print("Configuration:")
+    print(config)
+    print("\n")
+
+
 
     # do something
     if config.mode == "train":
@@ -31,23 +37,30 @@ def main():
         from mcrlab.test import test
         test(config)
     elif config.mode == "tryout":
-        # r"C:/Users/tippolito/Data/Benchmark"
-        # "../data/paris_lille_3d"
-        dataset = ParisLille3DDataset(path=r"C:/Users/tippolito/Data/Benchmark", testdata=True, transform=None)
+        
+        if config.data.name == "paris":
+            dataset = ParisLille3DDataset(path=config.data.path, testdata=False, transform=None)
         point_cloud = next(iter(dataset))
-        get_info(point_cloud)
-        get_metrics(point_cloud)
-        visualize(point_cloud)
+        print_pc(point_cloud)
+        visualize(point_cloud, color_mode="class")
 
         # PyTorch Dataset try out
-        data_loader = get_paris_data_loader(r"C:/Users/tippolito/Data/Benchmark", testdata=True, 
-                                            transform=get_basic_transform(),
-                                            batch_size=1, shuffle=False, num_workers=1)
+        if config.data.name == "paris":
+            data_loader = get_data_loader(config.data.name, config.data.path, 
+                                          testdata=False, 
+                                          transform=get_basic_transform(
+                                                        num_points=-1, 
+                                                        road_extraction_mode=None
+                                                    ),
+                                          batch_size=4, shuffle=False, num_workers=1)
+            
+            # data_loader = get_paris_data_loader(config.data.path, testdata=False, 
+            #                                     transform=None,
+            #                                     batch_size=4, shuffle=False, num_workers=1)
 
         for batch in data_loader:
             point_cloud = batch[0]
-            get_info(point_cloud)
-            get_metrics(point_cloud)
+            print_pc(point_cloud)
             visualize(point_cloud)
             break
     else:
