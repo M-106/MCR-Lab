@@ -1,4 +1,4 @@
-mode: tryout    # train, test, tryout
+mode: preprocessing    # train, test, tryout, preprocessing
 
 train:
   batch_size: 32
@@ -14,7 +14,7 @@ data:
   name: "paris"  # paris, fipm
   path: "C:/Users/tippolito/Data/Benchmark"
 
-
+device: cpu  # cpu, cuda, cuda:0
 
 
 

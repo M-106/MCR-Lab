@@ -49,6 +49,23 @@ def ensure_2_dims(arr):
 
 
 
+def map_torch_device_to_o3d(device:str) -> str:
+    device = device.lower()
+
+    if device == "cpu":
+        return "CPU:0"
+
+    if device.startswith("cuda"):
+        if ":" in device:
+            index = device.split(":")[1]
+        else:
+            index = "0"
+        return f"CUDA:{index}"
+
+    raise ValueError(f"Open3D does not support '{device}' device.")
+
+
+
 # ------------------------------
 # > Own Point Cloud Data Class <
 # ------------------------------
@@ -113,6 +130,57 @@ class PointCloudTensor(object):
             self.normals = normals_
             self.labels = labels_
 
+    def to_device(self, device):
+        """
+        The input device is expected as an string in PyTroch naming.
+
+        In PyTorch, a device is represented by torch.device, and it can specify:
+        - "cpu"
+        - "cuda" (NVIDIA GPU)
+        - "cuda:0", "cuda:1", … (specific GPU index)
+        - "mps" (Apple Silicon GPU)
+        - "xpu" (Intel)
+        - "privateuseone" (TPU via XLA)
+
+        These are therefore available strings.
+        """
+        # if device == torch.device("cuda:1"):
+        # if device.type == "cuda":
+
+        if not self.is_torch_tensor:
+            device = map_torch_device_to_o3d(device)
+
+        moved_coordinates = self.coordinates.to(device)
+
+        if self.labels is not None:
+            moved_labels = self.labels.to(device)
+        else:
+            moved_labels = None
+
+        if self.intensities is not None:
+            moved_intensities = self.intensities.to(device)
+        else:
+            moved_intensities = None
+
+        if self.colors is not None:
+            moved_colors = self.colors.to(device)
+        else:
+            moved_colors = None
+
+        if self.normals is not None:
+            moved_normals = self.normals.to(device)
+        else:
+            moved_normals = None
+
+        return PointCloudTensor(
+            coordinates=moved_coordinates,
+            labels=moved_labels,
+            intensities=moved_intensities,
+            colors=moved_colors,
+            normals=moved_normals,
+            is_torch_tensor=self.is_torch_tensor
+        )
+            
     def get_as_vector(self, include_color=False, 
                             include_intensity=False,
                             include_normals=False,
@@ -155,7 +223,13 @@ class PointCloudTensor(object):
             o3d_pc.point["labels"] = o3d.core.Tensor(tensor_pc.labels, dtype=o3d.core.int32)
 
         return o3d_pc
+
+    # def save(self, path):
+    #     o3d.t.io.write_point_cloud(path, self.get_as_o3d())
     
+
+
+
 
 
 

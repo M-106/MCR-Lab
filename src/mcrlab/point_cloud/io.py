@@ -61,6 +61,9 @@ def save_point_cloud(path, point_cloud):
     if isinstance(point_cloud, PointCloudTensor):
         point_cloud = point_cloud.get_as_o3d()
 
+    if isinstance(point_cloud, o3d.t.geometry.PointCloud):
+        raise ValueError(f"Expected 'o3d.t.geometry.PointCloud' but got {type(point_cloud)}")
+
     if path.endswith(".las") or path.endswith(".laz"):
         save_as_las(path=path, point_cloud=point_cloud)
     elif path.endswith(".ply"):

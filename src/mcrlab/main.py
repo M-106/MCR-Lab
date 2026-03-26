@@ -5,7 +5,8 @@ import argparse
 from mcrlab.config.config import Config, load_config
 from mcrlab.train import train
 from mcrlab.test import test
-from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform
+from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform, \
+                                    preprocess_data, get_preprocessing_transform
 from mcrlab.point_cloud.inspect import print_pc, visualize
 
 import open3d as o3d
@@ -36,23 +37,25 @@ def main():
     elif config.mode == "test":
         from mcrlab.test import test
         test(config)
+    elif config.mode == "preprocessing":
+        preprocess_data(config.data.name, config.data.path, 
+                        testdata=False, transform=get_preprocessing_transform(), 
+                        device="cpu")
     elif config.mode == "tryout":
         
         if config.data.name == "paris":
             dataset = ParisLille3DDataset(path=config.data.path, testdata=False, transform=None)
         point_cloud = next(iter(dataset))
         print_pc(point_cloud)
-        visualize(point_cloud, color_mode="class")
+        # visualize(point_cloud, color_mode="class")
 
         # PyTorch Dataset try out
         if config.data.name == "paris":
             data_loader = get_data_loader(config.data.name, config.data.path, 
                                           testdata=False, 
-                                          transform=get_basic_transform(
-                                                        num_points=-1, 
-                                                        road_extraction_mode=None
-                                                    ),
-                                          batch_size=4, shuffle=False, num_workers=1)
+                                          transform=get_basic_transform(num_points=-1),
+                                          batch_size=4, shuffle=False, num_workers=1,
+                                          preprocessed=True)
             
             # data_loader = get_paris_data_loader(config.data.path, testdata=False, 
             #                                     transform=None,

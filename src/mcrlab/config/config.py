@@ -45,6 +45,7 @@ class Config(BaseModel):
     test: TestConfig
     model: ModelConfig
     data: DataConfig
+    device: str
 
 
 
