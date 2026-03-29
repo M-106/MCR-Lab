@@ -1,4 +1,4 @@
-mode: preprocessing    # train, test, tryout, preprocessing
+mode: tryout    # train, test, tryout, preprocessing
 
 train:
   batch_size: 32
@@ -12,7 +12,7 @@ model:
 
 data:
   name: "paris"  # paris, fipm
-  path: "C:/Users/tippolito/Data/Benchmark"
+  path: "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d"  # "C:/Users/tippolito/Data/Benchmark"
 
 device: cpu  # cpu, cuda, cuda:0
 

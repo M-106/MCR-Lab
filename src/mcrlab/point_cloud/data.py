@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 import open3d as o3d
+import CSF  # package: cloth-simulation-filter
 
 from tqdm import tqdm
 
@@ -17,6 +18,7 @@ from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_wi
                                      get_normal_attribute
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.core import PointCloudTensor, map_torch_device_to_o3d
+# from mcrlab.point_cloud.inspect import print_pc
 
 
 
@@ -33,7 +35,7 @@ class HeightFilterTransform:
             raise ValueError(f"Can't apply ToPointCloudTensorTransform on '{type(point_cloud)}'")
 
         coordinate_idx = get_coordinate_attribute(point_cloud)
-        point_before = len(point_cloud.point[coordinate_idx])
+        # point_before = len(point_cloud.point[coordinate_idx])
 
         z = point_cloud.point[get_coordinate_attribute(point_cloud)][:, 2]
 
@@ -50,57 +52,71 @@ class HeightFilterTransform:
 
         point_cloud = point_cloud.select_by_mask(mask)
         
-        point_after = len(point_cloud.point[coordinate_idx])
-        # DEBUGGING -> comment when go productive FIXME
-        print(f"Height-Filter filtered {point_before-point_after} points.")
+        # point_after = len(point_cloud.point[coordinate_idx])
+        # # DEBUGGING -> comment when go productive FIXME
+        # print(f"Height-Filter filtered {point_before-point_after} points.")
         return point_cloud
     
 
 
-class NaivMinHistoGroundKeepFilterTransform:
-    def __init__(self):
-        pass
+# Plane-Fitting
+class RANSACGroundKeepFilterTransform:
+    def __init__(self, dist_threshold=0.5, ransac_tries=3):
+        self.dist_threshold = dist_threshold
+        self.ransac_tries = ransac_tries
 
     def __call__(self, point_cloud):
         if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
-            raise ValueError(f"Can't apply ToPointCloudTensorTransform on '{type(point_cloud)}'")
+            raise ValueError(f"Can't apply RANSACGroundKeepFilterTransform on '{type(point_cloud)}'")
 
         coordinate_idx = get_coordinate_attribute(point_cloud)
-        point_before = len(point_cloud.point[coordinate_idx])
+        # point_before = len(point_cloud.point[coordinate_idx])
 
-        z = point_cloud.point[get_coordinate_attribute(point_cloud)][:, 2]
+        # use RANSAC to get ground plane
+        best_inliers = []
+        best_plane = None
 
-        # value setup for histogram
-        bin_size = 0.05  # 5cm
+        for _ in range(self.ransac_tries):  # mehrere Versuche
+            plane_model, inliers = point_cloud.segment_plane(
+                distance_threshold=0.02,
+                ransac_n=5,
+                num_iterations=20000
+            )
 
-        z_min = z.min().item()
-        z_max = z.max().item()
+            plane_model = plane_model.to(o3d.core.Dtype.Float32)
+            a, b, c, d = plane_model.numpy()
+            normal = o3d.core.Tensor([a, b, c], dtype=o3d.core.Dtype.Float32)
+            # normalize the normal
+            normal = (normal - normal.max()) / (normal.max() - normal.min())
 
-        # calc histogram
-        num_bins = int((z_max - z_min) / bin_size) + 1
+            # nur fast horizontale Ebenen akzeptieren
+            if abs(normal[2].item()) > 0.9:
+                if len(inliers) > len(best_inliers):
+                    best_inliers = inliers
+                    best_plane = plane_model
 
-        hist = o3d.core.Tensor.zeros((num_bins), dtype=o3d.core.int32)
+        # fallback
+        if best_plane is None:
+            best_plane, best_inliers = plane_model, inliers
 
-        # bin indexes
-        bin_idx = ((z - z_min) / bin_size).floor().to(o3d.core.int32)
+        [a, b, c, d] = best_plane
+        points = point_cloud.point[coordinate_idx]
 
-        # count
-        for cur_bin_idx in range(bin_idx.shape[0]):
-            hist[bin_idx[cur_bin_idx]] += 1
+        # calc distance to the plane
+        # ax + by + cz + d
+        # dist = (points[:, 0] * a +
+        #         points[:, 1] * b +
+        #         points[:, 2] * c + d).abs()
+        # -> dist = abs(a*x + b*y + c*z + d) / sqrt(a²+b²+c²)
+        dist = (points[:, 0]*a + points[:, 1]*b + points[:, 2]*c + d).abs()
+        dist = dist / (a*a + b*b + c*c).sqrt()  # elementwise sqrt equals ** 0.5
 
-        # biggest bin = ground
-        ground_bin = hist.argmax().item()
-
-        # have to upscale from bin_idx to normal value
-        z_ground = z_min + ground_bin * bin_size
-
-        # remove everything under and on top of the ground
-        mask = (z > (z_ground - 0.5)) & (z < (z_ground + 0.5))
+        mask = dist < self.dist_threshold
         point_cloud = point_cloud.select_by_mask(mask)
         
-        point_after = len(point_cloud.point[coordinate_idx])
-        # DEBUGGING -> comment when go productive FIXME
-        print(f"NaivMinHistoGroundKeepFilter filtered {point_before-point_after} points.")
+        # point_after = len(point_cloud.point[coordinate_idx])
+        # # DEBUGGING -> comment when go productive FIXME
+        # print(f"RANSACGroundKeepFilterTransform filtered {point_before-point_after} points.")
         return point_cloud
 
 
@@ -114,20 +130,72 @@ class RoadExtractionTransform:
             raise ValueError(f"Can't apply ToPointCloudTensorTransform on '{type(point_cloud)}'")
 
         coordinate_idx = get_coordinate_attribute(point_cloud)
-        point_before = len(point_cloud.point[coordinate_idx])
+        # point_before = len(point_cloud.point[coordinate_idx])
 
         if self.mode is None:
             pass
         elif self.mode == "height":
-            point_cloud = filter_ground_with_height(point_cloud, threshold=10.0)
+            point_cloud = filter_ground_with_height(point_cloud, threshold=1.0)
         elif self.mode == "ransac":
             point_cloud = filter_ground_with_RANSAC(point_cloud, distance_threshold=1.0, ransac_n=3, num_iterations=3000)
         else:
             raise ValueError(f"No `{self.mode}` mode for Road Extraction.")
-        point_after = len(point_cloud.point[coordinate_idx])
-        # DEBUGGING -> comment when go productive FIXME
-        print(f"Road Extraction filtered {point_before-point_after} points.")
+        
+        # point_after = len(point_cloud.point[coordinate_idx])
+        # # DEBUGGING -> comment when go productive FIXME
+        # print(f"Road Extraction filtered {point_before-point_after} points.")
         return point_cloud
+
+
+
+class CSFGroundFilterTransform:
+    """
+    Cloth-Simulation-Filter
+
+    Idea:
+    1. inverse Point-Cloud
+    2. Let a cloth fall down on the point cloud -> ground, because we inversed it
+    3. now you have exact height differences of the ground and just need a bit height difference
+    """
+    def __init__(self, invert_z=False):  # , threshold=1.0):
+        self.invert_z = invert_z
+        # self.threshold = threshold
+
+    def __call__(self, point_cloud):
+        if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
+            raise ValueError(f"Can't apply ToPointCloudTensorTransform on '{type(point_cloud)}'")
+
+        coordinate_idx = get_coordinate_attribute(point_cloud)
+        points = point_cloud.point[coordinate_idx].numpy()
+        if self.invert_z:
+            points[:, 2] *= -1
+
+        csf = CSF.CSF()
+
+        # parameters
+        csf.params.bSloopSmooth = True
+        csf.params.cloth_resolution = 0.3   # smaller = more details
+        csf.params.rigidness = 3            # 1-3 typically -> how stable the cloth should be
+        csf.params.time_step = 0.65
+        csf.params.class_threshold = 0.7    # more points = more ground
+
+        csf.setPointCloud(points)
+
+        # results
+        ground = CSF.VecInt()
+        non_ground = CSF.VecInt()
+
+        # run filter
+        csf.do_filtering(ground, non_ground)
+
+        idx = np.array([int(x) for x in ground], dtype=int)
+        o3d_idx = o3d.core.Tensor(idx, dtype=o3d.core.int64)
+        # ground_points = points[idx]  # points[list(ground)]
+        ground_points = point_cloud.select_by_index(o3d_idx)
+
+        # point_cloud.select_by_index(o3d.core.Tensor(ground_points))
+
+        return ground_points
 
 
 
@@ -136,8 +204,8 @@ class OutlierRemovalTransform:
         """
         Modes:
             - None
-            - "radius" (quick, less precise)
-            - "statistical" (slow, more precise)
+            - "radius" 
+            - "statistical" 
         """
         self.mode = mode
         self.nb_points = nb_points
@@ -149,7 +217,7 @@ class OutlierRemovalTransform:
             raise ValueError(f"Can't apply ToPointCloudTensorTransform on '{type(point_cloud)}'")
 
         coordinate_idx = get_coordinate_attribute(point_cloud)
-        point_before = len(point_cloud.point[coordinate_idx])
+        # point_before = len(point_cloud.point[coordinate_idx])
 
         if self.mode == "radius":
             point_cloud, mask = point_cloud.remove_radius_outliers(
@@ -167,9 +235,9 @@ class OutlierRemovalTransform:
         else:
             raise ValueError(f"Unknown mode for outlier removal '{self.mode}'")
         
-        point_after = len(point_cloud.point[coordinate_idx])
-        # DEBUGGING -> comment when go productive FIXME
-        print(f"Outlier-Removal filtered {point_before-point_after} points.")
+        # point_after = len(point_cloud.point[coordinate_idx])
+        # # DEBUGGING -> comment when go productive FIXME
+        # print(f"Outlier-Removal filtered {point_before-point_after} points.")
         return point_cloud
 
 
@@ -326,8 +394,10 @@ def get_basic_transform(num_points=-1):
 def get_preprocessing_transform():
     transform = Compose([
         # NaivMinHistoGroundKeepFilterTransform(),
-        OutlierRemovalTransform(mode="radius", nb_points=4, radius=0.2, std_ratio=2.0),
-        RoadExtractionTransform(mode="height")
+        OutlierRemovalTransform(mode="statistical", nb_points=8, radius=0.2, std_ratio=2.0),
+        # RANSACGroundKeepFilterTransform(dist_threshold=0.5, ransac_tries=3),
+        # RoadExtractionTransform(mode="height")
+        CSFGroundFilterTransform(invert_z=False)
     ])
     return transform
 
@@ -354,9 +424,11 @@ class ParisLille3DDataset(Dataset):
         self.point_cloud_paths = []
         for cur_file in os.listdir(self.path):
             if any([cur_file.endswith(ending) for ending in [".las", ".laz", ".ply"]]):
-                if preprocessed:
-                    cur_file = "preprocessed_" + cur_file
-                
+                if preprocessed and not cur_file.startswith("preprocessed_"):
+                    continue
+                elif not preprocessed and cur_file.startswith("preprocessed_"):
+                    continue
+
                 self.point_cloud_paths.append(os.path.join(self.path, cur_file))
 
         print(f"Uses {len(self.point_cloud_paths)} point clouds.")
@@ -415,14 +487,14 @@ def get_paris_data_loader(path, testdata=False, transform=None,
 def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu"):
     print("--- Data Preprocessing ---")
     data_loader = get_data_loader(data_name, path, testdata=testdata, transform=transform,
-                                  batch_size=1, shuffle=False, num_workers=1)
+                                  batch_size=1, shuffle=False, num_workers=1, preprocessed=False)
     
     # to_device = ToDevice(device)
     dataset = data_loader.dataset
 
     print("Start Preprocessing your dataset...")
 
-    for idx, batch in tqdm(enumerate(data_loader)):
+    for idx, batch in tqdm(enumerate(data_loader), total=len(data_loader), desc="Preprocessing"):
         # batch = to_device(batch)
 
         # adjust path
@@ -433,9 +505,14 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
         if len(batch) > 1:
             raise ValueError("Not expected bigger Batch.")
         
+        # print(f"Data-Type: {type(batch)}")
+        # print(f"Data-Shape: {batch.shape}") if hasattr(batch, "shape") else ""
+        # print(f"Data-Type (batch 0): {type(batch[0])}")
+        # print_pc(batch[0])
+
         save_point_cloud(path=new_file_path, point_cloud=batch[0])
 
-    print("Congratelations, your preprocessing is finish!")
+    print("\nCongratelations, your preprocessing is finish!")
 
 
 

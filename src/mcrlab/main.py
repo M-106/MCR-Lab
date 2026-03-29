@@ -43,28 +43,27 @@ def main():
                         device="cpu")
     elif config.mode == "tryout":
         
-        if config.data.name == "paris":
-            dataset = ParisLille3DDataset(path=config.data.path, testdata=False, transform=None)
-        point_cloud = next(iter(dataset))
-        print_pc(point_cloud)
+        # if config.data.name == "paris":
+        #     dataset = ParisLille3DDataset(path=config.data.path, testdata=False, transform=None)
+        # point_cloud = next(iter(dataset))
+        # print_pc(point_cloud)
         # visualize(point_cloud, color_mode="class")
 
         # PyTorch Dataset try out
-        if config.data.name == "paris":
-            data_loader = get_data_loader(config.data.name, config.data.path, 
-                                          testdata=False, 
-                                          transform=get_basic_transform(num_points=-1),
-                                          batch_size=4, shuffle=False, num_workers=1,
-                                          preprocessed=True)
-            
-            # data_loader = get_paris_data_loader(config.data.path, testdata=False, 
-            #                                     transform=None,
-            #                                     batch_size=4, shuffle=False, num_workers=1)
+        data_loader = get_data_loader(config.data.name, config.data.path, 
+                                        testdata=False, 
+                                        transform=get_basic_transform(num_points=-1), # get_basic_transform(num_points=-1),
+                                        batch_size=4, shuffle=False, num_workers=1,
+                                        preprocessed=True)  # FIXME -> should be False!
+        
+        # data_loader = get_paris_data_loader(config.data.path, testdata=False, 
+        #                                     transform=None,
+        #                                     batch_size=4, shuffle=False, num_workers=1)
 
         for batch in data_loader:
             point_cloud = batch[0]
             print_pc(point_cloud)
-            visualize(point_cloud)
+            visualize(point_cloud, color_mode="class")
             break
     else:
         raise ValueError(f"'{config.mode}' is not an available mode for mcrlab.")

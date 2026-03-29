@@ -2,8 +2,10 @@
 # > Imports <
 # -----------
 import os
+from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 import open3d as o3d
 import open3d.core as ocore
@@ -11,6 +13,7 @@ import open3d.core as ocore
 from mcrlab.point_cloud.las_utils import las_to_o3d, save_as_las
 from mcrlab.point_cloud.utils import get_intensity_attribute
 from mcrlab.point_cloud.core import PointCloudTensor
+from mcrlab.image.utils import normalize_img
 # from mcrlab.point_cloud.data import ToPointCloudTensorTransform
 
 
@@ -61,18 +64,35 @@ def save_point_cloud(path, point_cloud):
     if isinstance(point_cloud, PointCloudTensor):
         point_cloud = point_cloud.get_as_o3d()
 
-    if isinstance(point_cloud, o3d.t.geometry.PointCloud):
+    if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
         raise ValueError(f"Expected 'o3d.t.geometry.PointCloud' but got {type(point_cloud)}")
 
     if path.endswith(".las") or path.endswith(".laz"):
         save_as_las(path=path, point_cloud=point_cloud)
     elif path.endswith(".ply"):
-        o3d.t.io.write_point_cloud(path=path, point_cloud=point_cloud)
+        # print(type(point_cloud.point))
+        # print(point_cloud.point.primary_key)
+        # if isinstance(path, str):
+        #     path = Path(path)
+        o3d.t.io.write_point_cloud(filename=path, pointcloud=point_cloud)  # compressed=True
     else:
         _, file_ = os.path.split(path)
         raise ValueError(f"Can't save '{file_}' as point-cloud.") 
 
 
+
+def save_bev_tiles_as_images(tiles, folder="./bev_images"):
+    os.makedirs(folder, exist_ok=True)
+
+    for i, bev in enumerate(tiles):
+        # Normalize value range
+        bev_img = normalize_img(bev)
+
+        # Convert to PIL image
+        img = Image.fromarray(bev_img)
+        img.save(os.path.join(folder, f"tile_{i:03d}.png"))
+
+    # print(f"Saved {len(tiles)} BEV images to '{folder}'")
 
 
 

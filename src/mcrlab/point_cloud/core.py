@@ -210,8 +210,7 @@ class PointCloudTensor(object):
         o3d_pc.point["positions"] = o3d.core.Tensor(tensor_pc.coordinates, dtype=o3d.core.float32)
 
         if tensor_pc.intensities is not None:
-            # FIXME -> int ok?
-            o3d_pc.point["intensity"] = o3d.core.Tensor(tensor_pc.intensities, dtype=o3d.core.int32)
+            o3d_pc.point["intensity"] = o3d.core.Tensor(tensor_pc.intensities, dtype=o3d.core.uint8)
 
         if tensor_pc.colors is not None:
             o3d_pc.point["colors"] = o3d.core.Tensor(tensor_pc.colors, dtype=o3d.core.float32)

@@ -74,79 +74,143 @@ def print_metrics(point_cloud):
         print("Type: PointCloudTensor")
         # print(f" - Shape: {point_cloud.coordinates.shape}")
         points = point_cloud.coordinates[:, :3].numpy()
+        points_type = point_cloud.coordinates.dtype
+        points_shape = point_cloud.coordinates.shape
         num_points = points.shape[0]
-        min_bound = points.min(axis=0)
-        max_bound = points.max(axis=0)
-        has_colors = point_cloud.colors is not None
-        has_intensity = point_cloud.intensities is not None
-        has_normals = point_cloud.normals is not None
-        labels = point_cloud.labels if point_cloud.labels is not None else None
 
+        # min_bound = points.min(axis=0)
+        # max_bound = points.max(axis=0)
+
+        has_colors = point_cloud.colors is not None
+        colors_type = point_cloud.colors.dtype if point_cloud.colors is not None else None
+        colors_shape = point_cloud.colors.shape if point_cloud.colors is not None else None
+
+        has_intensity = point_cloud.intensities is not None
+        intensity_type = point_cloud.intensities.dtype if point_cloud.intensities is not None else None
+        intensity_shape = point_cloud.intensities.shape if point_cloud.intensities is not None else None
+
+        has_normals = point_cloud.normals is not None
+        normals_type = point_cloud.normals.dtype if point_cloud.normals is not None else None
+        normals_shape = point_cloud.normals.shape if point_cloud.normals is not None else None
+
+        labels = point_cloud.labels if point_cloud.labels is not None else None
+        labels_type = point_cloud.labels.dtype if point_cloud.labels is not None else None
+        labels_shape = point_cloud.labels.shape if point_cloud.labels is not None else None
+
+    #   or isinstance(point_cloud, o3d.cpu.pybind.t.geometry.PointCloud)
     elif isinstance(point_cloud, o3d.t.geometry.PointCloud):
         print("Type: Tensor-based (o3d.t)")
         
-        points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
+        points_idx = get_coordinate_attribute(point_cloud)
+        points = point_cloud.point[points_idx].numpy()
+        points_type = point_cloud.point[points_idx].dtype
+        points_shape = point_cloud.point[points_idx].shape
         num_points = points.shape[0]
         
-        min_bound = point_cloud.get_min_bound().numpy()
-        max_bound = point_cloud.get_max_bound().numpy()
+        # min_bound = point_cloud.get_min_bound().numpy()
+        # max_bound = point_cloud.get_max_bound().numpy()
         
-        has_colors = get_color_attribute(point_cloud) is not None
-        has_normals = get_normal_attribute(point_cloud) is not None
-        has_intensity = get_intensity_attribute(point_cloud) is not None
+        colors_idx = get_color_attribute(point_cloud)
+        has_colors = colors_idx is not None
+        colors_type = point_cloud.point[colors_idx].dtype if has_colors else None
+        colors_shape = point_cloud.point[colors_idx].shape if has_colors else None
+
+        normals_idx = get_normal_attribute(point_cloud)
+        has_normals = normals_idx is not None
+        normals_type = point_cloud.point[normals_idx].dtype if has_normals else None
+        normals_shape = point_cloud.point[normals_idx].shape if has_normals else None
+
+        intensity_idx = get_intensity_attribute(point_cloud)
+        has_intensity = intensity_idx is not None
+        intensity_type = point_cloud.point[intensity_idx].dtype if has_intensity else None
+        intensity_shape = point_cloud.point[intensity_idx].shape if has_intensity else None
         
         label_idx = get_class_attribute(point_cloud)
         
         if label_idx:
             labels = point_cloud.point[label_idx].numpy()
+            labels_type = point_cloud.point[label_idx].dtype
+            labels_shape = point_cloud.point[label_idx].shape
         else:
             labels = None
+            labels_type = None
+            labels_shape = None
 
         print(point_cloud)
 
-    # Check for Legacy PointCloud
-    elif isinstance(point_cloud, o3d.geometry.PointCloud):
-        print("Type: Legacy (o3d.geometry)")
+    # # Check for Legacy PointCloud
+    # elif isinstance(point_cloud, o3d.geometry.PointCloud):
+    #     print("Type: Legacy (o3d.geometry)")
         
-        points = np.asarray(point_cloud.points)
-        num_points = points.shape[0]
+    #     points = np.asarray(point_cloud.points)
+    #     num_points = points.shape[0]
         
-        min_bound = point_cloud.get_min_bound()
-        max_bound = point_cloud.get_max_bound()
+    #     min_bound = point_cloud.get_min_bound()
+    #     max_bound = point_cloud.get_max_bound()
         
-        has_colors = point_cloud.has_colors()
-        has_normals = point_cloud.has_normals()
-        has_intensity = point_cloud.has_intensity()
+    #     has_colors = point_cloud.has_colors()
+    #     has_normals = point_cloud.has_normals()
+    #     has_intensity = point_cloud.has_intensity()
         
-        # Legacy clouds don't have a .point attribute or built-in labels
-        labels = None 
+    #     # Legacy clouds don't have a .point attribute or built-in labels
+    #     labels = None 
 
-        print(point_cloud)
+    #     print(point_cloud)
     
     else:
         print("Error: Provided object is not an Open3D PointCloud.")
         return
 
-    print(f" - Total Points: {num_points}")
-    print(f" - Bounding Box: Min {min_bound}, Max {max_bound}")
-    print(f" - Has Colors:   {str(has_colors):6}")  # ^6, <6, 6, .>6
-    print(f" - Has Normals:  {str(has_normals):6}")
-    print(f" - Has Intensity:{str(has_intensity):6}")
-    print(f" - Has Classes:  {str(labels is not None):6}")
+    # Points
+    points_str = f"{num_points:,}".replace(',', '.')
+    print(f" ◉ Points: {points_str}")
+    if points_type is not None:
+        print(f"       ⨀ type '{points_type}'")
+    if points_shape is not None:
+        print(f"       ⨀ shape '{points_shape}'")
+    # print(f" - Bounding Box: Min {min_bound}, Max {max_bound}")
+
+    # Colors
+    print(f" ◉ Colors:   {str(has_colors):6}")  # ^6, <6, 6, .>6
+    if colors_type is not None:
+        print(f"       ⨀ type '{colors_type}'")
+    if colors_shape is not None:
+        print(f"       ⨀ shape '{colors_shape}'")
+
+    # Normals
+    print(f" ◉ Normals:  {str(has_normals):6}")
+    if normals_type is not None:
+        print(f"       ⨀ type '{normals_type}'")
+    if normals_shape is not None:
+        print(f"       ⨀ shape '{normals_shape}'")
+
+    # Intensity
+    print(f" ◉ Intensity:{str(has_intensity):6}")
+    if intensity_type is not None:
+        print(f"       ⨀ type '{intensity_type}'")
+    if intensity_shape is not None:
+        print(f"       ⨀ shape '{intensity_shape}'")
+    
+    # Classes
+    print(f" ◉ Classes:  {str(labels is not None):6}")
+    if labels_type is not None:
+        print(f"       ⨀ type '{labels_type}'")
+    if labels_shape is not None:
+        print(f"       ⨀ shape '{labels_shape}'")
 
     if labels is not None:
         class_distribution = []
         unique, counts = np.unique(labels, return_counts=True)
-        print("\nClass Distribution:")
+        print("       ⨀ class distribution:")
         for cls, count in zip(unique, counts):
             percentage = (count / num_points) * 100
             class_distribution.append((cls, count, percentage))
         # sort and print sorted
         class_distribution.sort(key=lambda x: x[2], reverse=True)
         for cls, count, percentage in class_distribution:
-            print(f"   Class {cls:<4}: {count:8} points ({percentage:5.2f}%)")
-    else:
-        print(" - Labels: No 'labels' attribute found.")
+            print(f"           Class {cls:<4}: {count:8} points ({percentage:5.2f}%)")
+    # else:
+    #     print("       ⨀ Labels: No 'labels' attribute found.")
 
 
 

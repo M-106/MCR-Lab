@@ -53,6 +53,8 @@ On Windows via Anaconda:
     ```bash
     conda activate mcrlab
     cd "C:\Users\tippolito\workspace\MCR-Lab"
+    # cd "D:\Studium\Master\Repos\MCR-Lab" && D:
+    # pip install -e .
     mcrlab --config "./configs/config.yaml"
     ```
 
