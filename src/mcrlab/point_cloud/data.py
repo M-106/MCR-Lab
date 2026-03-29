@@ -500,7 +500,8 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
         # adjust path
         cur_path = dataset.point_cloud_paths[idx]
         cur_root_path, cur_file_name = os.path.split(cur_path)
-        new_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name)
+        cur_file_name = ".".join(cur_file_name.split(".")[:-1])
+        new_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name +".ply")
 
         if len(batch) > 1:
             raise ValueError("Not expected bigger Batch.")

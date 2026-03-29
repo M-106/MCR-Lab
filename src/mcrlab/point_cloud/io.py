@@ -11,9 +11,9 @@ import open3d as o3d
 import open3d.core as ocore
 
 from mcrlab.point_cloud.las_utils import las_to_o3d, save_as_las
-from mcrlab.point_cloud.utils import get_intensity_attribute
+from mcrlab.point_cloud.utils import get_intensity_attribute, set_color
 from mcrlab.point_cloud.core import PointCloudTensor
-from mcrlab.image.utils import normalize_img
+from mcrlab.point_cloud.inspect import print_pc
 # from mcrlab.point_cloud.data import ToPointCloudTensorTransform
 
 
@@ -41,6 +41,7 @@ def load_point_cloud(path):
             # point_cloud = o3d.t.geometry.PointCloud.from_legacy(point_cloud)
     
         point_cloud = o3d.t.io.read_point_cloud(path)
+
         # except TypeError:
         #     point_cloud = o3d.io.read_point_cloud(path)
         #     point_cloud = o3d.t.geometry.PointCloud.from_legacy(point_cloud)
@@ -48,7 +49,8 @@ def load_point_cloud(path):
         intensity_idx = get_intensity_attribute(point_cloud)
         if intensity_idx:
             point_cloud.point["intensity"] = point_cloud.point[intensity_idx]
-            del point_cloud.point[intensity_idx]
+            if "intensity" != intensity_idx:
+                del point_cloud.point[intensity_idx]
 
         # if as_point_cloud_tensor:
         #     point_cloud = ToPointCloudTensorTransform()(point_cloud)
@@ -70,29 +72,24 @@ def save_point_cloud(path, point_cloud):
     if path.endswith(".las") or path.endswith(".laz"):
         save_as_las(path=path, point_cloud=point_cloud)
     elif path.endswith(".ply"):
-        # print(type(point_cloud.point))
-        # print(point_cloud.point.primary_key)
-        # if isinstance(path, str):
-        #     path = Path(path)
+        # print_pc(point_cloud)
         o3d.t.io.write_point_cloud(filename=path, pointcloud=point_cloud)  # compressed=True
+
+        # loaded_pcd = o3d.t.io.read_point_cloud(path)
+        # print_pc(loaded_pcd)
+
+        # # Check if the intensity attribute exists and print its shape
+        # if 'intensity' in loaded_pcd.point:
+        #     print(f"Successfully loaded point cloud with {loaded_pcd.point['intensity'].shape} intensity values.")
+        # else:
+        #     print("Loading failed: Intensity attribute not found.")
     else:
         _, file_ = os.path.split(path)
         raise ValueError(f"Can't save '{file_}' as point-cloud.") 
 
 
 
-def save_bev_tiles_as_images(tiles, folder="./bev_images"):
-    os.makedirs(folder, exist_ok=True)
 
-    for i, bev in enumerate(tiles):
-        # Normalize value range
-        bev_img = normalize_img(bev)
-
-        # Convert to PIL image
-        img = Image.fromarray(bev_img)
-        img.save(os.path.join(folder, f"tile_{i:03d}.png"))
-
-    # print(f"Saved {len(tiles)} BEV images to '{folder}'")
 
 
 

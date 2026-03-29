@@ -109,7 +109,7 @@ class PointCloudTensor(object):
     def to_numpy(self, as_copy=False):
         coordinates_ = ensure_2_dims(torch_tensor_to_numpy(self.coordinates, as_float=True))
         colors_ = ensure_2_dims(torch_tensor_to_numpy(self.colors, as_float=True))
-        intensities_ = ensure_2_dims(torch_tensor_to_numpy(self.intensities, as_float=True))
+        intensities_ = ensure_2_dims(torch_tensor_to_numpy(self.intensities, as_float=False))
         normals_ = ensure_2_dims(torch_tensor_to_numpy(self.normals, as_float=True))
         labels_ = ensure_2_dims(torch_tensor_to_numpy(self.labels, as_float=False))
 
