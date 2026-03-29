@@ -211,3 +211,5 @@ __marimo__/
 /data
 
 cloth_nodes.txt
+
+/test_bev_images

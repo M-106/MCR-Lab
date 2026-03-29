@@ -12,7 +12,7 @@ model:
 
 data:
   name: "paris"  # paris, fipm
-  path: "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d"  # "C:/Users/tippolito/Data/Benchmark"
+  path: "C:/Users/tippolito/Data/Benchmark"  # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d"
 
 device: cpu  # cpu, cuda, cuda:0
 

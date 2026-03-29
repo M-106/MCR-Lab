@@ -4,8 +4,10 @@
 import numpy as np
 from PIL import Image
 
+import open3d as o3d
+
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute
-from mcrlab.point_cloud.core import PointCloudTensor
+from mcrlab.point_cloud.core import PointCloudTensor, torch_tensor_to_numpy, torch_tensor_type_to_numpy_type
 
 
 # ---------
@@ -171,7 +173,14 @@ def bev_projection_mapping(point_cloud, meta, tile_id, pixel):
     local_indices = tile["pixel_to_indices"][group_idx]
     globla_indices = tile["global_indices"][local_indices] 
 
-    points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()[globla_indices]
+    if isinstance(point_cloud, PointCloudTensor):
+        points = torch_tensor_to_numpy(point_cloud.coordinates, 
+                                       dtype=torch_tensor_type_to_numpy_type(point_cloud.coordinates))
+    elif isinstance(point_cloud, o3d.t.geometry.PointCloud):
+        points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
+    
+    # apply indeces to get points
+    points = points[globla_indices]
 
     return points
 

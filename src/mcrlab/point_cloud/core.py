@@ -10,27 +10,78 @@ import open3d as o3d
 # ----------
 # > Helper <
 # ----------
-def numpy_to_torch_tensor(numpy_arr, as_float=True):
+def o3d_tensor_type_to_numpy_type(o3d_tensor):
+    if o3d_tensor is None:
+        return None
+    
+    o3d_dtype = o3d_tensor.dtype
+    mapping = {
+        o3d.core.Dtype.Float32: np.float32,
+        o3d.core.Dtype.Float64: np.float64,
+        o3d.core.Dtype.Int32: np.int32,
+        o3d.core.Dtype.Int64: np.int64,
+        o3d.core.Dtype.UInt8: np.uint8,
+        o3d.core.Dtype.Bool: np.bool_,
+    }
+    return mapping.get(o3d_dtype, None)
+
+
+
+def torch_tensor_type_to_numpy_type(torch_tensor):
+    if torch_tensor is None:
+        return None
+
+    torch_dtype = torch_tensor.dtype
+    mapping = {
+        torch.float32: np.float32,
+        torch.float64: np.float64,
+        torch.int32: np.int32,
+        torch.int64: np.int64,
+        torch.uint8: np.uint8,
+        torch.bool: np.bool_,
+    }
+    return mapping.get(torch_dtype, None)
+
+
+
+def numpy_tensor_type_to_torch_type(numpy_tensor):
+    if numpy_tensor is None:
+        return None
+    
+    np_dtype = numpy_tensor.dtype
+    mapping = {
+        np.dtype('float32'): torch.float32,
+        np.dtype('float64'): torch.float64,
+        np.dtype('int32'): torch.int32,
+        np.dtype('int64'): torch.int64,
+        np.dtype('uint8'): torch.uint8,
+        np.dtype('bool'): torch.bool,
+    }
+    return mapping.get(np_dtype, None)
+
+
+
+def numpy_to_torch_tensor(numpy_arr, dtype=None):
     if numpy_arr is None or isinstance(numpy_arr, torch.Tensor):
         return numpy_arr
     
-    if as_float:
-        return torch.from_numpy(numpy_arr).float()
+    if dtype is not None:
+        return torch.from_numpy(numpy_arr).to(dtype)
     else:
         return torch.from_numpy(numpy_arr)
     
 
 
-def torch_tensor_to_numpy(tensor, as_float=True):
+def torch_tensor_to_numpy(tensor, dtype=np.float32):
     if tensor is None or isinstance(tensor, np.ndarray):
         return tensor
     
     tensor = tensor.detach().cpu().numpy()
     
-    if as_float:
-        return tensor.astype(np.float32, copy=False)
+    if dtype is not None:
+        return tensor.astype(dtype, copy=False)
     else:
-        return tensor.astype(np.int32, copy=False)
+        return tensor
 
 
 
@@ -83,11 +134,11 @@ class PointCloudTensor(object):
         self.is_torch_tensor = is_torch_tensor
 
     def to_torch(self, as_copy=False):
-        coordinates_ = ensure_2_dims(numpy_to_torch_tensor(self.coordinates, as_float=True))
-        colors_ = ensure_2_dims(numpy_to_torch_tensor(self.colors, as_float=True))
-        intensities_ = ensure_2_dims(numpy_to_torch_tensor(self.intensities, as_float=True))
-        normals_ = ensure_2_dims(numpy_to_torch_tensor(self.normals, as_float=True))
-        labels_ = ensure_2_dims(numpy_to_torch_tensor(self.labels, as_float=False))
+        coordinates_ = ensure_2_dims(numpy_to_torch_tensor(self.coordinates, dtype=numpy_tensor_type_to_torch_type(self.coordinates)))
+        colors_ = ensure_2_dims(numpy_to_torch_tensor(self.colors, dtype=numpy_tensor_type_to_torch_type(self.colors)))
+        intensities_ = ensure_2_dims(numpy_to_torch_tensor(self.intensities, dtype=numpy_tensor_type_to_torch_type(self.intensities)))
+        normals_ = ensure_2_dims(numpy_to_torch_tensor(self.normals, dtype=numpy_tensor_type_to_torch_type(self.normals)))
+        labels_ = ensure_2_dims(numpy_to_torch_tensor(self.labels, dtype=numpy_tensor_type_to_torch_type(self.labels)))
 
         if as_copy:
             return PointCloudTensor(
@@ -107,11 +158,11 @@ class PointCloudTensor(object):
             self.labels = labels_
 
     def to_numpy(self, as_copy=False):
-        coordinates_ = ensure_2_dims(torch_tensor_to_numpy(self.coordinates, as_float=True))
-        colors_ = ensure_2_dims(torch_tensor_to_numpy(self.colors, as_float=True))
-        intensities_ = ensure_2_dims(torch_tensor_to_numpy(self.intensities, as_float=False))
-        normals_ = ensure_2_dims(torch_tensor_to_numpy(self.normals, as_float=True))
-        labels_ = ensure_2_dims(torch_tensor_to_numpy(self.labels, as_float=False))
+        coordinates_ = ensure_2_dims(torch_tensor_to_numpy(self.coordinates, dtype=torch_tensor_type_to_numpy_type(self.coordinates)))
+        colors_ = ensure_2_dims(torch_tensor_to_numpy(self.colors, dtype=torch_tensor_type_to_numpy_type(self.colors)))
+        intensities_ = ensure_2_dims(torch_tensor_to_numpy(self.intensities, dtype=torch_tensor_type_to_numpy_type(self.intensities)))
+        normals_ = ensure_2_dims(torch_tensor_to_numpy(self.normals, dtype=torch_tensor_type_to_numpy_type(self.normals)))
+        labels_ = ensure_2_dims(torch_tensor_to_numpy(self.labels, dtype=torch_tensor_type_to_numpy_type(self.labels)))
 
         if as_copy:
             return PointCloudTensor(

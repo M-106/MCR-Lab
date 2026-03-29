@@ -268,6 +268,7 @@ class ToPointCloudTensorTransform:
             raise ValueError(f"Can't apply ToPointCloudTensorTransform on '{type(point_cloud)}'")
 
         # convert to numpy
+        # FIXME -> numpy conversion directly have right datatype, right?
         points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
 
         # process additional information

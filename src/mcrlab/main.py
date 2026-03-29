@@ -83,10 +83,10 @@ def main():
 
             tile_1_img = np.transpose(tiles[0], (1, 2, 0))
             tile_1_img = normalize_img(tile_1_img)
-            plt.imshow(tile_1_img[:, :, 2])
-            plt.show()
-            plt.imshow(tile_1_img[:, :, 1])
-            plt.show()
+            # plt.imshow(tile_1_img[:, :, 2])
+            # plt.show()
+            # plt.imshow(tile_1_img[:, :, 1])
+            # plt.show()
             save_bev_tiles_as_images(tiles, folder="./test_bev_images")
 
             for cur_x in np.arange(0, tile_1_img.shape[0], dtype=int):
