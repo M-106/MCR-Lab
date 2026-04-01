@@ -12,7 +12,7 @@ import open3d.core as ocore
 
 from mcrlab.point_cloud.las_utils import las_to_o3d, save_as_las
 from mcrlab.point_cloud.utils import get_intensity_attribute, set_color
-from mcrlab.point_cloud.core import PointCloudTensor
+from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
 from mcrlab.point_cloud.inspect import print_pc
 # from mcrlab.point_cloud.data import ToPointCloudTensorTransform
 

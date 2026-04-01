@@ -4,6 +4,7 @@
 import numpy as np
 import torch
 import open3d as o3d
+from torch_geometric.data import Data
 
 
 
@@ -232,7 +233,7 @@ class PointCloudTensor(object):
             is_torch_tensor=self.is_torch_tensor
         )
             
-    def get_as_vector(self, include_color=False, 
+    def get_as_one_tensor(self, include_color=False, 
                             include_intensity=False,
                             include_normals=False,
                             include_labels=False):
@@ -273,6 +274,36 @@ class PointCloudTensor(object):
             o3d_pc.point["labels"] = o3d.core.Tensor(tensor_pc.labels, dtype=o3d.core.int32)
 
         return o3d_pc
+
+    def get_as_torch_geo_data(self, include_color=False, 
+                        include_intensity=False,
+                        include_normals=False,
+                        include_labels=False):
+        if not self.is_torch_tensor:
+            self.to_torch()
+
+        # Node positions
+        pos = self.coordinates
+
+        # Build feature matrix
+        features = []
+        if include_color and self.colors is not None:
+            features.append(self.colors)
+        if include_intensity and self.intensities is not None:
+            features.append(self.intensities)
+        if include_normals and self.normals is not None:
+            features.append(self.normals)
+
+        x = torch.cat(features, dim=1) if len(features) > 0 else None
+
+        # Labels
+        y = self.labels if (include_labels and self.labels is not None) else None
+        # y = y.squeeze(-1)
+
+        # Create Data object
+        data = Data(pos=pos, x=x, y=y)
+
+        return data
 
     # def save(self, path):
     #     o3d.t.io.write_point_cloud(path, self.get_as_o3d())

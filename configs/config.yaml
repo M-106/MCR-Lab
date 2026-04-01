@@ -1,11 +1,21 @@
-mode: tryout    # train, test, tryout, preprocessing
+mode: tryout    # train, test, inference, tryout, preprocessing
 
 train:
   batch_size: 32
   epochs: 10
+  learning_rate: 0.001
+  use_amp: False
+  scaler: None
+  checkpoint_dir: "./checkpoint_dir"
+  criterion: "iou"
+  optimizer: "not sure"
+  checkpoint_best_model: True
+  val_steps: 5
+  lr_scheduler: None
 
 test:
   metrices: []
+  batch_size: 5
 
 model:
   name: resnet

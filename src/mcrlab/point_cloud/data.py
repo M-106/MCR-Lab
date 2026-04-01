@@ -17,7 +17,7 @@ from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_wi
                                      get_intensity_attribute, get_color_attribute, \
                                      get_normal_attribute
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
-from mcrlab.point_cloud.core import PointCloudTensor, map_torch_device_to_o3d
+from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
 # from mcrlab.point_cloud.inspect import print_pc
 
 
@@ -409,11 +409,12 @@ def get_preprocessing_transform():
 # -----------
 class ParisLille3DDataset(Dataset):
     def __init__(self, path, testdata=False, transform=None, 
-                 preprocessed=False):
+                 preprocessed=False, return_train_format=False):
         self.path = path
         self.testdata = testdata
         self.transform = transform
         self.preprocessed = preprocessed
+        self.return_train_format = return_train_format
 
         self.POINT_LIMIT = 1024
 
@@ -444,7 +445,24 @@ class ParisLille3DDataset(Dataset):
         if self.transform:
             point_cloud = self.transform(point_cloud)
 
-        return point_cloud  # PointCloudTensor or o3d.t.geometry.Tensor
+        if isinstance(point_cloud, PointCloudTensor):
+            if point_cloud.labels is not None:
+                y = point_cloud.labels
+            else:
+                y = None
+
+        if self.return_train_format:
+
+            if isinstance(point_cloud, PointCloudTensor):
+                if point_cloud.labels is not None:
+                    y = point_cloud.labels
+                else:
+                    raise ValueError(f"Can't find labels in PointCloudTensor!")
+            else:
+                raise ValueError(f"Can't handle Data type `{type(point_cloud)}`")
+            return point_cloud.get_as_one_tensor(include_intensity=True), y
+        else:
+            return point_cloud  # PointCloudTensor or o3d.t.geometry.Tensor
 
         # labels = extract_labels_as_tensor(point_cloud)
 
@@ -462,11 +480,11 @@ class ParisLille3DDataset(Dataset):
 
 def get_data_loader(data_name, path, testdata=False, transform=None,
                     batch_size=32, shuffle=True, num_workers=4,
-                    preprocessed=False):
+                    preprocessed=False, return_train_format=False):
     if data_name == "paris":
         data_loader = get_paris_data_loader(path, testdata=testdata, transform=transform,
                                             batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
-                                            preprocessed=preprocessed)
+                                            preprocessed=preprocessed, return_train_format=return_train_format)
     else:
         raise ValueError(f"No Dataset with the name '{data_name}' founded. Try 'paris'.")
 
@@ -476,9 +494,9 @@ def get_data_loader(data_name, path, testdata=False, transform=None,
 
 def get_paris_data_loader(path, testdata=False, transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
-                          preprocessed=False):
+                          preprocessed=False, return_train_format=False):
     dataset = ParisLille3DDataset(path=path, testdata=testdata, transform=transform,
-                                  preprocessed=preprocessed)
+                                  preprocessed=preprocessed, return_train_format=return_train_format)
 
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                       collate_fn=collate_point_clouds)
@@ -515,6 +533,10 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
         save_point_cloud(path=new_file_path, point_cloud=batch[0])
 
     print("\nCongratelations, your preprocessing is finish!")
+
+
+
+
 
 
 

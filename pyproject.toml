@@ -20,7 +20,11 @@ dependencies = [
     "pydantic",  # config
     "pyyaml",
     "transformers",
-    "torch"    # afterwards in install your torch version 
+    "torch",    # afterwards in install your torch version 
+    "tensorboard",
+    "torch-geometric",
+    # "pytorch3d",
+    # "segmentation-models-pytorch-3d"
 ]
 
 [build-system]

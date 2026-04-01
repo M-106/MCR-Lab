@@ -1,9 +1,15 @@
-
+# ----------
+# > Import <
+# ----------
+from typing import Union
 from pydantic import BaseModel
 import yaml
 
 
 
+# -----------------------------
+# > Config Classes and Helper <
+# -----------------------------
 def load_config(path):
         # auto relative path conversion -> relative to mcr-lab top folder
         # if path.startswith("./"):
@@ -20,11 +26,26 @@ def load_config(path):
 class TrainConfig(BaseModel):
     batch_size: int
     epochs: int
+    learning_rate: float
+    use_amp: bool
+    scaler: Union[str, None]
+    checkpoint_dir: str
+    criterion: str
+    optimizer: str
+    checkpoint_best_model: bool
+    val_steps: int
+    lr_scheduler: Union[str, None]
 
 
 
 class TestConfig(BaseModel):
     metrices: list
+    batch_size: int
+
+
+
+# class InferenceConfig(BaseModel):
+#     pass
 
 
 
@@ -43,9 +64,10 @@ class Config(BaseModel):
     mode: str
     train: TrainConfig
     test: TestConfig
+    # inference: InferenceConfig
     model: ModelConfig
     data: DataConfig
-    device: str
+    device: Union[str, None]
 
 
 

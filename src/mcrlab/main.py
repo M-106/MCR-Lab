@@ -11,13 +11,15 @@ from mcrlab.test import test
 from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform, \
                                     preprocess_data, get_preprocessing_transform
 from mcrlab.point_cloud.inspect import print_pc, visualize
-from mcrlab.image.utils import bev_projection, bev_projection_mapping, normalize_img
+from mcrlab.image.utils import normalize_img
+from mcrlab.projection import bev_projection, bev_projection_mapping
 from mcrlab.image.io import save_bev_tiles_as_images
 
 import open3d as o3d
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 
 
@@ -67,7 +69,7 @@ def main():
                                         testdata=False, 
                                         transform=get_basic_transform(num_points=-1), # get_basic_transform(num_points=-1),
                                         batch_size=4, shuffle=False, num_workers=1,
-                                        preprocessed=True)
+                                        preprocessed=True, return_train_format=False)
         
         # data_loader = get_paris_data_loader(config.data.path, testdata=False, 
         #                                     transform=None,
@@ -75,10 +77,10 @@ def main():
 
         for batch in data_loader:
             point_cloud = batch[0]
-            # print_pc(point_cloud)
+            print_pc(point_cloud)
             # visualize(point_cloud, color_mode="class")
 
-            tiles, meta = bev_projection(point_cloud, tile_size=50.0, resolution=0.1)
+            tiles, meta = bev_projection(point_cloud, tile_size=50.0, resolution=0.2)
             print("Tile 1 Shape:", tiles[0].shape)
 
             tile_1_img = np.transpose(tiles[0], (1, 2, 0))
@@ -89,14 +91,27 @@ def main():
             # plt.show()
             save_bev_tiles_as_images(tiles, folder="./test_bev_images")
 
+            break_ = False
             for cur_x in np.arange(0, tile_1_img.shape[0], dtype=int):
                 for cur_y in np.arange(0, tile_1_img.shape[1], dtype=int):
                     if tile_1_img[cur_x][cur_y][1] != 0:
                         points = bev_projection_mapping(point_cloud, meta, tile_id=0, pixel=(cur_x, cur_y))
                         print(points)
                         print(type(points))
-                        # break
-                        return 0
+                        break_ = True
+                        break
+                if break_:
+                    break
+
+            # show back propagated point 
+            # tile_1_img[:, :, 1] = 0
+            # tile_1_img[cur_x, cur_y, 1] = 255
+            # plt.imshow(tile_1_img[:, :, 1])
+            # plt.show()
+            # point_cloud.coordinates = torch.cat((point_cloud.coordinates, torch.tensor([[points[0][0], points[0][1], points[0][2]]])), dim=0)
+            # point_cloud.colors = torch.zeros((point_cloud.coordinates.shape[0], 3), dtype=torch.uint8)
+            # point_cloud.colors[point_cloud.coordinates.shape[0]-1] = torch.Tensor([0, 255, 0])
+            # visualize(point_cloud, color_mode=None)
     else:
         raise ValueError(f"'{config.mode}' is not an available mode for mcrlab.")
 

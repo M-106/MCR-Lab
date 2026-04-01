@@ -9,7 +9,7 @@ import torch
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_class_attribute, \
                                      get_intensity_attribute, get_color_attribute, \
                                      get_normal_attribute
-from mcrlab.point_cloud.core import PointCloudTensor
+from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
 
 
 
