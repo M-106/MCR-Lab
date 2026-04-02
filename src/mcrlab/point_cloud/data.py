@@ -18,6 +18,8 @@ from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_wi
                                      get_normal_attribute
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
+from mcrlab.projection import bev_projection
+from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle
 # from mcrlab.point_cloud.inspect import print_pc
 
 
@@ -424,6 +426,7 @@ class ParisLille3DDataset(Dataset):
             self.path = os.path.join(self.path, "training_10_classes")
 
         self.point_cloud_paths = []
+        self.bev_paths = dict()
         for cur_file in os.listdir(self.path):
             if any([cur_file.endswith(ending) for ending in [".las", ".laz", ".ply"]]):
                 if preprocessed and not cur_file.startswith("preprocessed_"):
@@ -432,6 +435,9 @@ class ParisLille3DDataset(Dataset):
                     continue
 
                 self.point_cloud_paths.append(os.path.join(self.path, cur_file))
+            elif cur_file.endswith(".pkl"):
+                general_file_name = ".".join(os.path.join(self.path, cur_file).split(".")[:,-1])
+                self.bev_paths[general_file_name] = general_file_name + ".pkl"
 
         print(f"Uses {len(self.point_cloud_paths)} point clouds.")
 
@@ -445,6 +451,15 @@ class ParisLille3DDataset(Dataset):
         if self.transform:
             point_cloud = self.transform(point_cloud)
 
+        # add BEV information
+        if isinstance(point_cloud, PointCloudTensor):
+            general_file_name = ".".join(self.point_cloud_paths[idx].split(".")[:,-1])
+            bev_path = self.bev_paths[general_file_name]
+            bevs, meta = load_bev_tiles_as_pickle(bev_path)
+            point_cloud.bevs = bevs
+            point_cloud.meta = meta
+
+        # use labels
         if isinstance(point_cloud, PointCloudTensor):
             if point_cloud.labels is not None:
                 y = point_cloud.labels
@@ -503,7 +518,8 @@ def get_paris_data_loader(path, testdata=False, transform=None,
 
 
 
-def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu"):
+def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu",
+                    bev_tile_size=30.0, bev_resolution=0.05):
     print("--- Data Preprocessing ---")
     data_loader = get_data_loader(data_name, path, testdata=testdata, transform=transform,
                                   batch_size=1, shuffle=False, num_workers=1, preprocessed=False)
@@ -531,6 +547,13 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
         # print_pc(batch[0])
 
         save_point_cloud(path=new_file_path, point_cloud=batch[0])
+
+        # save BEVs
+        print("Generating BEV images...")
+        bev_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name +".pkl")
+        tiles, meta = bev_projection(batch[0], tile_size=bev_tile_size, resolution=bev_resolution)
+        save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
+        print(f"Saving BEVs to '{bev_file_path}'\n  Found: {os.path.isfile(bev_file_path)}")
 
     print("\nCongratelations, your preprocessing is finish!")
 

@@ -20,9 +20,15 @@ dependencies = [
     "pydantic",  # config
     "pyyaml",
     "transformers",
-    "torch",    # afterwards in install your torch version 
+    "huggingface_hub",
+    "torch",    # afterwards in install your torch version
+    "torchvision", 
     "tensorboard",
-    "torch-geometric",
+    "numba",
+    "python-dotenv",
+    "scikit-learn",
+    "ultralytics"
+    # "torch-geometric",
     # "pytorch3d",
     # "segmentation-models-pytorch-3d"
 ]

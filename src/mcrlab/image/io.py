@@ -3,10 +3,11 @@
 # -----------
 import os
 import shutil
+import pickle
 import numpy as np
 from PIL import Image
 
-from mcrlab.image.utils import normalize_img
+from mcrlab.image.utils import normalize_img, normalize_img_per_channel
 
 
 
@@ -21,7 +22,8 @@ def save_bev_tiles_as_images(tiles, folder="./bev_images"):
 
     for i, bev in enumerate(tiles):
         # Normalize value range
-        bev_img = normalize_img(bev)
+        # bev_img = normalize_img(bev)
+        bev_img = normalize_img_per_channel(bev, skip_already_normalized_channels=True)
 
         bev_img = np.transpose(bev_img, (1, 2, 0))  # H, W, C
 
@@ -34,6 +36,27 @@ def save_bev_tiles_as_images(tiles, folder="./bev_images"):
 
     # print(f"Saved {len(tiles)} BEV images to '{folder}'")
 
+
+
+def save_bev_tiles_as_pickle(tiles, metas, path):
+    data = (tiles, metas)
+
+    if not path.endswith(".pkl"):
+        path += ".pkl"
+
+    with open(path, "wb") as file_:
+        pickle.dump(data, file_)
+
+
+
+def load_bev_tiles_as_pickle(path):
+    if not path.endswith(".pkl"):
+        path += ".pkl"
+
+    with open(path, "rb") as file_:
+        data = pickle.load(file_)
+
+    return data
 
 
 

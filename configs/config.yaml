@@ -1,4 +1,4 @@
-mode: tryout    # train, test, inference, tryout, preprocessing
+mode: preprocessing    # train, test, inference, tryout, preprocessing
 
 train:
   batch_size: 32

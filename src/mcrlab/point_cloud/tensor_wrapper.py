@@ -124,12 +124,16 @@ def map_torch_device_to_o3d(device:str) -> str:
 class PointCloudTensor(object):
     def __init__(self, coordinates, colors=None, 
                  intensities=None, normals=None, 
-                 labels=None, is_torch_tensor=False):
+                 labels=None, is_torch_tensor=False,
+                 bevs=None, meta=None):
         self.coordinates = coordinates
         self.colors = colors
         self.intensities = intensities
         self.normals = normals
         self.labels = labels
+
+        self.bevs = bevs  # np.array
+        self.meta = meta  # dict
 
         # can only be numpy or torch.Tensor
         self.is_torch_tensor = is_torch_tensor
