@@ -15,7 +15,7 @@ from mcrlab.image.utils import one_channel_img_to_pil_rgb_img
 # ------------------------------
 hf_hub_download
 class YOLOv12:
-    def __init__(self, hf_token=None, device="cpu"): 
+    def __init__(self, device="cpu"): 
         model_path = hf_hub_download(repo_id="zakskyfighter/RGB_BEV_Kitti_Custom_Yolov12n", filename="best.pt")
         self.model = YOLO(model_path)
         self.model.to(device)

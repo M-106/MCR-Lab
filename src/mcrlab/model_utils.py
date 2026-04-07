@@ -5,13 +5,26 @@ import torch
 from scipy.optimize import linear_sum_assignment  # hungarian algorithm
 # from pytorch3d.loss import chamfer_distance
 
+from mcrlab.models.segmentation import SAM2, SAM3, SegFormer, \
+                                       DinoMask2Former
+
 
 # ---------
 # > Utils <
 # ---------
 def get_model(name):
-    # FIXME
-    pass
+    name_ = name.lower()
+
+    if name_ == "sam2":
+        return SAM2()
+    elif name_ == "sam3":
+        return SAM3
+    elif name_ == "segformer":
+        return SegFormer()
+    elif name_ == "dinomask2former":
+        return DinoMask2Former()
+    else:
+        raise ValueError(f"Error during model loading. Can't find model with name '{name}'.")
 
 
 

@@ -190,10 +190,10 @@ class Trainer:
 
 
 
-# --------------------
-# > Main Train Class <
-# --------------------
-def train(config):
+# -----------------------
+# > Main Train Pipeline <
+# -----------------------
+def train_pipeline(config):
     # extract config settings
     checkpoint_dir = os.path.join(config.train.checkpoint_dir, config.model.name)
     batch_size = config.train.batch_size
@@ -261,6 +261,47 @@ def train(config):
 
     writer.close()
 
+
+
+# ------------------------------
+# > HuggingFace Train Pipeline <
+# ------------------------------
+def train_hf_pipeline(config):
+    model = get_model(config.model.name)
+    model = model.get_model()
+
+    training_args = HFTrainingArguments(
+        output_dir=f"./output/checkpoints/{config.model.name}",
+        per_device_train_batch_size=2,
+        learning_rate=1e-5,
+        num_train_epochs=10,
+        logging_steps=10,
+        remove_unused_columns=False,   # important for SAM
+        push_to_hub=False,
+        report_to=["tensorboard", "mlflow"]  # "none"
+    )
+
+    trainer = HFTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=FIXME,
+        # data_collator=func
+    )
+
+    trainer.train()
+
+
+
+# -----------------------
+# > Main Train Function <
+# -----------------------
+def train(config):
+    model_name = config.model.name
+
+    if model_name.lower() in ["sam2", "sam3", "segformer", "dinomask2former"]:
+        train_hf_pipeline(config)
+    else:
+        train_pipeline(config)
 
 
 

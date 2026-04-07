@@ -207,10 +207,24 @@ def print_metrics(point_cloud):
             class_distribution.append((cls, count, percentage))
         # sort and print sorted
         class_distribution.sort(key=lambda x: x[2], reverse=True)
+
+        max_counter = 0
         for cls, count, percentage in class_distribution:
-            print(f"           Class {cls:<4}: {count:8} points ({percentage:5.2f}%)")
-    # else:
-    #     print("       ⨀ Labels: No 'labels' attribute found.")
+            if max_counter <= 5:
+                print(f"           Class {cls:<4}: {count:8} points ({percentage:5.2f}%)")
+                max_counter += 1
+            else:
+                print(f"           ... ({int(len(unique)-max_counter)} other classes)")
+                break
+    
+    if isinstance(point_cloud, PointCloudTensor):
+        if point_cloud.bevs is not None:
+            print(f" ◉ BEV Images:  {str(len(point_cloud.bevs)):6}")
+            print(f"       ⨀ type '{str(type(point_cloud.bevs))}'")
+            if len(point_cloud.bevs) > 0:
+                print(f"       ⨀ element-type '{str(type(point_cloud.bevs[0]))}'")
+                print(f"            → '{str(point_cloud.bevs[0].dtype)}'") if hasattr(point_cloud.bevs[0], "dtype") else ""
+                print(f"       ⨀ shape '{str(point_cloud.bevs[0].shape)}'") if hasattr(point_cloud.bevs[0], "shape") else ""
 
 
 

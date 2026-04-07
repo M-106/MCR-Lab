@@ -436,7 +436,7 @@ class ParisLille3DDataset(Dataset):
 
                 self.point_cloud_paths.append(os.path.join(self.path, cur_file))
             elif cur_file.endswith(".pkl"):
-                general_file_name = ".".join(os.path.join(self.path, cur_file).split(".")[:,-1])
+                general_file_name = ".".join(os.path.join(self.path, cur_file).split(".")[:-1])
                 self.bev_paths[general_file_name] = general_file_name + ".pkl"
 
         print(f"Uses {len(self.point_cloud_paths)} point clouds.")
@@ -453,7 +453,7 @@ class ParisLille3DDataset(Dataset):
 
         # add BEV information
         if isinstance(point_cloud, PointCloudTensor):
-            general_file_name = ".".join(self.point_cloud_paths[idx].split(".")[:,-1])
+            general_file_name = ".".join(self.point_cloud_paths[idx].split(".")[:-1])
             bev_path = self.bev_paths[general_file_name]
             bevs, meta = load_bev_tiles_as_pickle(bev_path)
             point_cloud.bevs = bevs
