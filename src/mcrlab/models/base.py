@@ -9,8 +9,8 @@ from abc import ABC, abstractmethod
 # > Base Model <
 # --------------
 class BaseModel(ABC):
-    def __init__(self, mode):
-        self.mode = mode
+    # def __init__(self, mode):
+    #     self.mode = mode
 
     # def mode_to_train(self):
     #     self.mode = "train"

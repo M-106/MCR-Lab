@@ -18,7 +18,8 @@ test:
   batch_size: 5
 
 model:
-  name: resnet
+  name: "sam2"
+  check_point_path: None
 
 data:
   name: "paris"  # paris, fipm

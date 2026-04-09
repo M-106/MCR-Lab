@@ -51,6 +51,7 @@ class TestConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     name: str
+    check_point_path: Union[str, None]
 
 
 

@@ -4,6 +4,8 @@
 import numpy as np
 from PIL import Image
 
+from mcrlab.projection import bev_projection_numba, bev_projection_mapping
+
 
 
 # ---------
@@ -67,6 +69,30 @@ def one_channel_img_to_pil_rgb_img(image_input, return_numpy=False):
 
 
 
+def point_cloud_tensor_to_image_dataset(point_cloud):
+    """
+    Wanted format:
+    {
+        "pixel_values": tensor(C, H, W),
+        "labels": tensor(H, W)  # class ids per pixel
+    }
+    """
+    tiles, meta = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)
+
+    items = []
+    for cur_tile in tiles:
+        cur_img = np.transpose(cur_tile, (1, 2, 0))
+        cur_img = normalize_img_per_channel(cur_img, skip_already_normalized_channels=True)
+
+        cur_labels = cur_img[:, :, 3]
+        cur_img = cur_img[:, :, :-1]
+        
+        items.append({
+            "pixel_values": cur_img,
+            "labels": cur_labels
+        })
+        
+    return items
 
 
 

@@ -18,7 +18,7 @@ from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_wi
                                      get_normal_attribute
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
-from mcrlab.projection import bev_projection
+from mcrlab.projection import bev_projection_numba
 from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle
 # from mcrlab.point_cloud.inspect import print_pc
 
@@ -519,7 +519,7 @@ def get_paris_data_loader(path, testdata=False, transform=None,
 
 
 def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu",
-                    bev_tile_size=30.0, bev_resolution=0.05):
+                    bev_tile_size=15.0, bev_resolution=0.01):
     print("--- Data Preprocessing ---")
     data_loader = get_data_loader(data_name, path, testdata=testdata, transform=transform,
                                   batch_size=1, shuffle=False, num_workers=1, preprocessed=False)
@@ -551,7 +551,7 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
         # save BEVs
         print("Generating BEV images...")
         bev_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name +".pkl")
-        tiles, meta = bev_projection(batch[0], tile_size=bev_tile_size, resolution=bev_resolution)
+        tiles, meta = bev_projection_numba(batch[0], tile_size=bev_tile_size, resolution=bev_resolution, include_class=True)
         save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
         print(f"Saving BEVs to '{bev_file_path}'\n  Found: {os.path.isfile(bev_file_path)}")
 

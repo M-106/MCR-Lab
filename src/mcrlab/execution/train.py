@@ -4,7 +4,8 @@
 import os
 from tqdm import tqdm
 from transformers import Trainer as HFTrainer, \
-                         TrainingArguments as HFTrainingArguments
+                         TrainingArguments as HFTrainingArguments, \
+                         SegformerForSemanticSegmentation
                          #TrainerCallBack as HFTrainerCallBack
 
 import torch
@@ -15,6 +16,7 @@ from mcrlab.config.config import Config
 from mcrlab.log import get_logger, LoggerPrinter
 from mcrlab.point_cloud.data import get_data_loader, get_basic_transform
 from mcrlab.model_utils import get_model, get_device, get_criterion
+from mcrlab.metrices import compute
 
 
 
@@ -267,14 +269,74 @@ def train_pipeline(config):
 # > HuggingFace Train Pipeline <
 # ------------------------------
 def train_hf_pipeline(config):
-    model = get_model(config.model.name)
-    model = model.get_model()
+    # model = get_model(config.model.name)
+    # model = model.get_model()
+
+    model_name = config.model.name.lower()
+    if model_name == "segformer":
+        if config.model.check_point_path is not None:
+            model = SegformerForSemanticSegmentation.from_pretrained(
+                config.model.check_point_path  # just path to the folder!
+            )
+            # or
+            # model = SegformerForSemanticSegmentation.from_pretrained(model_name)
+            # state_dict = torch.load("pytorch_model.bin", map_location="cpu")
+            # model.load_state_dict(state_dict)
+        else:
+            model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b5-finetuned-cityscapes-1024-1024")
+
+        model.config.ignore_index = 255  # or -1?
+        # model.config.num_labels = num_classes
+        # model.config.id2label = {...}
+        # model.config.label2id = {...}
+    else:
+        raise ValueError(f"Does not support model '{model_name}'")
+
+    # load bev/meta files
+    # ...
+    # data format:
+    # class MyDataset(torch.utils.data.Dataset):
+    # def __getitem__(self, idx):
+    #     return {
+    #         "pixel_values": tensor,   # (C, H, W)
+    #         "labels": tensor          # (H, W)
+    #     }
+
+    # def __len__(self):
+    #     return N
+    # convert in right format
+    # needed format
+    # {
+    #     "pixel_values": tensor(C, H, W),
+    #     "labels": tensor(H, W)  # class ids per pixel
+    # }
+
+    def collate_fn(batch):
+        pixel_values = torch.stack([x["pixel_values"] for x in batch])
+        labels = torch.stack([x["labels"] for x in batch])
+        return {"pixel_values": pixel_values, "labels": labels}
+
+    def compute_metrics(eval_pred):
+        logits, labels = eval_pred
+        preds = logits.argmax(axis=1)
+
+        return compute(
+            predictions=preds,
+            references=labels,
+            num_labels=num_classes,
+            ignore_index=255,  # very important if used
+        )
 
     training_args = HFTrainingArguments(
         output_dir=f"./output/checkpoints/{config.model.name}",
-        per_device_train_batch_size=2,
+        per_device_train_batch_size=4,
+        per_device_eval_batch_size=4,
         learning_rate=1e-5,
         num_train_epochs=10,
+        evaluation_strategy="steps",
+        save_strategy="steps",
+        save_steps=500,
+        save_total_limit=2,
         logging_steps=10,
         remove_unused_columns=False,   # important for SAM
         push_to_hub=False,
@@ -284,8 +346,10 @@ def train_hf_pipeline(config):
     trainer = HFTrainer(
         model=model,
         args=training_args,
-        train_dataset=FIXME,
-        # data_collator=func
+        train_dataset=train_dataset,  # load bev/meta files and extract in right format
+        eval_dataset=val_dataset,
+        data_collator=collate_fn,
+        compute_metrics=compute_metrics
     )
 
     trainer.train()

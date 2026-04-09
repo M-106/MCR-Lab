@@ -14,6 +14,7 @@ from transformers import pipeline
 from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 from transformers import Sam3Processor, Sam3Model
+from transformers import Sam2Processor, Sam2Model
 from transformers import AutoModel, AutoProcessor
 
 from mcrlab.image.utils import one_channel_img_to_pil_rgb_img
@@ -24,11 +25,11 @@ from mcrlab.models.base import BaseModel
 # ----------
 # > Helper <
 # ----------
-def postprocess(self, segmentation):
+def postprocess(segmentation, model):
     results = []
     for class_id in np.unique(segmentation):
         mask = segmentation == class_id
-        label = self.model.config.id2label[class_id]
+        label = model.config.id2label[class_id]
 
         results.append({
             "label": label,
@@ -39,6 +40,7 @@ def postprocess(self, segmentation):
 
 
 
+# they are for inference
 # --------------------------
 # > 2D Segmentation Models <
 # --------------------------
@@ -46,9 +48,8 @@ class SegFormer(BaseModel):
     # nvidia/segformer-b0-finetuned-cityscapes-512-512
     # chase-geigle/segformer-b0-finetuned-sidewalk
     # nvidia/segformer-b0-finetuned-ade-512-512
-    def __init__(self, device=0, mode="inference"):  # facebook/sam3-base
+    def __init__(self, device=0):  # facebook/sam3-base
         # device = 0 is first GPU, -1 = cpu
-        super().__init__(mode=mode)
 
         # self.pipe = pipeline(
         #     "image-segmentation",  # "mask-generation", 
@@ -90,7 +91,7 @@ class SegFormer(BaseModel):
 
         predicted_segmentation = upsampled_logits.argmax(dim=1)[0].cpu().numpy()
 
-        return postprocess(predicted_segmentation)
+        return postprocess(predicted_segmentation, self.model)
         # return self.pipe(image)
 
     def predict(self, x):
@@ -139,58 +140,60 @@ class SegFormer(BaseModel):
         
 
 class SAM2(BaseModel):
-    def __init__(self, hf_token=None, device=0, mode="inference"): 
+    def __init__(self, hf_token=None, device=0): 
         # device = 0 is first GPU, -1 = cpu
-        # self.pipe = pipeline(
-        #     "mask-generation",  # for zero shot instance segmentation
-        #     model="facebook/sam2.1-hiera-base-plus",  # "facebook/sam3",
-        #     token=hf_token,
-        #     device=device,
-        #     trust_remote_code=True
-        # )
 
-        super().__init__(mode=mode)
-
-        self.device = torch.device(f"cuda:{device}" if device >= 0 else "cpu")
+        self.device = device
 
         model_name = "facebook/sam2.1-hiera-base-plus"
 
         # Load processor + model
-        self.processor = AutoProcessor.from_pretrained(
-            model_name,
+        # self.processor = Sam2Processor.from_pretrained(
+        #     model_name,
+        #     token=hf_token,
+        #     trust_remote_code=True
+        # )
+
+        # self.model = Sam2Model.from_pretrained(
+        #     model_name,
+        #     token=hf_token,
+        #     trust_remote_code=True
+        # )
+
+        # self.model.to(self.device)
+        # self.model.eval()
+
+        self.pipe = pipeline(
+            "mask-generation",  # for zero shot instance segmentation
+            model=model_name,  # "facebook/sam2.1-hiera-base-plus",  # "facebook/sam3",
+            # image_processor=self.processor,
             token=hf_token,
+            device=device,
             trust_remote_code=True
         )
 
-        self.model = AutoModel.from_pretrained(
-            model_name,
-            token=hf_token,
-            trust_remote_code=True
-        )
-
-        self.model.to(self.device)
-        self.model.eval()
+        # self.device = torch.device(f"cuda:{device}" if device >= 0 else "cpu")
 
     def __call__(self, x):
         # 1 channel to pseudo RGB
         image = one_channel_img_to_pil_rgb_img(x)
 
-        # Preprocess
-        inputs = self.processor(images=image, return_tensors="pt")
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        # # Preprocess
+        # inputs = self.processor(images=image, return_tensors="pt")
+        # inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        # Forward
-        outputs = self.model(**inputs)
+        # # Forward
+        # outputs = self.model(**inputs)
 
-        masks = self.processor.post_process_masks(
-            outputs.pred_masks,
-            inputs["original_sizes"],
-            inputs["reshaped_input_sizes"]
-        )
+        # masks = self.processor.post_process_masks(
+        #     outputs.pred_masks,
+        #     inputs["original_sizes"],
+        #     # inputs["reshaped_input_sizes"]
+        # )
 
-        return masks
+        # return masks
 
-        # return self.pipe(image, points_per_side=32)  # bigger value = more details
+        return self.pipe(image, points_per_side=32)  # bigger value = more details
 
     def predict(self, x):
         return self(x)
@@ -299,8 +302,7 @@ class SAM2(BaseModel):
 
 # IMPORTANT: first run 'hf auth login'
 class SAM3(BaseModel):
-    def __init__(self, hf_token=None, device=-1, mode="inference"):
-        super().__init__(mode=mode)
+    def __init__(self, hf_token=None, device=-1):
 
         self.device = torch.device("cuda" if device >= 0 and torch.cuda.is_available() else "cpu")
         print(f"Load SAM3 on {self.device}...")
@@ -369,9 +371,7 @@ class SAM3(BaseModel):
 
 
 class DinoMask2Former(BaseModel):
-    def __init__(self, device=-1, mode="inference"):
-        super().__init__(mode=mode)
-
+    def __init__(self, device=-1):
         self.device = torch.device("cuda" if device >= 0 and torch.cuda.is_available() else "cpu")
         print(f"Load Mask2Former on {self.device}...")
         
