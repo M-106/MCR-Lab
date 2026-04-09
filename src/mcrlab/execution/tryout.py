@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform, \
                                     preprocess_data, get_preprocessing_transform
 from mcrlab.point_cloud.inspect import print_pc, visualize
-from mcrlab.projection import bev_projection_numba, bev_projection_numba_and_open3d, bev_projection_mapping
+from mcrlab.projection import bev_projection_numba, bev_projection_numba_and_open3d, bev_back_projection
 from mcrlab.image.utils import normalize_img_per_channel
 from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
@@ -99,7 +99,7 @@ def bev_trying(config):
         for cur_x in np.arange(0, tile_1_img.shape[0], dtype=int):
             for cur_y in np.arange(0, tile_1_img.shape[1], dtype=int):
                 if tile_1_img[cur_y][cur_x][1] != 0:
-                    remapping = bev_projection_mapping(point_cloud, meta, tile_id=0, pixel_x=cur_x, pixel_y=cur_y)
+                    remapping = bev_back_projection(point_cloud, meta, tile_id=0, pixel_x=cur_x, pixel_y=cur_y)
                     points = remapping["points"]
                     print(points)
                     print(type(points))
@@ -215,6 +215,7 @@ def bev_working_testing(config):
         num_classes = int(labels.max()) + 1
 
         total_pixels = 0
+        non_empty_pixels = 0
         correct_intensities = 0
         intensity_difference = 0
         total_classes = 0
@@ -229,7 +230,9 @@ def bev_working_testing(config):
                 for cur_y in range(height):
                     total_pixels += 1
 
-                    remapping = bev_projection_mapping(point_cloud, meta, tile_id, pixel_x=cur_x, pixel_y=cur_y)
+                    remapping = bev_back_projection(point_cloud, meta, tile_id, 
+                                                    pixel_x=cur_x, pixel_y=cur_y, 
+                                                    try_use_saved_local_points=False)
                     points_idx = remapping["global_indices"]
 
                     # empty pixel
@@ -239,6 +242,8 @@ def bev_working_testing(config):
                         if bev[3, cur_y, cur_x] == -1:
                             empty_pixels_correct += 1
                         continue
+
+                    non_empty_pixels += 1
 
                     points_idx = np.array(points_idx).astype(np.int32)
 
@@ -274,10 +279,10 @@ def bev_working_testing(config):
 
         print("\n===== BEV TEST RESULTS =====")
         print(f"Total pixels checked: {total_pixels}")
-        print(f"Correct intensities: {correct_intensities} ({(correct_intensities/total_pixels)*100:.2f}%)")
-        print(f"    -> Absolute difference: {intensity_difference}")
-        print(f"Correct classes: {correct_class} ({(correct_class/total_pixels)*100:.2f}%)")
-        print(f"Correct empty pixels: {empty_pixels_correct} ({(correct_class/total_empty_pixels)*100:.2f}%)")
+        print(f"Correct intensities: {correct_intensities} ({(correct_intensities/non_empty_pixels)*100:.2f}%)")
+        print(f"    -> absolute error sum: {intensity_difference}")
+        print(f"Correct classes: {correct_class} ({(correct_class/non_empty_pixels)*100:.2f}%)")
+        print(f"Correct empty pixels: {empty_pixels_correct} ({(empty_pixels_correct/total_empty_pixels)*100:.2f}%)")
 
         # do not end after one testset?
         break

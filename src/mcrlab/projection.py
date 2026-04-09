@@ -463,6 +463,8 @@ def bev_projection_numba_and_open3d(point_cloud, tile_size=10.0, resolution=0.5,
     Open3D-based BEV projection using rendering.Camera (orthographic),
     producing identical outputs to the numba version but with
     camera-consistent geometry.
+
+    NOT TESTED
     """
     # extract points and intensity
     if hasattr(point_cloud, "get_as_o3d"):
@@ -592,8 +594,8 @@ def bev_projection_numba_and_open3d(point_cloud, tile_size=10.0, resolution=0.5,
 
 
 
-# back-projection
-def bev_projection_mapping(point_cloud, meta, tile_id, pixel_x, pixel_y):
+# back-projection / bev_projection_mapping
+def bev_back_projection(point_cloud, meta, tile_id, pixel_x, pixel_y, try_use_saved_local_points=False):
     """
     Maps a BEV pixel back to its corresponding 3D points in the original point cloud.
 
@@ -626,7 +628,7 @@ def bev_projection_mapping(point_cloud, meta, tile_id, pixel_x, pixel_y):
     
     global_indices = tile["global_indices"][local_indices]
 
-    if "tile_points_local" in meta.keys():
+    if try_use_saved_local_points and "tile_points_local" in meta.keys():
         local_points = tile["tile_points_local"]
     else:
         # problem with this path:

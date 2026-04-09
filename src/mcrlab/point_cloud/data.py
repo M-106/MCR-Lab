@@ -19,7 +19,7 @@ from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_wi
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
 from mcrlab.projection import bev_projection_numba
-from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle
+from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle, save_bev_tiles_as_pt, load_bev_tiles_as_pt
 # from mcrlab.point_cloud.inspect import print_pc
 
 
@@ -381,6 +381,13 @@ def collate_point_clouds(batch):
 
 
 
+def collate_bev_images(batch):
+    pixel_values = torch.stack([x["pixel_values"] for x in batch])
+    labels = torch.stack([x["labels"] for x in batch])
+    return {"pixel_values": pixel_values, "labels": labels}
+
+
+
 def get_basic_transform(num_points=-1):
     transform = Compose([
         # RandomRotate(axis='z'),
@@ -439,7 +446,7 @@ class ParisLille3DDataset(Dataset):
                 general_file_name = ".".join(os.path.join(self.path, cur_file).split(".")[:-1])
                 self.bev_paths[general_file_name] = general_file_name + ".pkl"
 
-        print(f"Uses {len(self.point_cloud_paths)} point clouds.")
+        print(f"Found {len(self.point_cloud_paths)} point clouds.")
 
     def __len__(self):
         return len(self.point_cloud_paths)
@@ -455,7 +462,8 @@ class ParisLille3DDataset(Dataset):
         if isinstance(point_cloud, PointCloudTensor):
             general_file_name = ".".join(self.point_cloud_paths[idx].split(".")[:-1])
             bev_path = self.bev_paths[general_file_name]
-            bevs, meta = load_bev_tiles_as_pickle(bev_path)
+            # bevs, meta = load_bev_tiles_as_pickle(bev_path)  
+            bevs, meta = load_bev_tiles_as_pt(bev_path)
             point_cloud.bevs = bevs
             point_cloud.meta = meta
 
@@ -486,6 +494,63 @@ class ParisLille3DDataset(Dataset):
         # else:
         #     return point_cloud  # shape (1024, 3)
 
+
+class BEVDataset(Dataset):
+    """
+    Dataset for loading BEV image datasets. 
+    Must preprocess the bev images.
+
+    Independent of the dataset, because it works 
+    on top of our own preprocessing creation.
+
+    Uses the collate_bev_images function for the dataloader.
+
+    1 Sample = 1 Tile
+    """
+    def __init__(self, path):
+        self.path = path
+
+        self.bev_paths = []
+        self.bev_tile_mapping = []  # every tile (one image) gets file, id in file info
+
+        cur_bev_file_idx = 0
+        for cur_file in os.listdir(self.path):
+            if cur_file.endswith(".pt") and cur_file.startswith("preprocessed_bev_"):
+                cur_path = os.path.join(self.path, cur_file)
+                self.bev_paths.append(cur_path)
+
+                # bevs, _ = load_bev_tiles_as_pickle(cur_path)
+                bevs, _ = load_bev_tiles_as_pt(cur_path)
+                tile_amount = len(bevs)
+                for cur_id in range(tile_amount):
+                    self.bev_tile_mapping.append((cur_bev_file_idx, cur_id))
+
+                cur_bev_file_idx += 1
+
+        print(f"Found {len(self.bev_tile_mapping)} bev images (orthogonal images) in {len(self.bev_paths)} files.")
+
+    def __getitem__(self, idx):
+        file_idx, tile_id = self.bev_tile_mapping[idx]
+        # bevs, _ = load_bev_tiles_as_pickle(self.bev_paths[file_idx])
+        bevs, _ = load_bev_tiles_as_pt(self.bev_paths[file_idx])
+        bev = bevs[tile_id]
+
+        # ignore meta -> we don't want to back-project when using only the BEV dataset
+
+        x = bev[:-1]
+        y = bev[-1]
+        # x = torch.from_numpy(bev[:-1]).float()
+        # y = torch.from_numpy(bev[-1]).long()
+        # assert y.ndim == 2
+
+        return {
+            "pixel_values": x,   # (C, H, W)
+            "labels": y  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
+        }
+
+    def __len__(self):
+        return len(self.bev_tile_mapping)
+    
 
 # also add data_loader which return 3 data-loader or 2
 # -> train, val, eval
@@ -550,9 +615,10 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
 
         # save BEVs
         print("Generating BEV images...")
-        bev_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name +".pkl")
+        bev_file_path = os.path.join(cur_root_path, "preprocessed_bev_"+cur_file_name +".pt")  # ".pkl"
         tiles, meta = bev_projection_numba(batch[0], tile_size=bev_tile_size, resolution=bev_resolution, include_class=True)
-        save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
+        # save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
+        save_bev_tiles_as_pt(tiles, meta, bev_file_path)
         print(f"Saving BEVs to '{bev_file_path}'\n  Found: {os.path.isfile(bev_file_path)}")
 
     print("\nCongratelations, your preprocessing is finish!")

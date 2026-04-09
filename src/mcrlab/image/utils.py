@@ -4,7 +4,7 @@
 import numpy as np
 from PIL import Image
 
-from mcrlab.projection import bev_projection_numba, bev_projection_mapping
+from mcrlab.projection import bev_projection_numba, bev_back_projection
 
 
 

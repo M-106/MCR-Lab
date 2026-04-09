@@ -7,6 +7,7 @@ import pickle
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
+import torch
 
 from mcrlab.image.utils import normalize_img_per_channel
 
@@ -64,6 +65,43 @@ def load_bev_tiles_as_pickle(path):
         data = pickle.load(file_)
 
     return data
+
+
+
+def save_bev_tiles_as_pt(tiles, metas, path):
+    if not path.endswith(".pt"):
+        path += ".pt"
+
+    # convert list -> tensor explizit
+    tiles_tensor = torch.stack(
+        [torch.from_numpy(cur_tile) for cur_tile in tiles]
+    ).float()   # (N, C+1, H, W)
+
+    torch.save(
+        {
+            "tiles": tiles_tensor,
+            "meta": metas
+        },
+        path
+    )
+
+
+
+def load_bev_tiles_as_pt(path, return_tiles_as_list_numpy_array=False):
+    if not path.endswith(".pt"):
+        path += ".pt"
+
+    data = torch.load(path, map_location="cpu")
+
+    tiles_tensor = data["tiles"]
+    meta = data["meta"]
+
+    # back to List[np.ndarray], if wished
+    if return_tiles_as_list_numpy_array:
+        tiles = [cur_tile.numpy() for cur_tile in tiles_tensor]
+
+    return tiles, meta
+
 
 
 
