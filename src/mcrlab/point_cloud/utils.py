@@ -65,6 +65,8 @@ def get_color_attribute(point_cloud):
         color_idx = "colors"
     elif "color" in point_cloud.point:
         color_idx = "color"
+    elif "rgb" in point_cloud.point:
+        color_idx = "rgb"
     else:
         color_idx = None
 

@@ -46,7 +46,7 @@ def save_bev_tiles_as_images(tiles, folder="./bev_images"):
 
 
 
-def save_bev_tiles_as_pickle(tiles, metas, path):
+def save_bev_tiles_as_pickle_together(tiles, metas, path):
     data = (tiles, metas)
 
     if not path.endswith(".pkl"):
@@ -57,7 +57,7 @@ def save_bev_tiles_as_pickle(tiles, metas, path):
 
 
 
-def load_bev_tiles_as_pickle(path):
+def load_bev_tiles_as_pickle_together(path):
     if not path.endswith(".pkl"):
         path += ".pkl"
 
@@ -68,7 +68,59 @@ def load_bev_tiles_as_pickle(path):
 
 
 
-def save_bev_tiles_as_pt(tiles, metas, path):
+def save_bev_tiles_as_pickle(tiles, metas, path):
+    if not path.endswith(".pkl"):
+        path += ".pkl"
+
+    # adjust file names
+    root_path, file_name = os.path.split(path)
+    file_name_without_ending = ".".join(file_name.split(".")[:-1])
+
+    all_paths = []
+
+    n_tiles = len(tiles)
+    n_metas = len(metas)
+    assert n_tiles == n_metas
+    for cur_bev_idx in range(n_tiles):
+        cur_bev_data_file_name = "single_bev_" + file_name_without_ending + f"_{cur_bev_idx:02}.pkl"
+        cur_bev_data_path = os.path.join(root_path, cur_bev_data_file_name)
+
+        data = (tiles[cur_bev_idx], metas[cur_bev_idx])
+
+        # saving
+        with open(cur_bev_data_path, "wb") as file_:
+            pickle.dump(data, file_)
+
+        all_paths.append(cur_bev_data_path)
+
+    # save paths
+    with open(path, "wb") as file_:
+        pickle.dump(all_paths, file_)
+
+
+
+def load_bev_tiles_as_pickle(path):
+    if not path.endswith(".pkl"):
+        path += ".pkl"
+
+    # load file which saves the paths
+    with open(path, "rb") as file_:
+        all_paths = pickle.load(file_)
+
+    # load every bev file (tile/image + meta)
+    tiles = []
+    metas = []
+    for cur_file_path in all_paths:
+        with open(cur_file_path, "rb") as file_:
+            cur_tile, cur_meta = pickle.load(file_)
+        tiles.append(cur_tile)
+        metas.append(cur_meta)
+
+    return (tiles, metas)
+
+
+
+def save_bev_tiles_as_pt_together(tiles, metas, path):
     if not path.endswith(".pt"):
         path += ".pt"
 
@@ -87,7 +139,7 @@ def save_bev_tiles_as_pt(tiles, metas, path):
 
 
 
-def load_bev_tiles_as_pt(path, return_tiles_as_list_numpy_array=False):
+def load_bev_tiles_as_pt_together(path, return_tiles_as_list_numpy_array=False):
     if not path.endswith(".pt"):
         path += ".pt"
 
@@ -104,7 +156,68 @@ def load_bev_tiles_as_pt(path, return_tiles_as_list_numpy_array=False):
 
 
 
+# def save_bev_tiles_as_pt(tiles, metas, path):
+#     raise ValueError("Adjust this method as the pickle file.")
+#     if not path.endswith(".pt"):
+#         path += ".pt"
 
+#     # adjust file names
+#     root_path, file_name = os.path.split(path)
+#     tiles_file_name = "tiles_"+file_name
+#     metas_file_name = "metas_"+file_name
+#     tiles_path = os.path.join(root_path, tiles_file_name)
+#     metas_path = os.path.join(root_path, metas_file_name)
+
+#     # convert list -> tensor explizit
+#     tiles_tensor = torch.stack(
+#         [torch.from_numpy(cur_tile) for cur_tile in tiles]
+#     ).float()   # (N, C+1, H, W)
+
+#     # save both seperatly
+#     torch.save(
+#         tiles_tensor,
+#         tiles_path
+#     )
+
+#     torch.save(
+#         metas,
+#         metas_path
+#     )
+
+
+
+# def load_bev_tiles_as_pt(path, return_tiles_as_list_numpy_array=False, only_tiles=False):
+#     raise ValueError("Adjust this method as the pickle file.")
+#     if not path.endswith(".pt"):
+#         path += ".pt"
+
+#     root_path, file_name = os.path.split(path)
+#     if file_name.startswith("tiles_"):
+#         tiles_file_name = file_name
+#         metas_file_name = "metas_" + "_".join(file_name.split("_")[1:])
+#     elif file_name.startswith("metas_"):
+#         tiles_file_name = "tiles_" + "_".join(file_name.split("_")[1:])
+#         metas_file_name = file_name
+#     else:
+#         tiles_file_name = "tiles_" + file_name
+#         metas_file_name = "metas_" + file_name
+
+#     tiles_path = os.path.join(root_path, tiles_file_name)
+#     metas_path = os.path.join(root_path, metas_file_name)
+
+#     tiles = torch.load(tiles_path, map_location="cpu")
+#     if only_tiles:
+#         metas = None
+#     else:
+#         metas = torch.load(metas_path, map_location="cpu")
+
+#     # back to List[np.ndarray], if wished
+#     if return_tiles_as_list_numpy_array:
+#         tiles = [cur_tile.numpy() for cur_tile in tiles]
+
+#     return tiles, metas
+
+    
 
 
 

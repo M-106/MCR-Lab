@@ -15,7 +15,8 @@ from dotenv import load_dotenv
 from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform, \
                                     preprocess_data, get_preprocessing_transform
 from mcrlab.point_cloud.inspect import print_pc, visualize
-from mcrlab.projection import bev_projection_numba, bev_projection_numba_and_open3d, bev_back_projection
+from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
+from mcrlab.projection import bev_projection_numba, bev_back_projection, bev_back_projection_testing
 from mcrlab.image.utils import normalize_img_per_channel
 from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
@@ -191,6 +192,7 @@ def bev_working_testing(config):
 
     for batch in data_loader:
         point_cloud = batch[0]
+
         # point_cloud = point_cloud.get_as_o3d()
         if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
             raise TypeError(f"Point Cloud should be get as Open3D Tensor, but got '{type(point_cloud)}'")
@@ -198,7 +200,7 @@ def bev_working_testing(config):
 
         print("Starting BEV projection...")
         # tiles, meta = bev_projection_numba_and_open3d(point_cloud, tile_size=35.0, resolution=0.05, include_class=True)
-        tiles, meta = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05, include_class=True)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+        tiles, metas = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05, include_class=True)  #  tile_size=100.0/50.0, resolution=0.2/0.1
         # if point_cloud.bevs is None:
         #     print("Starting BEV projection...")
         #     tiles, meta = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
@@ -207,82 +209,38 @@ def bev_working_testing(config):
         #     tiles = point_cloud.bevs
         #     meta = point_cloud.meta
 
-        # TEST START
-        print("Starting BEV test...")
-        points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
-        intensities = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
-        labels = point_cloud.point[get_class_attribute(point_cloud)].numpy().astype(np.int32)
-        num_classes = int(labels.max()) + 1
+        bev_back_projection_testing(point_cloud, tiles, metas)
 
-        total_pixels = 0
-        non_empty_pixels = 0
-        correct_intensities = 0
-        intensity_difference = 0
-        total_classes = 0
-        correct_class = 0
-        total_empty_pixels = 0
-        empty_pixels_correct = 0
+        # do not end after one testset?
+        break
 
-        for tile_id, bev in tqdm(enumerate(tiles), total=len(tiles), desc="Tile Testing"):
-            height, width = bev.shape[1], bev.shape[2]
 
-            for cur_x in range(width):
-                for cur_y in range(height):
-                    total_pixels += 1
 
-                    remapping = bev_back_projection(point_cloud, meta, tile_id, 
-                                                    pixel_x=cur_x, pixel_y=cur_y, 
-                                                    try_use_saved_local_points=False)
-                    points_idx = remapping["global_indices"]
+def bev_preprocessed_loading_working_testing(config):
+    # LOAD POINT CLOUD
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    testdata=False, 
+                                    transform=get_basic_transform(num_points=-1), 
+                                    batch_size=1, shuffle=False, num_workers=1,
+                                    preprocessed=True, return_train_format=False)
 
-                    # empty pixel
-                    if len(points_idx) == 0:
-                        total_empty_pixels += 1
-                        # if bev[3, cur_x, cur_y] == -1:
-                        if bev[3, cur_y, cur_x] == -1:
-                            empty_pixels_correct += 1
-                        continue
+    for batch in data_loader:
+        point_cloud = batch[0]
 
-                    non_empty_pixels += 1
+        assert isinstance(point_cloud, PointCloudTensor)
+        print_pc(point_cloud)
 
-                    points_idx = np.array(points_idx).astype(np.int32)
+        print("Starting BEV projection...")
+        if point_cloud.bevs is None:
+            raise ValueError("Preprocessed BEVs did not loaded.")
+            print("Starting BEV projection...")
+            tiles, metas = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+        else:
+            print("Loaded Bevs from file...")
+            tiles = point_cloud.bevs
+            metas = point_cloud.meta
 
-                    # intensity
-                    y_mean_intensity = intensities[points_idx].mean()
-                    y_mean_intensity /= intensities.max()  # apply same normalization
-                    # bev_intensity = bev[2, cur_x, cur_y]
-                    bev_intensity = bev[2, cur_y, cur_x]
-
-                    # print(f"Intensity Ground Truth: {y_mean_intensity}, predicted: {bev_intensity}")
-
-                    # same order? -> first closest sort or bad?
-
-                    intensity_difference += np.sum(np.abs(bev_intensity - y_mean_intensity))
-                    if np.isclose(y_mean_intensity, bev_intensity, atol=1e-4):
-                        correct_intensities += 1
-
-                    # classes
-                    pixel_labels = labels[points_idx].ravel()
-                    # print(f"Pixel label aount {pixel_labels.shape[0]} -> {pixel_labels}")
-                    total_classes += pixel_labels.shape[0]
-
-                    # print(f"Pixel Labels Shape: {pixel_labels.shape} -> {pixel_labels}")
-                    # print(f"  -> Num Classes: {num_classes}")
-                    bincount = np.bincount(pixel_labels, minlength=num_classes)
-                    y_class = np.argmax(bincount)
-
-                    # bev_class = int(bev[3, cur_x, cur_y])
-                    bev_class = int(bev[3, cur_y, cur_x])
-
-                    if bev_class == y_class:
-                        correct_class += 1
-
-        print("\n===== BEV TEST RESULTS =====")
-        print(f"Total pixels checked: {total_pixels}")
-        print(f"Correct intensities: {correct_intensities} ({(correct_intensities/non_empty_pixels)*100:.2f}%)")
-        print(f"    -> absolute error sum: {intensity_difference}")
-        print(f"Correct classes: {correct_class} ({(correct_class/non_empty_pixels)*100:.2f}%)")
-        print(f"Correct empty pixels: {empty_pixels_correct} ({(empty_pixels_correct/total_empty_pixels)*100:.2f}%)")
+        bev_back_projection_testing(point_cloud.get_as_o3d(), tiles, metas)
 
         # do not end after one testset?
         break
@@ -325,7 +283,8 @@ def tryout(config):
     # torch_tensor_loading(config)
     # bev_trying(config)
     # bev_segmentation_trying(config)
-    bev_working_testing(config)
+    # bev_working_testing(config)
+    bev_preprocessed_loading_working_testing(config)
     # train_data_testing(config)
     # train_testing(config)
 
