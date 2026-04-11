@@ -486,7 +486,10 @@ def bev_back_projection(point_cloud, meta, tile_id, pixel_x, pixel_y, try_use_sa
 
     If no points exist for the given pixel, the function returns None.
     """
-    tile = meta[tile_id]
+    if isinstance(meta, dict):
+        tile = meta
+    else:
+        tile = meta[tile_id]
     
     local_indices = tile["pixel_to_points"][pixel_y][pixel_x]
 
@@ -523,7 +526,9 @@ def bev_back_projection(point_cloud, meta, tile_id, pixel_x, pixel_y, try_use_sa
 
 
 
-def bev_back_projection_testing(point_cloud, bev_gen):    # bev_images, metas):
+def bev_back_projection_testing(point_cloud, bev_gen, bev_amount=None):    # bev_images, metas):
+        if isinstance(point_cloud, PointCloudTensor):
+            point_cloud = point_cloud.get_as_o3d()
 
         # TEST START
         print("Starting BEV test...")
@@ -541,7 +546,7 @@ def bev_back_projection_testing(point_cloud, bev_gen):    # bev_images, metas):
         total_empty_pixels = 0
         empty_pixels_correct = 0
 
-        for tile_id, bev_dict in tqdm(enumerate(bev_gen), total=len(list(bev_gen)), desc="Tile Testing"):
+        for tile_id, bev_dict in tqdm(enumerate(bev_gen), total=bev_amount, desc="Tile Testing"):
             bev = torch.cat((bev_dict["pixel_values"], 
                              bev_dict["labels"].unsqueeze(0)),
                              dim=0

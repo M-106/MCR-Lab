@@ -214,7 +214,7 @@ def bev_working_testing(config):
         #     tiles = point_cloud.bevs
         #     meta = point_cloud.meta
 
-        bev_back_projection_testing(point_cloud, bev_gen)
+        bev_back_projection_testing(point_cloud, bev_gen, bev_amount=len(tiles))
 
         # do not end after one testset?
         break
@@ -244,7 +244,7 @@ def bev_preprocessed_loading_working_testing(config):
             print("Loaded Bevs from file...")
             bev_gen = point_cloud.get_bev()
 
-        bev_back_projection_testing(point_cloud.get_as_o3d(), bev_gen)
+        bev_back_projection_testing(point_cloud, bev_gen, bev_amount=point_cloud.bev_amount)
 
         # do not end after one testset?
         break
