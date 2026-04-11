@@ -3,6 +3,7 @@
 # -----------
 import numpy as np
 from PIL import Image
+import torch
 
 import open3d as o3d
 
@@ -522,7 +523,7 @@ def bev_back_projection(point_cloud, meta, tile_id, pixel_x, pixel_y, try_use_sa
 
 
 
-def bev_back_projection_testing(point_cloud, bev_images, metas):
+def bev_back_projection_testing(point_cloud, bev_gen):    # bev_images, metas):
 
         # TEST START
         print("Starting BEV test...")
@@ -540,14 +541,20 @@ def bev_back_projection_testing(point_cloud, bev_images, metas):
         total_empty_pixels = 0
         empty_pixels_correct = 0
 
-        for tile_id, bev in tqdm(enumerate(bev_images), total=len(bev_images), desc="Tile Testing"):
+        for tile_id, bev_dict in tqdm(enumerate(bev_gen), total=len(list(bev_gen)), desc="Tile Testing"):
+            bev = torch.cat((bev_dict["pixel_values"], 
+                             bev_dict["labels"].unsqueeze(0)),
+                             dim=0
+                            ).cpu().detach().numpy()
+            meta = bev_dict["meta"]
+            
             height, width = bev.shape[1], bev.shape[2]
 
             for cur_x in range(width):
                 for cur_y in range(height):
                     total_pixels += 1
 
-                    remapping = bev_back_projection(point_cloud, metas, tile_id, 
+                    remapping = bev_back_projection(point_cloud, meta, tile_id, 
                                                     pixel_x=cur_x, pixel_y=cur_y, 
                                                     try_use_saved_local_points=False)
                     points_idx = remapping["global_indices"]

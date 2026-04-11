@@ -4,6 +4,7 @@
 import os
 import shutil
 import gc
+import pickle
 
 import numpy as np
 import torch
@@ -22,7 +23,8 @@ from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.semantic_kitti_utils import load_semantic_kitti_as_o3d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
 from mcrlab.projection import bev_projection_numba
-from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle
+from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle, \
+                            load_single_bev_tile_as_pickle
 # from mcrlab.point_cloud.inspect import print_pc
 
 
@@ -440,19 +442,17 @@ class ParisLille3DDataset(Dataset):
         preprocesed_path = os.path.join(self.path, "preprocessed")
         path = preprocesed_path if preprocessed else self.path
         for cur_file in os.listdir(path):
-            if any([cur_file.endswith(ending) for ending in [".las", ".laz", ".ply"]]):
+            # if any([cur_file.endswith(ending) for ending in [".las", ".laz", ".ply"]]):
+            if cur_file.endswith((".las", ".laz", ".ply")):
                 if preprocessed and not cur_file.startswith("preprocessed_"):
                     continue
                 elif not preprocessed and cur_file.startswith("preprocessed_"):
                     continue
 
-                self.point_cloud_paths.append(os.path.join(self.path, cur_file))
+                self.point_cloud_paths.append(os.path.join(path, cur_file))
 
         if preprocessed:
-            for cur_file in os.listdir(preprocesed_path):
-                if cur_file.endswith(".pkl") and cur_file.startswith("preprocessed_bev_"):  # also could search for metas
-                    general_file_name = ".".join(os.path.join(preprocesed_path, cur_file).split(".")[:-1])
-                    self.bev_paths[general_file_name] = general_file_name + ".pkl"
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, search_files=False, mode="linear")
 
         print(f"Found {len(self.point_cloud_paths)} point clouds.")
 
@@ -468,12 +468,18 @@ class ParisLille3DDataset(Dataset):
 
         # add BEV information
         if isinstance(point_cloud, PointCloudTensor):
-            general_file_name = ".".join(self.point_cloud_paths[idx].split(".")[:-1])
-            bev_path = self.bev_paths[general_file_name]
-            bevs, meta = load_bev_tiles_as_pickle(bev_path)  
+            # general_file_name = ".".join(self.point_cloud_paths[idx].split(".")[:-1])
+            # root, filename = os.path.split(self.point_cloud_paths[idx])
+            # bev_file_name = filename.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
+            # bev_path = self.bev_paths[bev_file_name]
+            # bevs, meta = load_bev_tiles_as_pickle(bev_path)  
             # bevs, meta = load_bev_tiles_as_pt(bev_path)
-            point_cloud.bevs = bevs
-            point_cloud.meta = meta
+            # point_cloud.bevs = bevs
+            # point_cloud.meta = meta
+
+            point_cloud.set_bev(self.bev_gen, self.point_cloud_paths[idx])
+            
+            # cur_bev_gen = self.bev_gen.get_via_bev_filename(self.point_cloud_paths[idx], extract_from_full_ply_path=True)
 
         # use labels
         if isinstance(point_cloud, PointCloudTensor):
@@ -485,9 +491,7 @@ class ParisLille3DDataset(Dataset):
         if self.return_train_format:
 
             if isinstance(point_cloud, PointCloudTensor):
-                if point_cloud.labels is not None:
-                    y = point_cloud.labels
-                else:
+                if y is None:
                     raise ValueError(f"Can't find labels in PointCloudTensor!")
             else:
                 raise ValueError(f"Can't handle Data type `{type(point_cloud)}`")
@@ -543,52 +547,159 @@ class BEVDataset(Dataset):
 
     1 Sample = 1 Tile
     """
-    def __init__(self, path):
+    def __init__(self, path=None, search_files=False, mode="linear", file_paths=[]):
+        """
+        path is a list of point cloud file or a list of paths to search the bev images.
+
+        It is designed to be used on before preprocessed data!
+
+        FIXME -> also make working on not preprocessed data and create BEV on the fly -> good idea?
+
+        mode can be "linear" or "dataset"
+            - in "linear" every tile will be exported one after another
+            - in "dataset" a generator of tiles in one point_cloud will be returned
+        """
+        if isinstance(path, str):
+            path = [path]
+
         self.path = path
+        self.mode = mode
+        self.file_paths = file_paths
 
-        self.bev_paths = []
+        # find pkl files
+        all_bev_paths = []
+        # search all files
+        if search_files:
+            for cur_path in self.path:
+                for cur_file in os.listdir(cur_path):
+                    if cur_file.endswith(".pkl") and cur_file.startswith("preprocessed_bev_"):
+                        cur_file_path = os.path.join(cur_path, cur_file)
+                        all_bev_paths.append(cur_file_path)            
+        else:
+            for cur_path in self.path:
+                root, filename = os.path.split(cur_path)
+                bev_file_name = filename.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
+                all_bev_paths.append(os.path.join(root, bev_file_name))
+                
+        # merge the found files
+        #    -> the files only contain the file-paths
+        self.bev_paths = dict()
         self.bev_tile_mapping = []  # every tile (one image) gets file, id in file info
+        self.idx_to_fileid = dict()
+        cur_pc_idx = 0
 
-        cur_bev_file_idx = 0
+        for cur_path in all_bev_paths:
+            cur_root, cur_file = os.path.split(cur_path)
 
-        # self.path = os.path.join(self.path, "preprocessed")
-
-        for cur_file in os.listdir(self.path):
-            if cur_file.endswith(".pkl") and cur_file.startswith("preprocessed_bev_"):
-                cur_path = os.path.join(self.path, cur_file)
-                self.bev_paths.append(cur_path)
-
-                bevs, _ = load_bev_tiles_as_pickle(cur_path)
-                # bevs, _ = load_bev_tiles_as_pt(cur_path)
-                tile_amount = len(bevs)
-                for cur_id in range(tile_amount):
-                    self.bev_tile_mapping.append((cur_bev_file_idx, cur_id))
-
-                cur_bev_file_idx += 1
+            with open(cur_path, "rb") as file_:
+                all_paths = pickle.load(file_)
+            self.bev_paths[cur_file] = all_paths
+            
+            for file_idx in all_paths:
+                self.bev_tile_mapping.append((cur_pc_idx, file_idx))
+                self.idx_to_fileid[(cur_pc_idx, file_idx)] = cur_file
+            cur_pc_idx += 1
 
         print(f"Found {len(self.bev_tile_mapping)} bev images (orthogonal images) in {len(self.bev_paths)} files.")
 
     def __getitem__(self, idx):
-        file_idx, tile_id = self.bev_tile_mapping[idx]
-        bevs, _ = load_bev_tiles_as_pickle(self.bev_paths[file_idx])
-        # bevs, _ = load_bev_tiles_as_pt(self.bev_paths[file_idx])
-        bev = bevs[tile_id]
+        if self.mode == "linear":
+            file_idx, tile_id = self.bev_tile_mapping[idx]
+            file_name = self.idx_to_fileid[(file_idx, tile_id)]
+            bevs, meta = load_single_bev_tile_as_pickle(self.bev_paths[file_name])
+            bev = bevs[tile_id]
 
-        # ignore meta -> we don't want to back-project when using only the BEV dataset
+            x = torch.from_numpy(bev[:-1]).float()
+            y = torch.from_numpy(bev[-1]).long()
+            assert y.ndim == 2
 
-        # x = bev[:-1]
-        # y = bev[-1]
-        x = torch.from_numpy(bev[:-1]).float()
-        y = torch.from_numpy(bev[-1]).long()
-        assert y.ndim == 2
+            return {
+                "pixel_values": x,   # (C, H, W)
+                "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
+                "meta": meta
+            }
+        else:
+            cur_tile_ids = []
+            for file_idx, tile_id in self.bev_tile_mapping:
+                if file_idx == idx:
+                    cur_tile_ids.append(tile_id)
+                else:
+                    break
 
-        return {
-            "pixel_values": x,   # (C, H, W)
-            "labels": y  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
-        }
+            return self.generator(cur_tile_ids)
+        
+    def get_via_bev_filename(self, file_name, extract_from_full_ply_path=False):
+        if extract_from_full_ply_path:
+            bev_file_name = self.extract_from_full_ply_path(file_name)
+        else:
+            bev_file_name = file_name
+        # bev_file_name = file_name.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
+        return self.generator(self.bev_paths[bev_file_name])
+
+    def generator(self, file_paths=None):
+        if file_paths is None:
+            if self.file_paths is None:
+                raise ValueError("No filenames set and no filenames given")
+            else:
+                file_paths = self.file_paths
+
+        for cur_file_path in file_paths:
+            tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
+            x = torch.from_numpy(tile[:-1]).float()
+            y = torch.from_numpy(tile[-1]).long()
+            assert y.ndim == 2
+            yield {
+                "pixel_values": x,   # (C, H, W)
+                "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
+                "meta": meta
+            }
+
+    def extract_from_full_ply_path(self, path):
+        _, bev_file_name = os.path.split(path)
+        bev_file_name = bev_file_name.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
+        return bev_file_name
 
     def __len__(self):
         return len(self.bev_tile_mapping)
+    
+def bev_gen_wrapper(self, tiles, metas):
+        for idx in range(len(tiles)):
+            tile = tiles[idx]
+            meta = metas[idx]
+            x = torch.from_numpy(tile[:-1]).float()
+            y = torch.from_numpy(tile[-1]).long()
+            assert y.ndim == 2
+            yield {
+                "pixel_values": x,   # (C, H, W)
+                "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
+                "meta": meta
+            }
+
+def extract_tiles_metas(bev_gen, amount=5, as_numpy=True):
+    tiles = []
+    metas = []
+    cur_amount = 0
+    for bev_data in bev_gen:
+        if cur_amount == amount:
+            break
+
+        if bev_data["labels"] is not None and bev_data["labels"].shape[0] == bev_data["pixel_values"].shape[1]:
+            bev = torch.cat((bev_data["pixel_values"], 
+                            bev_data["labels"].unsqueeze(0)),
+                            dim=0
+                            )
+        else:
+            bev = bev_data["pixel_values"]
+        if as_numpy:
+            bev = bev.cpu().detach().numpy()
+        tiles.append(bev)
+
+        meta = bev_data["meta"]
+        metas.append(meta)
+
+        cur_amount += 1
+
+    return (tiles, metas)
     
 
 # also add data_loader which return 3 data-loader or 2
@@ -642,14 +753,14 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
         cur_root_path, cur_file_name = os.path.split(cur_path)
         cur_file_name = ".".join(cur_file_name.split(".")[:-1])
 
+        cur_root_path = os.path.join(cur_root_path, "preprocessed")
         if not preprocessed_path_cleaned:
-            cur_root_path = os.path.join(cur_root_path, "preprocessed")
             os.makedirs(cur_root_path, exist_ok=True)
             shutil.rmtree(cur_root_path)
             os.makedirs(cur_root_path, exist_ok=True)
             preprocessed_path_cleaned = True
 
-        new_file_path = os.path.join(cur_root_path, "preprocessed", "preprocessed_"+cur_file_name +".ply")
+        new_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name +".ply")
 
         if len(batch) > 1:
             raise ValueError("Not expected bigger Batch.")
@@ -663,7 +774,7 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
 
         # save BEVs
         print("Generating BEV images...")
-        bev_file_path = os.path.join(cur_root_path, "preprocessed", "preprocessed_bev_"+cur_file_name +".pkl")  # ".pkl"
+        bev_file_path = os.path.join(cur_root_path, "preprocessed_bev_"+cur_file_name +".pkl")  # ".pkl"
         tiles, meta = bev_projection_numba(batch[0], tile_size=bev_tile_size, resolution=bev_resolution, include_class=True)
         save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
         # save_bev_tiles_as_pt(tiles, meta, bev_file_path)

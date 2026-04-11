@@ -218,13 +218,22 @@ def print_metrics(point_cloud):
                 break
     
     if isinstance(point_cloud, PointCloudTensor):
-        if point_cloud.bevs is not None:
-            print(f" ◉ BEV Images:  {str(len(point_cloud.bevs)):6}")
-            print(f"       ⨀ type '{str(type(point_cloud.bevs))}'")
-            if len(point_cloud.bevs) > 0:
-                print(f"       ⨀ element-type '{str(type(point_cloud.bevs[0]))}'")
-                print(f"            → '{str(point_cloud.bevs[0].dtype)}'") if hasattr(point_cloud.bevs[0], "dtype") else ""
-                print(f"       ⨀ shape '{str(point_cloud.bevs[0].shape)}'") if hasattr(point_cloud.bevs[0], "shape") else ""
+        if point_cloud.bev_data is not None:
+            # print(f" ◉ BEV Images:  {str(point_cloud.bev_amount):6}")
+            # print(f"       ⨀ type '{str(type(point_cloud.bevs))}'")
+            # if len(point_cloud.bevs) > 0:
+            #     print(f"       ⨀ element-type '{str(type(point_cloud.bevs[0]))}'")
+            #     print(f"            → '{str(point_cloud.bevs[0].dtype)}'") if hasattr(point_cloud.bevs[0], "dtype") else ""
+            #     print(f"       ⨀ shape '{str(point_cloud.bevs[0].shape)}'") if hasattr(point_cloud.bevs[0], "shape") else ""
+            print(f" ◉ BEV Images:  {str(point_cloud.bev_amount):6}")
+            print(f"       ⨀ type '{str(point_cloud.bev_img_type)}'")
+            print(f"       ⨀ data-type '{str(point_cloud.bev_img_dtype)}'")
+            print(f"       ⨀ shape '{str(point_cloud.bev_img_shape)}'")
+            print(f" ◉ BEV Labels:")
+            print(f"       ⨀ type '{str(point_cloud.bev_labels_type)}'")
+            print(f"       ⨀ data-type '{str(point_cloud.bev_labels_dtype)}'")
+            print(f"       ⨀ shape '{str(point_cloud.bev_labels_shape)}'")
+
 
 
 

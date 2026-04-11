@@ -1,6 +1,8 @@
 # -----------
 # > Imports <
 # -----------
+from itertools import tee
+
 import numpy as np
 import torch
 import open3d as o3d
@@ -125,18 +127,61 @@ class PointCloudTensor(object):
     def __init__(self, coordinates, colors=None, 
                  intensities=None, normals=None, 
                  labels=None, is_torch_tensor=False,
-                 bevs=None, meta=None):
+                 bev_data=None, bev_file_name=None):
         self.coordinates = coordinates
         self.colors = colors
         self.intensities = intensities
         self.normals = normals
         self.labels = labels
 
-        self.bevs = bevs  # np.array
-        self.meta = meta  # dict
+        self.set_bev(bev_data, bev_file_name)
 
         # can only be numpy or torch.Tensor
         self.is_torch_tensor = is_torch_tensor
+
+    def get_bev(self):
+        if self.bev_file_name is not None and self.bev_data is not None:
+            bev_gen = self.bev_data.get_via_bev_filename(self.bev_file_name, extract_from_full_ply_path=True)
+        return bev_gen
+    
+    def set_bev(self, bev_data, bev_file_name):
+        self.bev_data = bev_data    # BEV dataset
+
+        # if isinstance(bev_file_name, str):
+        #     bev_file_name = [bev_file_name]
+
+        if bev_file_name is not None and self.bev_data is not None:
+            # self.bev_data.file_paths = bev_file_name
+
+            bev_gen = self.bev_data.get_via_bev_filename(bev_file_name, extract_from_full_ply_path=True)
+            self.bev_amount = 0
+            for cur_bev in bev_gen:
+                self.bev_amount += 1
+                if self.bev_amount == 1:
+                    self.bev_img_type = type(cur_bev["pixel_values"])
+                    self.bev_img_dtype = cur_bev["pixel_values"].dtype
+                    self.bev_img_shape = cur_bev["pixel_values"].shape
+
+                    self.bev_labels_type = type(cur_bev["labels"])
+                    self.bev_labels_dtype = cur_bev["labels"].dtype
+                    self.bev_labels_shape = cur_bev["labels"].shape
+        else:
+            self.bev_amount = 0
+            self.bev_img_type = None
+            self.bev_img_dtype = None
+            self.bev_img_shape = None
+            self.bev_labels_type = None
+            self.bev_labels_dtype = None
+            self.bev_labels_shape = None
+        self.bev_file_name = bev_file_name
+
+        # self.bev_gen = self.bev_data.get_via_bev_filename(file_name, extract_from_full_ply_path=False)
+        # generator which return:
+        # {
+        # "tile": torch C, H, W
+        # "class": torch H, W
+        # "meta": dict
+        # }
 
     def to_torch(self, as_copy=False):
         coordinates_ = ensure_2_dims(numpy_to_torch_tensor(self.coordinates, dtype=numpy_tensor_type_to_torch_type(self.coordinates)))

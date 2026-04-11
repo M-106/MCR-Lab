@@ -99,6 +99,17 @@ def save_bev_tiles_as_pickle(tiles, metas, path):
 
 
 
+def load_single_bev_tile_as_pickle(path):
+    if not path.endswith(".pkl"):
+        path += ".pkl"
+
+    # load the bev file (tile/image + meta)
+    with open(path, "rb") as file_:
+        tiles, metas = pickle.load(file_)
+
+    return (tiles, metas)
+
+
 def load_bev_tiles_as_pickle(path):
     if not path.endswith(".pkl"):
         path += ".pkl"
