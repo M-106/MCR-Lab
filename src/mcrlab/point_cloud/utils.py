@@ -16,6 +16,8 @@ def get_coordinate_attribute(point_cloud):
         coordinate_idx = "position"
     elif "coordinate" in point_cloud.point:
         coordinate_idx = "coordinate"
+    elif "coordinates" in point_cloud.point:
+        coordinate_idx = "coordinates"
     elif "pos" in point_cloud.point:
         coordinate_idx = "pos"
     else:
@@ -110,6 +112,8 @@ def get_color_from_intensity(point_cloud):
 
         # grayscale mapping
         colors = np.stack([refl, refl, refl], axis=1)  # (N,3)
+
+        colors *= 255
     else:
         colors = None
 
@@ -136,25 +140,54 @@ def get_color_from_height(point_cloud):
 
 def get_color_from_class(point_cloud):
     label_idx = get_class_attribute(point_cloud)
-    if label_idx is not None:
-        points = point_cloud.point[label_idx].numpy()
+    if label_idx is None:
+        return None
 
-        classes = np.unique(points)
+    labels = point_cloud.point[label_idx].numpy().reshape(-1)
 
-        # print(points)
-        # print(points.shape)
+    unique_labels = np.unique(labels)
 
-        num_class = classes.shape[0]
-        
-        color_mapping = np.random.rand(num_class, 3).astype(np.float32)
+    np.random.seed(42)
+    color_map = {
+        label: np.random.rand(3).astype(np.float32)
+        for label in unique_labels
+    }
 
-        class_to_idx = {class_: idx for idx, class_ in enumerate(classes)}
+    colors = np.zeros((labels.shape[0], 3), dtype=np.float32)
 
-        colors = np.array([
-            color_mapping[class_to_idx[class_[0]]] for class_ in points
-        ], dtype=np.float32)
-    else:
-        colors = None
+    for label, color in color_map.items():
+        # only debugging:
+        # if label != 104002:  # 105800, 106200, >104002< -> manhole, 101100, 101701
+        #     continue
+
+        colors[labels == label] = color
+
+    # Debug
+    # print("Class mapping:")
+    # for k, v in color_map.items():
+    #     print(f"  ID {k} → color {v}")
+
+    # # debugging only, find id via color
+    # target = np.array([208, 231, 86]) / 255.0    # via color picker from visualization, only possible because of seed!
+
+    # best_id = [None] * 5
+    # best_dist = [float("inf")] * 5
+
+    # for k, v in color_map.items():
+    #     cur_dist = np.linalg.norm(v - target)
+    #     cur_k = k
+    #     for idx in range(len(best_dist)):
+    #         if cur_dist < best_dist[idx]:
+    #             previously_best_dist = best_dist[idx]
+    #             previously_best_id = best_id[idx]
+    #             best_dist[idx] = cur_dist
+    #             best_id[idx] = cur_k
+    #             cur_dist = previously_best_dist
+    #             cur_k = previously_best_id
+
+    #             # no 'continue'! -> other have to get updated too!
+
+    # print("Closest ID:", best_id, "distance:", best_dist)
 
     return colors
 

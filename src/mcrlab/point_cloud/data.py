@@ -32,6 +32,92 @@ from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle, 
 # ----------------------
 # > Data-Augmentations <
 # ----------------------
+class ToFixPointsTransform:
+    def __init__(self, num_points=-1, allow_padding=False, reduction_by_height=True):
+        """
+        Reduced or pads an point cloud to have one fix point set.
+        Reduction is done by taking the highest points.
+
+        -> It will not be recued **by** num_points, it will be reduced **to** this amount
+        """
+        self.num_points = num_points
+        self.allow_padding = allow_padding
+        self.reduction_by_height = reduction_by_height
+
+    def __call__(self, point_cloud):
+        if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
+            raise ValueError(f"Can't apply ToPointCloudTensorTransform on '{type(point_cloud)}'")
+        
+        if self.num_points <= 0:
+            return point_cloud
+
+        # convert to numpy
+        coordinates_key = get_coordinate_attribute(point_cloud)
+        coordinates = point_cloud.point[coordinates_key].numpy()
+        coordinate_amount = coordinates.shape[0]
+
+        points_to_remove = coordinate_amount - self.num_points
+
+        # sample or pad points to fixed size
+        if points_to_remove > 0:
+            z = coordinates[:, 2]
+            idx_sorted = np.argsort(z)     # sorted low to high
+
+            if self.reduction_by_height:
+                idxs = idx_sorted[:-points_to_remove]
+            else:
+                idxs = np.random.choice(coordinate_amount, self.num_points, replace=False)
+            idxs = o3d.core.Tensor(idxs, dtype=o3d.core.Dtype.Int64)
+
+            # apply mask/filtered points
+            point_cloud = point_cloud.select_by_index(idxs)
+        else:
+            if self.allow_padding:
+                extra_idxs = np.random.choice(coordinate_amount, (self.num_points - coordinate_amount), replace=True)
+                idxs = np.hstack((np.arange(coordinate_amount), extra_idxs))  # result also 1 dimensional
+
+                np.random.shuffle(idxs)
+
+                idxs = o3d.core.Tensor(idxs, dtype=o3d.core.Dtype.Int64)
+                # apply mask/filtered points
+                point_cloud = point_cloud.select_by_index(idxs)
+
+        return point_cloud
+    
+        # dtype = point_cloud.point[coordinates_idx].dtype
+        # coordinates = coordinates[idxs]
+        # point_cloud.point[coordinates_idx] = o3d.core.Tensor(coordinates, dtype=dtype)
+
+        # intensities_idx = get_intensity_attribute(point_cloud)
+        # if intensities_idx is not None:
+        #     dtype = point_cloud.point[intensities_idx].dtype
+        #     intensities = point_cloud.point[intensities_idx].numpy()
+        #     intensities = intensities[idxs]
+        #     point_cloud.point[intensities_idx] = o3d.core.Tensor(intensities, dtype=dtype)
+
+        # colors_idx = get_color_attribute(point_cloud)
+        # if colors_idx is not None:
+        #     dtype = point_cloud.point[colors_idx].dtype
+        #     colors = point_cloud.point[colors_idx].numpy()
+        #     colors = colors[idxs]
+        #     point_cloud.point[colors_idx] = o3d.core.Tensor(colors, dtype=dtype)
+
+        # normals_idx = get_color_attribute(point_cloud)
+        # if normals_idx is not None:
+        #     dtype = point_cloud.point[normals_idx].dtype
+        #     normals = point_cloud.point[normals_idx].numpy()
+        #     normals = normals[idxs]
+        #     point_cloud.point[normals_idx] = o3d.core.Tensor(normals, dtype=dtype)
+        
+        # labels_idx = get_color_attribute(point_cloud)
+        # if labels_idx is not None:
+        #     dtype = point_cloud.point[labels_idx].dtype
+        #     labels = point_cloud.point[labels_idx].numpy()
+        #     labels = labels[idxs]
+        #     point_cloud.point[labels_idx] = o3d.core.Tensor(labels, dtype=dtype)
+
+
+
 class HeightFilterTransform:
     def __init__(self, min_height=-2.0, max_height=2.0):
         self.min_height = min_height
@@ -221,10 +307,17 @@ class OutlierRemovalTransform:
 
     def __call__(self, point_cloud):
         if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
-            raise ValueError(f"Can't apply ToPointCloudTensorTransform on '{type(point_cloud)}'")
+            raise ValueError(f"Can't apply OutlierRemovalTransform on '{type(point_cloud)}'")
 
         coordinate_idx = get_coordinate_attribute(point_cloud)
         # point_before = len(point_cloud.point[coordinate_idx])
+    
+        # debugging
+        # pts = point_cloud.point[coordinate_idx].numpy()
+        # print("NaN:", np.isnan(pts).any())
+        # print("Inf:", np.isinf(pts).any())
+        # print("Min:", pts.min(axis=0))
+        # print("Max:", pts.max(axis=0))
 
         if self.mode == "radius":
             point_cloud, mask = point_cloud.remove_radius_outliers(
@@ -232,6 +325,7 @@ class OutlierRemovalTransform:
                 search_radius=self.radius
             )
         elif self.mode == "statistical":
+            # print("Checkpoint 2:", point_cloud.point[coordinate_idx].shape)
             point_cloud, mask = point_cloud.remove_statistical_outliers(
                 nb_neighbors=self.nb_points,
                 std_ratio=self.std_ratio
@@ -408,6 +502,7 @@ def get_basic_transform(num_points=-1):
 
 def get_preprocessing_transform():
     transform = Compose([
+        # ToFixPointsTransform(num_points=50000, allow_padding=False, reduction_by_height=True),  # 7250451 -> 5000000
         # NaivMinHistoGroundKeepFilterTransform(),
         OutlierRemovalTransform(mode="statistical", nb_points=8, radius=0.2, std_ratio=2.0),
         # RANSACGroundKeepFilterTransform(dist_threshold=0.5, ransac_tries=3),
@@ -467,7 +562,7 @@ class ParisLille3DDataset(Dataset):
             point_cloud = self.transform(point_cloud)
 
         # add BEV information
-        if isinstance(point_cloud, PointCloudTensor):
+        if isinstance(point_cloud, PointCloudTensor) and self.preprocessed:
             # general_file_name = ".".join(self.point_cloud_paths[idx].split(".")[:-1])
             # root, filename = os.path.split(self.point_cloud_paths[idx])
             # bev_file_name = filename.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
@@ -507,7 +602,93 @@ class ParisLille3DDataset(Dataset):
         #     return point_cloud  # shape (1024, 3)
 
 
+class WHUUrban3DDataset(Dataset):
+    def __init__(self, path, testdata=False, transform=None, 
+                 preprocessed=False, return_train_format=False):
+        self.path = os.path.join(path, "mls", "h5")
+        self.testdata = testdata  # see in https://pypi.org/project/pywhu3d/ which scenes are train/val/test split
+        self.transform = transform
+        self.preprocessed = preprocessed
+        self.return_train_format = return_train_format
+
+        self.point_cloud_paths = []
+        self.bev_paths = dict()
+        preprocesed_path = os.path.join(self.path, "preprocessed")
+        path = preprocesed_path if preprocessed else self.path
+        for cur_file in os.listdir(path):
+            # if any([cur_file.endswith(ending) for ending in [".las", ".laz", ".ply"]]):
+            if cur_file.endswith((".h5", ".ply")):
+                if preprocessed and not cur_file.startswith("preprocessed_"):
+                    continue
+                elif not preprocessed and cur_file.startswith("preprocessed_"):
+                    continue
+
+                self.point_cloud_paths.append(os.path.join(path, cur_file))
+
+        if preprocessed:
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, search_files=False, mode="linear")
+
+        print(f"Found {len(self.point_cloud_paths)} point clouds.")
+
+    def __len__(self):
+        return len(self.point_cloud_paths)
+
+    def __getitem__(self, idx):
+        point_cloud = load_point_cloud(self.point_cloud_paths[idx])
+        # point_cloud = point_cloud.voxel_down_sample(voxel_size=0.05)
+
+        # print("Empty? ->", point_cloud.is_empty())
+        # print(type(point_cloud))
+        # print("Checkpoint 1:", point_cloud.point[get_coordinate_attribute(point_cloud)].shape)
+
+        if self.transform:
+            point_cloud = self.transform(point_cloud)
+
+        # add BEV information
+        if isinstance(point_cloud, PointCloudTensor) and self.preprocessed:
+            # general_file_name = ".".join(self.point_cloud_paths[idx].split(".")[:-1])
+            # root, filename = os.path.split(self.point_cloud_paths[idx])
+            # bev_file_name = filename.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
+            # bev_path = self.bev_paths[bev_file_name]
+            # bevs, meta = load_bev_tiles_as_pickle(bev_path)  
+            # bevs, meta = load_bev_tiles_as_pt(bev_path)
+            # point_cloud.bevs = bevs
+            # point_cloud.meta = meta
+
+            point_cloud.set_bev(self.bev_gen, self.point_cloud_paths[idx])
+            
+            # cur_bev_gen = self.bev_gen.get_via_bev_filename(self.point_cloud_paths[idx], extract_from_full_ply_path=True)
+
+        # use labels
+        if isinstance(point_cloud, PointCloudTensor):
+            if point_cloud.labels is not None:
+                y = point_cloud.labels
+            else:
+                y = None
+
+        if self.return_train_format:
+
+            if isinstance(point_cloud, PointCloudTensor):
+                if y is None:
+                    raise ValueError(f"Can't find labels in PointCloudTensor!")
+            else:
+                raise ValueError(f"Can't handle Data type `{type(point_cloud)}`")
+            return point_cloud.get_as_one_tensor(include_intensity=True), y
+        else:
+            print(point_cloud.point[get_coordinate_attribute(point_cloud)].shape)
+            print(f"Any nans: {np.isnan(np.asarray(point_cloud.point[get_coordinate_attribute(point_cloud)])).any()}")
+            return point_cloud  # PointCloudTensor or o3d.t.geometry.Tensor
+
+
+
 class SemanticKittiDataset(Dataset):
+    """
+    FIXME -> NOT TESTED YET!
+
+    To do:
+    - need label mapping?
+    - add preprocessing 
+    """
     def __init__(self, path, transform=None, 
                  preprocessed=False, return_train_format=False):
         self.path = path
@@ -522,17 +703,41 @@ class SemanticKittiDataset(Dataset):
             labels_dir = os.path.join(self.sequences_path, cur_sequence, "labels")
 
             for cur_frame_name in os.listdir(data_dir):
-                cur_frame_data_path = os.path.join(data_dir, cur_frame_name)
-                cur_frame_labels_path = os.path.join(labels_dir, cur_frame_name)
+                if cur_frame_name.endswith(".bin"):
+                    cur_frame_data_path = os.path.join(data_dir, cur_frame_name)
+                    cur_frame_labels_path = os.path.join(labels_dir, cur_frame_name)
 
-                # FIXME
+                    if os.path.exists(cur_frame_labels_path):
+                        self.frames.append(
+                            (cur_frame_data_path,
+                             cur_frame_labels_path)
+                        )
+                    else:
+                        self.frames.append(
+                            (cur_frame_data_path, None)
+                        )
+        
+        print(f"Loaded {len(self.frames)} frames")
 
     def __len__(self):
-        pass
+        return len(self.frames)
 
     def __getitem__(self, idx):
-        # load_semantic_kitti_as_o3d(bin_path, label_path)
-        pass
+        data_path, labels_path = self.frames[idx]
+        point_cloud = load_semantic_kitti_as_o3d(data_path, labels_path)
+        
+        if self.transform:
+            point_cloud = self.transform(point_cloud)
+
+        if self.return_train_format:
+            if not isinstance(point_cloud, PointCloudTensor):
+                raise ValueError(f"Can't handle Data type `{type(point_cloud)}`")
+            if point_cloud.labels is None:
+                raise ValueError("Labels missing!")
+
+            return point_cloud.get_as_one_tensor(include_intensity=True), point_cloud.labels
+
+        return point_cloud
 
 
 class BEVDataset(Dataset):
@@ -715,6 +920,10 @@ def get_data_loader(data_name, path, testdata=False, transform=None,
         data_loader = get_paris_data_loader(path, testdata=testdata, transform=transform,
                                             batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                             preprocessed=preprocessed, return_train_format=return_train_format)
+    elif data_name == "whu":
+        data_loader = get_whu_data_loader(path, testdata=testdata, transform=transform,
+                                          batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
+                                          preprocessed=preprocessed, return_train_format=return_train_format)
     else:
         raise ValueError(f"No Dataset with the name '{data_name}' founded. Try 'paris'.")
 
@@ -733,11 +942,23 @@ def get_paris_data_loader(path, testdata=False, transform=None,
 
 
 
+def get_whu_data_loader(path, testdata=False, transform=None,
+                          batch_size=32, shuffle=True, num_workers=4,
+                          preprocessed=False, return_train_format=False):
+    dataset = WHUUrban3DDataset(path=path, testdata=testdata, transform=transform,
+                                preprocessed=preprocessed, return_train_format=return_train_format)
+
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
+                      collate_fn=collate_point_clouds)
+
+
+
 def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu",
                     bev_tile_size=15.0, bev_resolution=0.01):
     print("--- Data Preprocessing ---")
     data_loader = get_data_loader(data_name, path, testdata=testdata, transform=transform,
-                                  batch_size=1, shuffle=False, num_workers=1, preprocessed=False)
+                                  batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
+                                  return_train_format=False)
     
     # to_device = ToDevice(device)
     dataset = data_loader.dataset

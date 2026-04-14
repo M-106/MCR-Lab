@@ -1,4 +1,4 @@
-mode: tryout    # train, test, inference, tryout, preprocessing
+mode: preprocessing    # train, test, inference, tryout, preprocessing
 
 train:
   batch_size: 32
@@ -22,8 +22,11 @@ model:
   check_point_path: None
 
 data:
-  name: "paris"  # paris, fipm
-  path: "C:/Users/tippolito/Data/Benchmark"  # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d"
+  name: "whu"  # paris, whu
+  path: "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"  
+  # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d",
+  # "D:/data/whu3d-dataset-wo-test-label"
+  preprocessed: False
 
 device: cpu  # cpu, cuda, cuda:0
 

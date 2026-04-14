@@ -27,7 +27,9 @@ dependencies = [
     "numba",
     "python-dotenv",
     "scikit-learn",
-    "ultralytics"
+    "ultralytics",
+    "h5py",
+    # "pywhu3d",
     # "torch-geometric",
     # "pytorch3d",
     # "segmentation-models-pytorch-3d"

@@ -30,11 +30,16 @@ from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_att
 # > Different Scenarios <
 # -----------------------
 def simple_viusalize_point_cloud(config):
-    if config.data.name == "paris":
-        dataset = ParisLille3DDataset(path=config.data.path, testdata=False, transform=None, 
-                                      preprocessed=True, return_train_format=False)
+    # if config.data.name == "paris":
+    #     dataset = ParisLille3DDataset(path=config.data.path, testdata=False, transform=None, 
+    #                                   preprocessed=config.data.preprocessed, return_train_format=False)
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                  testdata=False, 
+                                  transform=get_basic_transform(num_points=-1),
+                                  batch_size=1, shuffle=False, num_workers=1,
+                                  preprocessed=config.data.preprocessed, return_train_format=False)
 
-    point_cloud = next(iter(dataset))
+    point_cloud = next(iter(data_loader))[0]
 
     print_pc(point_cloud)
     visualize(point_cloud, color_mode="class")
@@ -47,7 +52,7 @@ def torch_tensor_loading(config):
                                     testdata=False, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=True, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
 
     for batch in data_loader:
         point_cloud = batch[0]
@@ -66,7 +71,7 @@ def bev_trying(config):
                                     testdata=False, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=True, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
 
     for batch in data_loader:
         point_cloud = batch[0]
@@ -102,7 +107,7 @@ def bev_trying(config):
         for cur_x in np.arange(0, tile_1_img.shape[0], dtype=int):
             for cur_y in np.arange(0, tile_1_img.shape[1], dtype=int):
                 if tile_1_img[cur_y][cur_x][1] != 0:
-                    remapping = bev_back_projection(point_cloud, meta, tile_id=0, pixel_x=cur_x, pixel_y=cur_y)
+                    remapping = bev_back_projection(point_cloud, metas, tile_id=0, pixel_x=cur_x, pixel_y=cur_y)
                     points = remapping["points"]
                     print(points)
                     print(type(points))
@@ -135,7 +140,7 @@ def bev_segmentation_trying(config):
                                     testdata=False, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=True, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
 
     for batch in data_loader:
         point_cloud = batch[0]
@@ -191,7 +196,7 @@ def bev_working_testing(config):
                                     testdata=False, 
                                     transform=None,  # get_basic_transform(num_points=-1), 
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=True, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
 
     for batch in data_loader:
         point_cloud = batch[0]
@@ -227,7 +232,7 @@ def bev_preprocessed_loading_working_testing(config):
                                     testdata=False, 
                                     transform=get_basic_transform(num_points=-1), 
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=True, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
 
     for batch in data_loader:
         point_cloud = batch[0]
@@ -256,7 +261,7 @@ def train_data_testing(config):
                                     testdata=False, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=True, return_train_format=True)
+                                    preprocessed=config.data.preprocessed, return_train_format=True)
 
     for idx, (x_batch, y_batch) in enumerate(data_loader):
         print(f"Data check:")
@@ -283,12 +288,12 @@ def train_testing(config):
 # > Playground <
 # --------------
 def tryout(config):
-    # simple_viusalize_point_cloud(config)
+    simple_viusalize_point_cloud(config)
     # torch_tensor_loading(config)
     # bev_trying(config)
     # bev_segmentation_trying(config)
     # bev_working_testing(config)
-    bev_preprocessed_loading_working_testing(config)
+    # bev_preprocessed_loading_working_testing(config)
     # train_data_testing(config)
     # train_testing(config)
 

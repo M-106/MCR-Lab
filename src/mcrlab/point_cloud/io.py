@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+import h5py
 
 import open3d as o3d
 import open3d.core as ocore
@@ -55,6 +56,43 @@ def load_point_cloud(path):
         # if as_point_cloud_tensor:
         #     point_cloud = ToPointCloudTensorTransform()(point_cloud)
     
+        return point_cloud
+    elif path.endswith(".h5"):
+        with h5py.File(path, "r") as file_:
+            # view data
+            # file_.visititems(lambda name, obj: print(name, obj))
+            # results:
+            # coords <HDF5 dataset "coords": shape (7250451, 3), type "<f8">
+            # instances <HDF5 dataset "instances": shape (7250451,), type "<i8">
+            # intensity <HDF5 dataset "intensity": shape (7250451,), type "<f8">
+            # number_returns <HDF5 dataset "number_returns": shape (7250451,), type "<f8">
+            # semantics <HDF5 dataset "semantics": shape (7250451,), type "<i8">
+            # for key in file_.keys():
+            #     print(f"Key: {key}")
+            #     print(f"    - Shape: {file_[key].shape}")
+            #     print(f"    - Dtype: {file_[key].dtype}")
+
+            # extract data
+            coordinates = file_["coords"][:]
+            instances = file_["instances"][:]
+            intensities = file_["intensity"][:]
+            semantics = file_["semantics"][:]
+            number_returns = file_["number_returns"][:]
+
+        if intensities.max() <= 1.0:
+            intensities *= 255
+
+        # create open3d version
+        point_cloud = o3d.t.geometry.PointCloud()
+        # use key positions and not coordinates!
+        point_cloud.point["positions"] = o3d.core.Tensor(coordinates, dtype=o3d.core.Dtype.Float32)
+        # point_cloud.point["classes"] = o3d.core.Tensor(np.hstack([instances.reshape(-1, 1), 
+        #                                                           semantics.reshape(-1, 1)], axis=0), 
+        #                                                dtype=o3d.core.Dtype.Int32)
+        # point_cloud.point["classes"] = o3d.core.Tensor(semantics.reshape(-1, 1), dtype=o3d.core.Dtype.Int32)
+        point_cloud.point["classes"] = o3d.core.Tensor(instances.reshape(-1, 1), dtype=o3d.core.Dtype.Int32)
+        point_cloud.point["intensities"] = o3d.core.Tensor(intensities.reshape(-1, 1), dtype=o3d.core.Dtype.Float32)
+
         return point_cloud
     else:
         _, file_ = os.path.split(path)
