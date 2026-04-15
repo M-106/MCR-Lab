@@ -213,5 +213,6 @@ __marimo__/
 cloth_nodes.txt
 
 /test_bev_images
+/bev_samples
 
 .env

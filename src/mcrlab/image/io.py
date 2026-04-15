@@ -99,6 +99,43 @@ def save_bev_tiles_as_pickle(tiles, metas, path):
 
 
 
+def save_single_bev_tile_as_pickle(tile, meta, tile_id, path):
+    if not path.endswith(".pkl"):
+        path += ".pkl"
+
+    # adjust file names
+    root_path, file_name = os.path.split(path)
+    file_name_without_ending = ".".join(file_name.split(".")[:-1])
+
+    cur_bev_idx = tile_id
+    cur_bev_data_file_name = "single_bev_" + file_name_without_ending + f"_{cur_bev_idx:02}.pkl"
+    cur_bev_data_path = os.path.join(root_path, cur_bev_data_file_name)
+
+    data = (tile, meta)
+
+    # saving
+    with open(cur_bev_data_path, "wb") as file_:
+        pickle.dump(data, file_)
+
+    # save paths
+    #  load previous saved paths
+    if tile_id == 0:
+        paths = []
+    else:
+        assert os.path.exists(path)
+        # create or overwrite existing summarize path file
+        with open(path, "rb") as file_:
+            paths = pickle.load(file_)
+
+    #  add new path
+    paths.append(cur_bev_data_path)
+
+    #  save updated filename list
+    with open(path, "wb") as file_:
+        pickle.dump(paths, file_)
+
+
+
 def load_single_bev_tile_as_pickle(path):
     if not path.endswith(".pkl"):
         path += ".pkl"
@@ -229,6 +266,9 @@ def load_bev_tiles_as_pt_together(path, return_tiles_as_list_numpy_array=False):
 #     return tiles, metas
 
     
+
+
+
 
 
 

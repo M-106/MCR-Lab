@@ -91,8 +91,8 @@ def load_point_cloud(path):
         #                                                dtype=o3d.core.Dtype.Int32)
         # point_cloud.point["classes"] = o3d.core.Tensor(semantics.reshape(-1, 1), dtype=o3d.core.Dtype.Int32)
         point_cloud.point["classes"] = o3d.core.Tensor(instances.reshape(-1, 1), dtype=o3d.core.Dtype.Int32)
-        point_cloud.point["intensities"] = o3d.core.Tensor(intensities.reshape(-1, 1), dtype=o3d.core.Dtype.Float32)
-
+        point_cloud.point["intensity"] = o3d.core.Tensor(intensities.reshape(-1, 1), dtype=o3d.core.Dtype.Float32)
+        
         return point_cloud
     else:
         _, file_ = os.path.split(path)

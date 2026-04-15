@@ -25,7 +25,7 @@ from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device
 from mcrlab.projection import bev_projection_numba
 from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle, \
                             load_single_bev_tile_as_pickle
-# from mcrlab.point_cloud.inspect import print_pc
+from mcrlab.image.utils import normalize_img_per_channel
 
 
 
@@ -342,6 +342,27 @@ class OutlierRemovalTransform:
         return point_cloud
 
 
+
+class VoxelDownsamplerTransform:
+    """
+    Voxel downsampling summarizes all points in the same grid.
+    grid-size is in meters -> 0,01 means 1cm grids 
+    
+    if creating BEV, you have to be carefully 
+    do not dwnsampling more than you want to show in the BEV
+    """
+    def __init__(self, grid_size=0.01):
+        self.grid_size = grid_size
+
+    def __call__(self, point_cloud):
+        if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
+            raise ValueError(f"Can't apply OutlierRemovalTransform on '{type(point_cloud)}'")
+
+        
+        return point_cloud.voxel_down_sample(voxel_size=self.grid_size)
+
+
+
 # add more augmentations! -> random rotate, jitter
 
 
@@ -453,6 +474,35 @@ class ToDevice:
 
 
 
+def point_cloud_tensor_to_image_dataset(point_cloud):
+    """
+    This function is needed? FIXME-> maybe remve it
+
+    Wanted format:
+    {
+        "pixel_values": tensor(C, H, W),
+        "labels": tensor(H, W)  # class ids per pixel
+    }
+    """
+    tiles, meta = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)
+
+    items = []
+    for cur_tile in tiles:
+        cur_img = np.transpose(cur_tile, (1, 2, 0))
+        cur_img = normalize_img_per_channel(cur_img, skip_already_normalized_channels=True)
+
+        cur_labels = cur_img[:, :, 3]
+        cur_img = cur_img[:, :, :-1]
+        
+        items.append({
+            "pixel_values": cur_img,
+            "labels": cur_labels
+        })
+        
+    return items
+
+
+
 def extract_labels_as_tensor(point_cloud):
     label_idx = get_class_attribute(point_cloud)
     
@@ -500,14 +550,15 @@ def get_basic_transform(num_points=-1):
 
 
 
-def get_preprocessing_transform():
+def get_preprocessing_transform(grid_size=0.01):
     transform = Compose([
-        # ToFixPointsTransform(num_points=50000, allow_padding=False, reduction_by_height=True),  # 7250451 -> 5000000
+        # ToFixPointsTransform(num_points=1000000, allow_padding=False, reduction_by_height=True),  # 7250451 -> 5000000
         # NaivMinHistoGroundKeepFilterTransform(),
         OutlierRemovalTransform(mode="statistical", nb_points=8, radius=0.2, std_ratio=2.0),
         # RANSACGroundKeepFilterTransform(dist_threshold=0.5, ransac_tries=3),
         # RoadExtractionTransform(mode="height")
-        CSFGroundFilterTransform(invert_z=False)
+        CSFGroundFilterTransform(invert_z=False),
+        VoxelDownsamplerTransform(grid_size=grid_size)
     ])
     return transform
 
@@ -635,7 +686,6 @@ class WHUUrban3DDataset(Dataset):
 
     def __getitem__(self, idx):
         point_cloud = load_point_cloud(self.point_cloud_paths[idx])
-        # point_cloud = point_cloud.voxel_down_sample(voxel_size=0.05)
 
         # print("Empty? ->", point_cloud.is_empty())
         # print(type(point_cloud))
@@ -675,8 +725,7 @@ class WHUUrban3DDataset(Dataset):
                 raise ValueError(f"Can't handle Data type `{type(point_cloud)}`")
             return point_cloud.get_as_one_tensor(include_intensity=True), y
         else:
-            print(point_cloud.point[get_coordinate_attribute(point_cloud)].shape)
-            print(f"Any nans: {np.isnan(np.asarray(point_cloud.point[get_coordinate_attribute(point_cloud)])).any()}")
+            # print(point_cloud.point[get_coordinate_attribute(point_cloud)].shape)
             return point_cloud  # PointCloudTensor or o3d.t.geometry.Tensor
 
 
@@ -953,10 +1002,10 @@ def get_whu_data_loader(path, testdata=False, transform=None,
 
 
 
-def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu",
+def preprocess_data(data_name, path, testdata=False, device="cpu",
                     bev_tile_size=15.0, bev_resolution=0.01):
     print("--- Data Preprocessing ---")
-    data_loader = get_data_loader(data_name, path, testdata=testdata, transform=transform,
+    data_loader = get_data_loader(data_name, path, testdata=testdata, transform=get_preprocessing_transform(grid_size=bev_resolution),
                                   batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
                                   return_train_format=False)
     
@@ -968,6 +1017,7 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
     preprocessed_path_cleaned = False
     for idx, batch in tqdm(enumerate(data_loader), total=len(data_loader), desc="Preprocessing"):
         # batch = to_device(batch)
+        # print_pc(batch[0])
 
         # adjust path
         cur_path = dataset.point_cloud_paths[idx]
@@ -983,6 +1033,9 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
 
         new_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name +".ply")
 
+        if not isinstance(batch, list):  # Dataset
+            raise TypeError(f"Batch is not a list, else it is '{type(batch)}'.")
+
         if len(batch) > 1:
             raise ValueError("Not expected bigger Batch.")
         
@@ -996,12 +1049,15 @@ def preprocess_data(data_name, path, testdata=False, transform=None, device="cpu
         # save BEVs
         print("Generating BEV images...")
         bev_file_path = os.path.join(cur_root_path, "preprocessed_bev_"+cur_file_name +".pkl")  # ".pkl"
-        tiles, meta = bev_projection_numba(batch[0], tile_size=bev_tile_size, resolution=bev_resolution, include_class=True)
-        save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
+        bev_projection_numba(batch[0], tile_size=bev_tile_size, resolution=bev_resolution, include_class=True,
+                             direct_single_saving=True, single_saving_path=bev_file_path,
+                             sample_path=f"./bev_samples/{data_name}/")
+        # save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
         # save_bev_tiles_as_pt(tiles, meta, bev_file_path)
         print(f"Saving BEVs to '{bev_file_path}'\n  Found: {os.path.isfile(bev_file_path)}")
 
-        del tiles, meta, batch
+        # del tiles, meta, batch
+        del batch
         gc.collect()
 
     print("\nCongratelations, your preprocessing is finish!")

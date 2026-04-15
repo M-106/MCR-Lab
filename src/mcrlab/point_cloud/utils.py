@@ -49,6 +49,8 @@ def get_class_attribute(point_cloud):
 def get_intensity_attribute(point_cloud):
     if "intensity" in point_cloud.point:
         intensity_idx = "intensity"
+    elif "intensities" in point_cloud.point:
+        intensity_idx = "intensities"
     elif "reflectance" in point_cloud.point:
         intensity_idx = "reflectance"
     elif "reflection" in point_cloud.point:

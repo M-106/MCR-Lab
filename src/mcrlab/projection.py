@@ -1,6 +1,9 @@
 # -----------
 # > Imports <
 # -----------
+import os
+import psutil
+
 import numpy as np
 from PIL import Image
 import torch
@@ -17,6 +20,7 @@ from sklearn.preprocessing import StandardScaler
 
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, torch_tensor_to_numpy, torch_tensor_type_to_numpy_type
+from mcrlab.image.io import save_single_bev_tile_as_pickle, save_bev_tiles_as_images
 
 
 
@@ -107,11 +111,15 @@ def _numba_aggregate(px, py, z, intensity, height, width, labels=None, num_class
         bev = np.zeros((3, height, width), dtype=np.float32)
     else:
         bev = np.zeros((4, height, width), dtype=np.float32)
+    # print("Checkpoint 1", bev.nbytes / 1024**2, "MB")
     counts = np.zeros((height, width), dtype=np.int32)
+    # print("Checkpoint 2", counts.nbytes / 1024**2, "MB")
     
     # for class voting
     if labels is not None:  
         class_counts = np.zeros((height, width, num_classes), dtype=np.int32)
+        # print("Checkpoint 3", class_counts.nbytes / 1024**2, "MB")
+
 
     bev[1, :, :] = 1e6  # initialize min height
     
@@ -169,7 +177,9 @@ def _numba_aggregate(px, py, z, intensity, height, width, labels=None, num_class
 
 
 
-def bev_projection_numba(point_cloud, tile_size=10.0, resolution=0.5, include_class=False):
+def bev_projection_numba(point_cloud, tile_size=10.0, resolution=0.5, include_class=False,
+                         direct_single_saving=True, single_saving_path=None,
+                         sample_path=None):
     """
     Projects a 3D point cloud into Bird's Eye View (BEV) tiles using Numba for fast per-pixel aggregation.
 
@@ -241,22 +251,28 @@ def bev_projection_numba(point_cloud, tile_size=10.0, resolution=0.5, include_cl
         tiles: list of 3xHxW numpy arrays representing BEV grids
         meta: list of dictionaries containing metadata for each tile
     """
+    if direct_single_saving and single_saving_path is None:
+        raise ValueError("If using 'direct_single_saving', 'single_saving_path' must have an string value and can't be None.")
+
     # extract points and intensity
-    if hasattr(point_cloud, "get_as_o3d"):
+    # if hasattr(point_cloud, "get_as_o3d"):
+    if isinstance(point_cloud, PointCloudTensor):
         point_cloud = point_cloud.get_as_o3d()
     
     points  = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
     intensities = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
 
     if include_class:
-        labels = point_cloud.point[get_class_attribute(point_cloud)].numpy().astype(np.int32)
+        labels = point_cloud.point[get_class_attribute(point_cloud)].numpy().astype(np.int32).reshape(-1)
 
-        # unique_classes = np.unique(labels)
-        # class_map = {c: i for i, c in enumerate(unique_classes)}
+        # num_classes = int(labels.max()) + 1
+        # print("Num_classes:", str(num_classes))
 
-        # labels_remapped = np.array([class_map[c] for c in labels], dtype=np.int32)
-        # num_classes = len(unique_classes)
-        num_classes = int(labels.max()) + 1
+        unique_classes = np.unique(labels)
+        class_map = {c: i for i, c in enumerate(unique_classes)}
+        labels = np.array([class_map[c] for c in labels], dtype=np.int32)
+        num_classes = len(unique_classes)
+        # print("Num_classes:", str(num_classes))
     else:
         labels = None
         num_classes = 0
@@ -265,8 +281,12 @@ def bev_projection_numba(point_cloud, tile_size=10.0, resolution=0.5, include_cl
     x_min, x_max = x.min(), x.max()
     y_min, y_max = y.min(), y.max()
     
-    tiles = []
-    meta = []
+    if not direct_single_saving:
+        tiles = []
+        meta = []
+    if sample_path:
+        sample_tiles = []
+        sample_saving_completed = False
     tile_id = 0
     
     # iterate over tiles
@@ -302,6 +322,10 @@ def bev_projection_numba(point_cloud, tile_size=10.0, resolution=0.5, include_cl
                 x_ = points_x[local_idx]
                 y_ = points_y[local_idx]
                 pixel_to_points[y_][x_].append(local_idx)
+
+            # process = psutil.Process(os.getpid())
+            # mem_mb = process.memory_info().rss / 1024**2
+            # print(f"RAM usage: {mem_mb:.2f} MB")
             
             # aggregate using Numba
             bev = _numba_aggregate(points_x, points_y, points_tile[:, 2], intensities_tile, height, width, labels_tile, num_classes)
@@ -312,156 +336,185 @@ def bev_projection_numba(point_cloud, tile_size=10.0, resolution=0.5, include_cl
             # FIXME maybe add also other informations -> max intrensity for metal?
             bev[0] /= z.max()
             bev[2] /= intensities.max()
+
+            # class/label back mapping
+            if include_class:
+                inverse_class_map = {new_: origin for origin, new_ in class_map.items()}
+                inverse_array = np.array([inverse_class_map[i] for i in range(len(inverse_class_map))])
+                bev[3] = inverse_array[bev[3].astype(np.int32)]
+                # here we use the class channel as indexing for the indexing array
+                # position in this indexing array = new_mapping
+                # value = original value
+                # works, because the new mapping is from 0-n in a linear order
+
+
+            cur_meta = {
+                    "tile_id": tile_id,
+                    "cur_x": cur_x,
+                    "cur_y": cur_y,
+                    "global_indices": idxs,
+                    "pixel_to_points": pixel_to_points,
+                    # "tile_points_local": points_tile  # can causes memory error during saving
+                }
             
-            tiles.append(bev)
-            meta.append({
-                "tile_id": tile_id,
-                "cur_x": cur_x,
-                "cur_y": cur_y,
-                "global_indices": idxs,
-                "pixel_to_points": pixel_to_points,
-                # "tile_points_local": points_tile  # can causes memory error during saving
-            })
+            if sample_path is not None and len(sample_tiles) == 5 and not sample_saving_completed:
+                save_bev_tiles_as_images(sample_tiles, folder=sample_path)
+                sample_saving_completed = True
             
-            tile_id += 1
-    
-    return tiles, meta
-
-
-
-def bev_projection_numba_and_open3d(point_cloud, tile_size=10.0, resolution=0.5, include_class=False, camera_height=30.0):
-    """
-    Open3D-based BEV projection using rendering.Camera (orthographic),
-    producing identical outputs to the numba version but with
-    camera-consistent geometry.
-
-    NOT TESTED
-    """
-    # extract points and intensity
-    if hasattr(point_cloud, "get_as_o3d"):
-        point_cloud = point_cloud.get_as_o3d()
-    
-    points  = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
-    intensities = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
-
-    if include_class:
-        labels = point_cloud.point[get_class_attribute(point_cloud)].numpy().astype(np.int32)
-
-        # unique_classes = np.unique(labels)
-        # class_map = {c: i for i, c in enumerate(unique_classes)}
-
-        # labels_remapped = np.array([class_map[c] for c in labels], dtype=np.int32)
-        # num_classes = len(unique_classes)
-        num_classes = int(labels.max()) + 1
-    else:
-        labels = None
-        num_classes = 0
-    
-    x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    x_min, x_max = x.min(), x.max()
-    y_min, y_max = y.min(), y.max()
-    
-    tiles = []
-    meta = []
-    tile_id = 0
-    
-    # iterate over tiles
-    for cur_x in np.arange(x_min, x_max, tile_size):
-        for cur_y in np.arange(y_min, y_max, tile_size):
-            # select points inside this tile
-            mask = (
-                (x >= cur_x) & (x < cur_x + tile_size) &
-                (y >= cur_y) & (y < cur_y + tile_size)
-            )
-            idxs = np.where(mask)[0]
-            if len(idxs) == 0:
-                continue
+            if sample_path is not None and not sample_saving_completed:
+                sample_tiles.append(bev)
             
-            points_tile = points[idxs]
-            intensities_tile = intensities[idxs]
-
-            if labels is not None:
-                labels_tile = labels[idxs]
+            if direct_single_saving:
+                save_single_bev_tile_as_pickle(tile=bev, 
+                                               meta=cur_meta, 
+                                               tile_id=tile_id, 
+                                               path=single_saving_path)
             else:
-                labels_tile = None
-            
-            # setup cam
-            cam = o3d.visualization.rendering.Camera()
-            cam.set_projection(
-                o3d.visualization.rendering.Camera.Projection.Ortho,
-                left=cur_x,
-                right=cur_x + tile_size,
-                bottom=cur_y,
-                top=cur_y + tile_size,
-                near=0.0,
-                far=camera_height * 2.0
-            )
-            cam.look_at(
-                center=[
-                    cur_x + tile_size / 2.0,
-                    cur_y + tile_size / 2.0,
-                    0.0
-                ],
-                eye=[
-                    cur_x + tile_size / 2.0,
-                    cur_y + tile_size / 2.0,
-                    camera_height
-                ],
-                up=[0, 1, 0]
-            )
-
-            P = cam.get_projection_matrix()
-            V = cam.get_view_matrix()
-            PV = P @ V
-
-            # forward projection
-            N = points_tile.shape[0]
-            points_h = np.hstack(points_tile, np.ones((N, 1)))
-            clip = (PV @ points_h.T).T
-            ndc = clip[:, :3] / clip[:, 3:4]
-
-            H = W = int(tile_size / resolution)
-            
-            px = ((ndc[:, 0] + 1) * 0.5 * W).astype(np.int32)
-            py = ((1 - (ndc[:, 1] + 1) * 0.5) * H).astype(np.int32)
-
-            valid = (px >= 0) & (px < W) & (py >= 0) & (py < H)
-
-            px = px[valid]
-            py = py[valid]
-
-            z_tile = points_tile[valid, 2]
-            intens_tile = intens_tile[valid]
-
-            if labels_tile is not None:
-                labels_tile = labels_tile[valid]
-
-            # pixel to points (local indices)
-            #  -> for remapping
-            pixel_to_points = [[[] for _ in range(W)] for _ in range(H)]
-            for i in range(len(px)):
-                pixel_to_points[py[i]][px[i]].append(i)
-
-            # aggregate using Numba
-            bev = _numba_aggregate(px, py, z_tile, intensities_tile, H, W, labels_tile, num_classes)
-            
-            # normalize
-            bev[0] /= z.max()
-            bev[2] /= intensities.max()
-            
-            tiles.append(bev)
-            meta.append({
-                "tile_id": tile_id,
-                "cur_x": cur_x,
-                "cur_y": cur_y,
-                "global_indices": idxs,
-                "pixel_to_points": pixel_to_points,
-                "tile_points_local": points_tile[valid]
-            })
+                tiles.append(bev)
+                meta.append(cur_meta)
             
             tile_id += 1
     
-    return tiles, meta
+    if direct_single_saving:
+        return None
+    else:
+        return tiles, meta
+
+
+
+# def bev_projection_numba_and_open3d(point_cloud, tile_size=10.0, resolution=0.5, include_class=False, camera_height=30.0):
+#     """
+#     Open3D-based BEV projection using rendering.Camera (orthographic),
+#     producing identical outputs to the numba version but with
+#     camera-consistent geometry.
+
+#     NOT TESTED
+#     """
+#     # extract points and intensity
+#     if hasattr(point_cloud, "get_as_o3d"):
+#         point_cloud = point_cloud.get_as_o3d()
+    
+#     points  = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
+#     intensities = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
+
+#     if include_class:
+#         labels = point_cloud.point[get_class_attribute(point_cloud)].numpy().astype(np.int32)
+
+#         # unique_classes = np.unique(labels)
+#         # class_map = {c: i for i, c in enumerate(unique_classes)}
+
+#         # labels_remapped = np.array([class_map[c] for c in labels], dtype=np.int32)
+#         # num_classes = len(unique_classes)
+#         num_classes = int(labels.max()) + 1
+#     else:
+#         labels = None
+#         num_classes = 0
+    
+#     x, y, z = points[:, 0], points[:, 1], points[:, 2]
+#     x_min, x_max = x.min(), x.max()
+#     y_min, y_max = y.min(), y.max()
+    
+#     tiles = []
+#     meta = []
+#     tile_id = 0
+    
+#     # iterate over tiles
+#     for cur_x in np.arange(x_min, x_max, tile_size):
+#         for cur_y in np.arange(y_min, y_max, tile_size):
+#             # select points inside this tile
+#             mask = (
+#                 (x >= cur_x) & (x < cur_x + tile_size) &
+#                 (y >= cur_y) & (y < cur_y + tile_size)
+#             )
+#             idxs = np.where(mask)[0]
+#             if len(idxs) == 0:
+#                 continue
+            
+#             points_tile = points[idxs]
+#             intensities_tile = intensities[idxs]
+
+#             if labels is not None:
+#                 labels_tile = labels[idxs]
+#             else:
+#                 labels_tile = None
+            
+#             # setup cam
+#             cam = o3d.visualization.rendering.Camera()
+#             cam.set_projection(
+#                 o3d.visualization.rendering.Camera.Projection.Ortho,
+#                 left=cur_x,
+#                 right=cur_x + tile_size,
+#                 bottom=cur_y,
+#                 top=cur_y + tile_size,
+#                 near=0.0,
+#                 far=camera_height * 2.0
+#             )
+#             cam.look_at(
+#                 center=[
+#                     cur_x + tile_size / 2.0,
+#                     cur_y + tile_size / 2.0,
+#                     0.0
+#                 ],
+#                 eye=[
+#                     cur_x + tile_size / 2.0,
+#                     cur_y + tile_size / 2.0,
+#                     camera_height
+#                 ],
+#                 up=[0, 1, 0]
+#             )
+
+#             P = cam.get_projection_matrix()
+#             V = cam.get_view_matrix()
+#             PV = P @ V
+
+#             # forward projection
+#             N = points_tile.shape[0]
+#             points_h = np.hstack(points_tile, np.ones((N, 1)))
+#             clip = (PV @ points_h.T).T
+#             ndc = clip[:, :3] / clip[:, 3:4]
+
+#             H = W = int(tile_size / resolution)
+            
+#             px = ((ndc[:, 0] + 1) * 0.5 * W).astype(np.int32)
+#             py = ((1 - (ndc[:, 1] + 1) * 0.5) * H).astype(np.int32)
+
+#             valid = (px >= 0) & (px < W) & (py >= 0) & (py < H)
+
+#             px = px[valid]
+#             py = py[valid]
+
+#             z_tile = points_tile[valid, 2]
+#             intens_tile = intens_tile[valid]
+
+#             if labels_tile is not None:
+#                 labels_tile = labels_tile[valid]
+
+#             # pixel to points (local indices)
+#             #  -> for remapping
+#             pixel_to_points = [[[] for _ in range(W)] for _ in range(H)]
+#             for i in range(len(px)):
+#                 pixel_to_points[py[i]][px[i]].append(i)
+
+#             # aggregate using Numba
+#             bev = _numba_aggregate(px, py, z_tile, intensities_tile, H, W, labels_tile, num_classes)
+            
+#             # normalize
+#             bev[0] /= z.max()
+#             bev[2] /= intensities.max()
+            
+#             tiles.append(bev)
+#             meta.append({
+#                 "tile_id": tile_id,
+#                 "cur_x": cur_x,
+#                 "cur_y": cur_y,
+#                 "global_indices": idxs,
+#                 "pixel_to_points": pixel_to_points,
+#                 "tile_points_local": points_tile[valid]
+#             })
+            
+#             tile_id += 1
+    
+#     return tiles, meta
 
 
 
@@ -612,6 +665,17 @@ def bev_back_projection_testing(point_cloud, bev_gen, bev_amount=None):    # bev
         print(f"    -> absolute error sum: {intensity_difference}")
         print(f"Correct classes: {correct_class} ({(correct_class/non_empty_pixels)*100:.2f}%)")
         print(f"Correct empty pixels: {empty_pixels_correct} ({(empty_pixels_correct/total_empty_pixels)*100:.2f}%)") 
+
+
+
+
+
+
+
+
+
+
+
 
 
 
