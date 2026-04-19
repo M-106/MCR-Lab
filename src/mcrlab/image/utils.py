@@ -3,6 +3,7 @@
 # -----------
 import numpy as np
 from PIL import Image
+import matplotlib.cm as cm
 
 
 
@@ -37,7 +38,7 @@ def normalize_img_per_channel(img: np.ndarray, skip_already_normalized_channels=
         min_, max_ = channel.min(), channel.max()
 
         if max_ > min_:
-            if max_ > 1.0:  # only normalize if the channel is not already normalized
+            if max_ > 1.0 and not skip_already_normalized_channels:  # only normalize if the channel is not already normalized
                 img_norm[:, :, c_idx] = (channel - min_) / (max_ - min_)
             else:
                 img_norm[:, :, c_idx] = channel
@@ -66,6 +67,25 @@ def one_channel_img_to_pil_rgb_img(image_input, return_numpy=False):
         return image
 
 
+
+def apply_colormap(channel, cmap_name="viridis"):
+    channel = channel.astype(np.float32)
+
+    # normalisieren auf [0,1]
+    channel -= channel.min()
+    if channel.max() > 0:
+        channel /= channel.max()
+
+    cmap = cm.get_cmap(cmap_name)
+    colored = cmap(channel)  # -> RGBA (H, W, 4)
+
+    colored = (colored[:, :, :3] * 255).astype(np.uint8)  # .astype(np.uint8)  # RGB
+
+    # print(f"  - Dtype: {colored.dtype}")
+    # print(f"  - Shape: {colored.shape}")
+    # print(f"  - Min/Max: ({colored.min()}, {colored.max()})")
+
+    return colored
 
 
 

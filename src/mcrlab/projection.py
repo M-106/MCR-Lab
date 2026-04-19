@@ -177,9 +177,10 @@ def _numba_aggregate(px, py, z, intensity, height, width, labels=None, num_class
 
 
 
-def bev_projection_numba(point_cloud, tile_size=10.0, resolution=0.5, include_class=False,
-                         direct_single_saving=True, single_saving_path=None,
-                         sample_path=None):
+def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.5,
+                   include_class=False,
+                   direct_single_saving=True, single_saving_path=None,
+                   sample_path=None):
     """
     Projects a 3D point cloud into Bird's Eye View (BEV) tiles using Numba for fast per-pixel aggregation.
 
@@ -288,10 +289,16 @@ def bev_projection_numba(point_cloud, tile_size=10.0, resolution=0.5, include_cl
         sample_tiles = []
         sample_saving_completed = False
     tile_id = 0
+
+    # calc step-size
+    #    normally just tile_size, but
+    #    if you want to get overlapped tiles 
+    #    then the stepsize must be smaller
+    stride = tile_size - overlap
     
     # iterate over tiles
-    for cur_x in np.arange(x_min, x_max, tile_size):
-        for cur_y in np.arange(y_min, y_max, tile_size):
+    for cur_x in np.arange(x_min, x_max, stride):
+        for cur_y in np.arange(y_min, y_max, stride):
             # select points inside this tile
             mask = (
                 (x >= cur_x) & (x < cur_x + tile_size) &

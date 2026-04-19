@@ -17,7 +17,7 @@ from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_ba
                                     bev_gen_wrapper, extract_tiles_metas
 from mcrlab.point_cloud.inspect import print_pc, visualize
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
-from mcrlab.projection import bev_projection_numba, bev_back_projection, bev_back_projection_testing
+from mcrlab.projection import bev_projection, bev_back_projection, bev_back_projection_testing
 from mcrlab.image.utils import normalize_img_per_channel
 from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
@@ -79,7 +79,8 @@ def bev_trying(config):
 
         if point_cloud.bev_data is None:
             print("Starting BEV projection...")
-            tiles, metas = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05, overlap=0.0,
+                                          include_class=False, direct_single_saving=False)  #  tile_size=100.0/50.0, resolution=0.2/0.1
             # bev_gen = bev_gen_wrapper(tiles, metas)
         else:
             bev_gen = point_cloud.get_bev()
@@ -148,7 +149,8 @@ def bev_segmentation_trying(config):
 
         if point_cloud.bev_data is None:
             print("Starting BEV projection...")
-            tiles, metas = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05, overlap=0.0,
+                                          include_class=False, direct_single_saving=False)  #  tile_size=100.0/50.0, resolution=0.2/0.1
             # bev_gen = bev_gen_wrapper(tiles, metas)
         else:
             bev_gen = point_cloud.get_bev()
@@ -208,7 +210,8 @@ def bev_working_testing(config):
 
         print("Starting BEV projection...")
         # tiles, meta = bev_projection_numba_and_open3d(point_cloud, tile_size=35.0, resolution=0.05, include_class=True)
-        tiles, metas = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05, include_class=True)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+        tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05, overlap=0.0,
+                                          include_class=True, direct_single_saving=False)  #  tile_size=100.0/50.0, resolution=0.2/0.1
         bev_gen = bev_gen_wrapper(tiles, metas)
         
         # if point_cloud.bevs is None:
@@ -244,7 +247,7 @@ def bev_preprocessed_loading_working_testing(config):
         if point_cloud.bev_data is None:
             raise ValueError("Preprocessed BEVs did not loaded.")
             print("Starting BEV projection...")
-            tiles, metas = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
         else:
             print("Loaded Bevs from file...")
             bev_gen = point_cloud.get_bev()
@@ -288,9 +291,9 @@ def train_testing(config):
 # > Playground <
 # --------------
 def tryout(config):
-    simple_viusalize_point_cloud(config)
+    # simple_viusalize_point_cloud(config)
     # torch_tensor_loading(config)
-    # bev_trying(config)
+    bev_trying(config)
     # bev_segmentation_trying(config)
     # bev_working_testing(config)
     # bev_preprocessed_loading_working_testing(config)

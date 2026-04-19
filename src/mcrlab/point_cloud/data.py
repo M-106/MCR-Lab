@@ -22,7 +22,7 @@ from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_wi
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.semantic_kitti_utils import load_semantic_kitti_as_o3d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
-from mcrlab.projection import bev_projection_numba
+from mcrlab.projection import bev_projection
 from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle, \
                             load_single_bev_tile_as_pickle
 from mcrlab.image.utils import normalize_img_per_channel
@@ -484,7 +484,7 @@ def point_cloud_tensor_to_image_dataset(point_cloud):
         "labels": tensor(H, W)  # class ids per pixel
     }
     """
-    tiles, meta = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)
+    tiles, meta = bev_projection(point_cloud, tile_size=35.0, resolution=0.05, overlap=0.5)
 
     items = []
     for cur_tile in tiles:
@@ -1003,7 +1003,7 @@ def get_whu_data_loader(path, testdata=False, transform=None,
 
 
 def preprocess_data(data_name, path, testdata=False, device="cpu",
-                    bev_tile_size=15.0, bev_resolution=0.01):
+                    bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5):
     print("--- Data Preprocessing ---")
     data_loader = get_data_loader(data_name, path, testdata=testdata, transform=get_preprocessing_transform(grid_size=bev_resolution),
                                   batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
@@ -1049,9 +1049,10 @@ def preprocess_data(data_name, path, testdata=False, device="cpu",
         # save BEVs
         print("Generating BEV images...")
         bev_file_path = os.path.join(cur_root_path, "preprocessed_bev_"+cur_file_name +".pkl")  # ".pkl"
-        bev_projection_numba(batch[0], tile_size=bev_tile_size, resolution=bev_resolution, include_class=True,
-                             direct_single_saving=True, single_saving_path=bev_file_path,
-                             sample_path=f"./bev_samples/{data_name}/")
+        bev_projection(batch[0], tile_size=bev_tile_size, resolution=bev_resolution, overlap=bev_overlap,
+                       include_class=True,
+                       direct_single_saving=True, single_saving_path=bev_file_path,
+                       sample_path=f"./bev_samples/{data_name}_{idx}/")
         # save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
         # save_bev_tiles_as_pt(tiles, meta, bev_file_path)
         print(f"Saving BEVs to '{bev_file_path}'\n  Found: {os.path.isfile(bev_file_path)}")

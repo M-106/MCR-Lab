@@ -9,7 +9,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import torch
 
-from mcrlab.image.utils import normalize_img_per_channel
+from mcrlab.image.utils import normalize_img_per_channel, apply_colormap
 
 
 
@@ -23,25 +23,50 @@ def save_bev_tiles_as_images(tiles, folder="./bev_images"):
 
 
     for i, bev in enumerate(tiles):
+    #     print(f"\nSample Saving look inside (before normalizing):")
+    #     print(f"  - Dtype: {bev.dtype}")
+    #     print(f"  - Shape: {bev.shape}")
+    #     print(f"  - Min/Max: ({bev.min()}, {bev.max()})")
+    #     for channel in range(bev.shape[0]):
+    #         print(f"      - Channel {channel} -> Min/Max: ({bev[channel, :, :].min()}, {bev[channel, :, :].max()}")
+
+
         # Normalize value range
         # bev_img = normalize_img(bev)
-        bev_img = normalize_img_per_channel(bev, skip_already_normalized_channels=True)
+        bev_img = np.transpose(bev, (1, 2, 0))  # [C, H, W] -> [H, W, C]
+        bev_img = normalize_img_per_channel(bev_img, skip_already_normalized_channels=True)
 
+        # upscale
         bev_img *= 255
 
-        bev_img = np.transpose(bev_img, (1, 2, 0))  # H, W, C
+        # type conversion for PIL image
+        # bev_img = bev_img.clip(0, 255).astype(np.uint8)
+
+
+        # print(f"\n  After processing:")
+        # print(f"  - Dtype: {bev_img.dtype}")
+        # print(f"  - Shape: {bev_img.shape}")
+        # print(f"  - Min/Max: ({bev_img.min()}, {bev_img.max()})")
+        # for channel in range(bev_img.shape[-1]):
+        #     print(f"      - Channel {channel} -> Min/Max: ({bev_img[:, :, channel].min()}, {bev_img[:, :, channel].max()}")
+
+        # print("Debug View End\n")
 
         # Convert to PIL image
-        img = Image.fromarray(bev_img)
+        img = Image.fromarray(bev_img[:3])
         img.save(os.path.join(folder, f"tile_{i:03d}_all_channels.png"))
-        Image.fromarray(bev_img[:, :, 0]).save(os.path.join(folder, f"tile_{i:03d}_max_height_channel.png"))
-        Image.fromarray(bev_img[:, :, 1]).save(os.path.join(folder, f"tile_{i:03d}_min_height_channel.png"))
-        Image.fromarray(bev_img[:, :, 2]).save(os.path.join(folder, f"tile_{i:03d}_intensity_channel.png"))
+        Image.fromarray(apply_colormap(bev_img[:, :, 0], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_max_height_channel.png"))
+        Image.fromarray(apply_colormap(bev_img[:, :, 1], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_min_height_channel.png"))
+        Image.fromarray(apply_colormap(bev_img[:, :, 2], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_intensity_channel.png"))
+
+        if bev_img.shape[-1] > 3:
+            Image.fromarray(apply_colormap(bev_img[:, :, 3], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_label_channel.png"))
 
         # plt.imshow(bev_img[:, :, 2], cmap="nipy_spectral")  #"gnuplot2", "nipy_spectral", "gist_rainbow", "rainbow"
         # plt.savefig(os.path.join(folder, f"tile_{i:03d}_intensity_channel_v2.png"))
         # plt.clf()
 
+    print(f"Samples saved in '{folder}'")
     # print(f"Saved {len(tiles)} BEV images to '{folder}'")
 
 

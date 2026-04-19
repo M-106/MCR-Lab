@@ -48,7 +48,7 @@ def main():
         preprocess_data(config.data.name, config.data.path, 
                         testdata=False,
                         device="cpu",
-                        bev_tile_size=15.0, bev_resolution=0.01)  # bev_tile_size=35.0, bev_resolution=0.05)
+                        bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5)  # bev_tile_size=35.0, bev_resolution=0.05)
         
     elif config.mode == "tryout":
         from mcrlab.execution.tryout import tryout
