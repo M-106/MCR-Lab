@@ -9,7 +9,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import torch
 
-from mcrlab.image.utils import normalize_img_per_channel, apply_colormap
+from mcrlab.image.utils import normalize_img_per_channel, apply_colormap, random_colorize
 
 
 
@@ -34,10 +34,10 @@ def save_bev_tiles_as_images(tiles, folder="./bev_images"):
         # Normalize value range
         # bev_img = normalize_img(bev)
         bev_img = np.transpose(bev, (1, 2, 0))  # [C, H, W] -> [H, W, C]
-        bev_img = normalize_img_per_channel(bev_img, skip_already_normalized_channels=True)
+        bev_img_3 = normalize_img_per_channel(bev_img[:, :, :3], skip_already_normalized_channels=True)
 
         # upscale
-        bev_img *= 255
+        bev_img_3 *= 255
 
         # type conversion for PIL image
         # bev_img = bev_img.clip(0, 255).astype(np.uint8)
@@ -53,14 +53,17 @@ def save_bev_tiles_as_images(tiles, folder="./bev_images"):
         # print("Debug View End\n")
 
         # Convert to PIL image
-        img = Image.fromarray(bev_img[:3])
+        img = Image.fromarray(bev_img_3)
         img.save(os.path.join(folder, f"tile_{i:03d}_all_channels.png"))
-        Image.fromarray(apply_colormap(bev_img[:, :, 0], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_max_height_channel.png"))
-        Image.fromarray(apply_colormap(bev_img[:, :, 1], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_min_height_channel.png"))
-        Image.fromarray(apply_colormap(bev_img[:, :, 2], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_intensity_channel.png"))
+        Image.fromarray(apply_colormap(bev_img_3[:, :, 0], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_max_height_channel_nipy.png"))
+        Image.fromarray(apply_colormap(bev_img_3[:, :, 1], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_min_height_channel_nipy.png"))
+        Image.fromarray(apply_colormap(bev_img_3[:, :, 2], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_intensity_channel_nipy.png"))
+        Image.fromarray(apply_colormap(bev_img_3[:, :, 0], cmap_name="viridis")).save(os.path.join(folder, f"tile_{i:03d}_max_height_channel_viridis.png"))
+        Image.fromarray(apply_colormap(bev_img_3[:, :, 1], cmap_name="viridis")).save(os.path.join(folder, f"tile_{i:03d}_min_height_channel_viridis.png"))
+        Image.fromarray(apply_colormap(bev_img_3[:, :, 2], cmap_name="viridis")).save(os.path.join(folder, f"tile_{i:03d}_intensity_channel_viridis.png"))
 
         if bev_img.shape[-1] > 3:
-            Image.fromarray(apply_colormap(bev_img[:, :, 3], cmap_name="nipy_spectral")).save(os.path.join(folder, f"tile_{i:03d}_label_channel.png"))
+            Image.fromarray(random_colorize(bev_img[:, :, 3])).save(os.path.join(folder, f"tile_{i:03d}_label_channel.png"))
 
         # plt.imshow(bev_img[:, :, 2], cmap="nipy_spectral")  #"gnuplot2", "nipy_spectral", "gist_rainbow", "rainbow"
         # plt.savefig(os.path.join(folder, f"tile_{i:03d}_intensity_channel_v2.png"))

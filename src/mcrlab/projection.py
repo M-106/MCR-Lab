@@ -177,7 +177,7 @@ def _numba_aggregate(px, py, z, intensity, height, width, labels=None, num_class
 
 
 
-def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.5,
+def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
                    include_class=False,
                    direct_single_saving=True, single_saving_path=None,
                    sample_path=None):
@@ -285,9 +285,7 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.5,
     if not direct_single_saving:
         tiles = []
         meta = []
-    if sample_path:
-        sample_tiles = []
-        sample_saving_completed = False
+
     tile_id = 0
 
     # calc step-size
@@ -295,10 +293,22 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.5,
     #    if you want to get overlapped tiles 
     #    then the stepsize must be smaller
     stride = tile_size - overlap
+
+    if sample_path:
+        max_sample_amount = 5
+        sample_tiles = []
+        sample_saving_completed = False
+        nx = int(np.ceil((x_max - x_min) / stride))
+        ny = int(np.ceil((y_max - y_min) / stride))
+        max_steps = nx * ny
+        start_step = np.random.randint(0, max(0, max_steps - max_sample_amount)+1)
     
     # iterate over tiles
+    cur_step = -1
     for cur_x in np.arange(x_min, x_max, stride):
         for cur_y in np.arange(y_min, y_max, stride):
+            cur_step += 1
+
             # select points inside this tile
             mask = (
                 (x >= cur_x) & (x < cur_x + tile_size) &
@@ -364,11 +374,11 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.5,
                     # "tile_points_local": points_tile  # can causes memory error during saving
                 }
             
-            if sample_path is not None and len(sample_tiles) == 5 and not sample_saving_completed:
+            if sample_path is not None and len(sample_tiles) == max_sample_amount and not sample_saving_completed:
                 save_bev_tiles_as_images(sample_tiles, folder=sample_path)
                 sample_saving_completed = True
             
-            if sample_path is not None and not sample_saving_completed:
+            if sample_path is not None and not sample_saving_completed and cur_step >= start_step:
                 sample_tiles.append(bev)
             
             if direct_single_saving:

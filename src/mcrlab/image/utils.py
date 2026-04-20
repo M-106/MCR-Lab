@@ -89,6 +89,36 @@ def apply_colormap(channel, cmap_name="viridis"):
 
 
 
+def random_colorize(arr, seed=0):
+    """
+    Converts a 2D array (H, W) with discrete values (e.g. labels)
+    into a colored RGB image (H, W, 3).
+
+    Each unique value in the array is assigned a random color.
+    """
+    # Find all unique values in the array (e.g. labels)
+    # and create an "inverse" mapping:
+    # - unique_vals: sorted list of unique values
+    # - inverse: for each pixel, the index of its value in unique_vals
+    unique_vals, inverse = np.unique(arr, return_inverse=True)
+
+    # Create a random number generator with a fixed seed
+    # so colors are reproducible across runs
+    rng = np.random.default_rng(seed)
+
+    # Generate a random RGB color for each unique value
+    # shape: (number of unique values, 3)
+    colors = rng.integers(0, 256, size=(len(unique_vals), 3), dtype=np.uint8)
+
+    # Map each pixel to its corresponding RGB color:
+    # - inverse contains, for each pixel, the index into unique_vals
+    # - colors[inverse] maps that index to an RGB color
+    # Then reshape back to image format (H, W, 3)
+    colored = colors[inverse].reshape(arr.shape[0], arr.shape[1], 3)
+
+    # Return the colored RGB image
+    return colored
+
 
 
 

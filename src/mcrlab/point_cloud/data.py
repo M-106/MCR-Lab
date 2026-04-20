@@ -1012,6 +1012,13 @@ def preprocess_data(data_name, path, testdata=False, device="cpu",
     # to_device = ToDevice(device)
     dataset = data_loader.dataset
 
+    # reset sample folders
+    sample_root_path = f"./bev_samples"
+    for dir in os.listdir(sample_root_path):
+        dir_path = os.path.join(sample_root_path, dir)
+        if os.path.isdir(dir_path) and dir.startswith(f"{data_name}_"):
+            shutil.rmtree(dir_path)
+
     print("Start Preprocessing your dataset...")
 
     preprocessed_path_cleaned = False
@@ -1052,7 +1059,7 @@ def preprocess_data(data_name, path, testdata=False, device="cpu",
         bev_projection(batch[0], tile_size=bev_tile_size, resolution=bev_resolution, overlap=bev_overlap,
                        include_class=True,
                        direct_single_saving=True, single_saving_path=bev_file_path,
-                       sample_path=f"./bev_samples/{data_name}_{idx}/")
+                       sample_path=os.path.join(sample_root_path, f"{data_name}_{idx}"))
         # save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
         # save_bev_tiles_as_pt(tiles, meta, bev_file_path)
         print(f"Saving BEVs to '{bev_file_path}'\n  Found: {os.path.isfile(bev_file_path)}")

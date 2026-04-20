@@ -230,6 +230,9 @@ def bev_working_testing(config):
 
 
 def bev_preprocessed_loading_working_testing(config):
+    if not config.data.preprocessed:
+        raise ValueError("'Preprocessing' must be True! (config.data.preprocessed)")
+
     # LOAD POINT CLOUD
     data_loader = get_data_loader(config.data.name, config.data.path, 
                                     testdata=False, 
@@ -293,10 +296,10 @@ def train_testing(config):
 def tryout(config):
     # simple_viusalize_point_cloud(config)
     # torch_tensor_loading(config)
-    bev_trying(config)
+    # bev_trying(config)
     # bev_segmentation_trying(config)
     # bev_working_testing(config)
-    # bev_preprocessed_loading_working_testing(config)
+    bev_preprocessed_loading_working_testing(config)
     # train_data_testing(config)
     # train_testing(config)
 

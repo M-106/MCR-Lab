@@ -26,7 +26,7 @@ data:
   path: "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"  
   # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d",
   # "D:/data/whu3d-dataset-wo-test-label"
-  preprocessed: False
+  preprocessed: True
 
 device: cpu  # cpu, cuda, cuda:0
 
