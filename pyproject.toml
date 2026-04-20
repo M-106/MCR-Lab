@@ -27,6 +27,7 @@ dependencies = [
     "numba",
     "python-dotenv",
     "scikit-learn",
+    "scikit-image",
     "ultralytics",
     "h5py",
     # "pywhu3d",
