@@ -9,7 +9,7 @@ import torch
 from mcrlab.point_cloud.utils import set_color
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_class_attribute, \
                                      get_intensity_attribute, get_color_attribute, \
-                                     get_normal_attribute
+                                     get_normal_attribute, get_instance_attribute
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
 
 
@@ -97,6 +97,10 @@ def print_metrics(point_cloud):
         labels_type = point_cloud.labels.dtype if point_cloud.labels is not None else None
         labels_shape = point_cloud.labels.shape if point_cloud.labels is not None else None
 
+        instances = point_cloud.instances if point_cloud.instances is not None else None
+        instances_type = point_cloud.instances.dtype if point_cloud.instances is not None else None
+        instances_shape = point_cloud.instances.shape if point_cloud.instances is not None else None
+
     #   or isinstance(point_cloud, o3d.cpu.pybind.t.geometry.PointCloud)
     elif isinstance(point_cloud, o3d.t.geometry.PointCloud):
         print("Type: Tensor-based (o3d.t)")
@@ -135,6 +139,16 @@ def print_metrics(point_cloud):
             labels = None
             labels_type = None
             labels_shape = None
+
+        instance_idx = get_instance_attribute(point_cloud)
+        if instance_idx:
+            instances = point_cloud.point[instance_idx].numpy()
+            instances_type = point_cloud.point[instance_idx].dtype
+            instances_shape = point_cloud.point[instance_idx].shape
+        else:
+            instances = None
+            instances_type = None
+            instances_shape = None
 
         print(point_cloud)
 
@@ -215,8 +229,37 @@ def print_metrics(point_cloud):
                 max_counter += 1
             else:
                 print(f"           ... ({int(len(unique)-max_counter)} other classes)")
+                
+                break
+
+    # Instance Labels
+    print(f" ◉ Instances (labels):  {str(instances is not None):6}")
+    if instances_type is not None:
+        print(f"       ⨀ type '{instances_type}'")
+    if instances_shape is not None:
+        print(f"       ⨀ shape '{instances_shape}'")
+
+    if instances is not None:
+        class_distribution = []
+        unique, counts = np.unique(instances, return_counts=True)
+        print("       ⨀ instance distribution:")
+        for cls, count in zip(unique, counts):
+            percentage = (count / num_points) * 100
+            class_distribution.append((cls, count, percentage))
+        # sort and print sorted
+        class_distribution.sort(key=lambda x: x[2], reverse=True)
+
+        max_counter = 0
+        for cls, count, percentage in class_distribution:
+            if max_counter <= 5:
+                print(f"           Instance {cls:<4}: {count:8} points ({percentage:5.2f}%)")
+                max_counter += 1
+            else:
+                print(f"           ... ({int(len(unique)-max_counter)} other instances)")
+                
                 break
     
+    # BEV Images
     if isinstance(point_cloud, PointCloudTensor):
         if point_cloud.bev_data is not None:
             # print(f" ◉ BEV Images:  {str(point_cloud.bev_amount):6}")

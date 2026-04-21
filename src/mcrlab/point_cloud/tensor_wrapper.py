@@ -126,13 +126,15 @@ def map_torch_device_to_o3d(device:str) -> str:
 class PointCloudTensor(object):
     def __init__(self, coordinates, colors=None, 
                  intensities=None, normals=None, 
-                 labels=None, is_torch_tensor=False,
+                 labels=None, instances=None, 
+                 is_torch_tensor=False,
                  bev_data=None, bev_file_name=None):
         self.coordinates = coordinates
         self.colors = colors
         self.intensities = intensities
         self.normals = normals
         self.labels = labels
+        self.instances = instances
 
         self.set_bev(bev_data, bev_file_name)
 
@@ -189,6 +191,7 @@ class PointCloudTensor(object):
         intensities_ = ensure_2_dims(numpy_to_torch_tensor(self.intensities, dtype=numpy_tensor_type_to_torch_type(self.intensities)))
         normals_ = ensure_2_dims(numpy_to_torch_tensor(self.normals, dtype=numpy_tensor_type_to_torch_type(self.normals)))
         labels_ = ensure_2_dims(numpy_to_torch_tensor(self.labels, dtype=numpy_tensor_type_to_torch_type(self.labels)))
+        instances_ = ensure_2_dims(numpy_to_torch_tensor(self.instances, dtype=numpy_tensor_type_to_torch_type(self.instances)))
 
         if as_copy:
             return PointCloudTensor(
@@ -197,6 +200,7 @@ class PointCloudTensor(object):
                 intensities=intensities_,
                 normals=normals_,
                 labels=labels_,
+                instances=instances_,
                 is_torch_tensor=True
             )
         else:
@@ -206,6 +210,7 @@ class PointCloudTensor(object):
             self.intensities = intensities_
             self.normals = normals_
             self.labels = labels_
+            self.instances = instances_
 
     def to_numpy(self, as_copy=False):
         coordinates_ = ensure_2_dims(torch_tensor_to_numpy(self.coordinates, dtype=torch_tensor_type_to_numpy_type(self.coordinates)))
@@ -213,6 +218,7 @@ class PointCloudTensor(object):
         intensities_ = ensure_2_dims(torch_tensor_to_numpy(self.intensities, dtype=torch_tensor_type_to_numpy_type(self.intensities)))
         normals_ = ensure_2_dims(torch_tensor_to_numpy(self.normals, dtype=torch_tensor_type_to_numpy_type(self.normals)))
         labels_ = ensure_2_dims(torch_tensor_to_numpy(self.labels, dtype=torch_tensor_type_to_numpy_type(self.labels)))
+        instances_ = ensure_2_dims(torch_tensor_to_numpy(self.instances, dtype=torch_tensor_type_to_numpy_type(self.instances)))
 
         if as_copy:
             return PointCloudTensor(
@@ -221,6 +227,7 @@ class PointCloudTensor(object):
                 intensities=intensities_,
                 normals=normals_,
                 labels=labels_,
+                instances=instances_,
                 is_torch_tensor=False
             )
         else:
@@ -230,6 +237,7 @@ class PointCloudTensor(object):
             self.intensities = intensities_
             self.normals = normals_
             self.labels = labels_
+            self.instances = instances_
 
     def to_device(self, device):
         """
@@ -258,6 +266,11 @@ class PointCloudTensor(object):
         else:
             moved_labels = None
 
+        if self.instances is not None:
+            moved_instances = self.instances.to(device)
+        else:
+            moved_instances = None
+
         if self.intensities is not None:
             moved_intensities = self.intensities.to(device)
         else:
@@ -276,6 +289,7 @@ class PointCloudTensor(object):
         return PointCloudTensor(
             coordinates=moved_coordinates,
             labels=moved_labels,
+            instances=moved_instances,
             intensities=moved_intensities,
             colors=moved_colors,
             normals=moved_normals,
@@ -285,7 +299,8 @@ class PointCloudTensor(object):
     def get_as_one_tensor(self, include_color=False, 
                             include_intensity=False,
                             include_normals=False,
-                            include_labels=False):
+                            include_labels=False,
+                            include_instances=False):
         if not self.is_torch_tensor:
             self.to_torch()
 
@@ -298,6 +313,8 @@ class PointCloudTensor(object):
             features.append(self.normals)
         if self.labels is not None and include_labels:
             features.append(self.labels)
+        if self.instances is not None and include_instances:
+            features.append(self.instances)
 
         return torch.cat(features, dim=1)
     
@@ -322,12 +339,16 @@ class PointCloudTensor(object):
         if tensor_pc.labels is not None:
             o3d_pc.point["labels"] = o3d.core.Tensor(tensor_pc.labels, dtype=o3d.core.int32)
 
+        if tensor_pc.instances is not None:
+            o3d_pc.point["instances"] = o3d.core.Tensor(tensor_pc.instances, dtype=o3d.core.int32)
+
         return o3d_pc
 
     def get_as_torch_geo_data(self, include_color=False, 
                         include_intensity=False,
                         include_normals=False,
                         include_labels=False):
+                        #include_instances=False):
         if not self.is_torch_tensor:
             self.to_torch()
 

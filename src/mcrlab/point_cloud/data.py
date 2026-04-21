@@ -18,7 +18,7 @@ from tqdm import tqdm
 from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_with_RANSAC, \
                                      get_coordinate_attribute, get_class_attribute, \
                                      get_intensity_attribute, get_color_attribute, \
-                                     get_normal_attribute
+                                     get_normal_attribute, get_instance_attribute
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.semantic_kitti_utils import load_semantic_kitti_as_o3d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
@@ -423,6 +423,8 @@ class ToPointCloudTensorTransform:
 
         data.labels = extract_labels_as_tensor(point_cloud)
 
+        data.instances = extract_instances_as_tensor(point_cloud)
+
         # sample or pad points to fixed size
         if self.num_points > 0:
             cur_number_of_points = data.coordinates.shape[0]
@@ -451,6 +453,8 @@ class ToPointCloudTensorTransform:
                 data.normals = data.normals[idxs]
             if data.labels is not None:
                 data.labels = data.labels[idxs]
+            if data.instances is not None:
+                data.instances = data.instances[idxs]
 
         # to torch tensor
         data.to_torch()
@@ -505,6 +509,18 @@ def point_cloud_tensor_to_image_dataset(point_cloud):
 
 def extract_labels_as_tensor(point_cloud):
     label_idx = get_class_attribute(point_cloud)
+    
+    if label_idx:
+        labels = torch.tensor(point_cloud.point[label_idx].numpy())
+    else:
+        labels = None
+
+    return labels
+
+
+
+def extract_instances_as_tensor(point_cloud):
+    label_idx = get_instance_attribute(point_cloud)
     
     if label_idx:
         labels = torch.tensor(point_cloud.point[label_idx].numpy())

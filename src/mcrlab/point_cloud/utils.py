@@ -46,6 +46,18 @@ def get_class_attribute(point_cloud):
 
 
 
+def get_instance_attribute(point_cloud):
+    if "instance" in point_cloud.point:
+        instance_idx = "instance"
+    elif "instances" in point_cloud.point:
+        instance_idx = "instances"
+    else:
+        instance_idx = None
+
+    return instance_idx
+
+
+
 def get_intensity_attribute(point_cloud):
     if "intensity" in point_cloud.point:
         intensity_idx = "intensity"
@@ -195,6 +207,30 @@ def get_color_from_class(point_cloud):
 
 
 
+def get_color_from_instance(point_cloud):
+    label_idx = get_instance_attribute(point_cloud)
+    if label_idx is None:
+        return None
+
+    labels = point_cloud.point[label_idx].numpy().reshape(-1)
+
+    unique_labels = np.unique(labels)
+
+    np.random.seed(42)
+    color_map = {
+        label: np.random.rand(3).astype(np.float32)
+        for label in unique_labels
+    }
+
+    colors = np.zeros((labels.shape[0], 3), dtype=np.float32)
+
+    for label, color in color_map.items():
+        colors[labels == label] = color
+
+    return colors
+
+
+
 def set_color(point_cloud, mode):
     if mode == "height":
         colors = get_color_from_height(point_cloud)
@@ -202,6 +238,8 @@ def set_color(point_cloud, mode):
         colors = get_color_from_intensity(point_cloud)
     elif mode in ["class", "classes", "label", "labels"] :
         colors = get_color_from_class(point_cloud)
+    elif mode in ["instance", "instances"] :
+        colors = get_color_from_instance(point_cloud)
 
     if colors is not None:
         color_idx = get_color_attribute(point_cloud)

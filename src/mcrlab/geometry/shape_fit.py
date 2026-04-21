@@ -4,11 +4,14 @@
 import numpy as np
 from scipy.optimize import least_squares
 from sklearn.cluster import DBSCAN, MeanShift, estimate_bandwidth
+from sklearn.preprocessing import StandardScaler
 from skimage.measure import ransac
 import pyransac3d as pyrsc
 
+import open3d as o3d
+
 from mcrlab.geometry.utils import fit_plane, plane_basis, project_to_plane
-from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute
+from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute, get_instance_attribute
 from mcrlab.point_cloud.data import CSFGroundFilterTransform
 
 
@@ -254,17 +257,174 @@ def fit_circle_ransac_3D(points, use_projection=True):
 # > Pipelines <
 # -------------
 # FIXME -> Except Refinemethod and method, example pipeline: RANSAC -> find inliers -> scipy.optimize.least_squares (refinement)
-def extract_center_point(FIXME):
-    pass
+def extract_center_point(points, method, use_2d_version, use_projection=False):
+    """
+    method: "least_square", "ransac"
+    """
+    if use_2d_version:
+        x, y = points
+
+    if method == "least_square":
+        if use_2d_version:
+            center_x, center_y, r, mean_distance_error, loss = fit_circle_least_squares(x, y)
+            return {
+                "center": np.array([center_x, center_y]),
+                "radius": r,
+                "inliers": None,
+                "error": mean_distance_error,
+                "loss": loss
+            }
+        else:
+            center_3D, normal, r, mean_distance_error, loss = fit_circle_least_squares_3D(points)
+            return {
+                "center": center_3D,
+                "radius": r,
+                "inliers": None,
+                "error": mean_distance_error,
+                "loss": loss
+            }
+    elif method == "ransac":
+        if use_2d_version:
+            center, axis, r, inliers = fit_circle_ransac(x, y, method="sklearn")
+        else:
+            center, axis, r, inliers = fit_circle_ransac_3D(points, use_projection=use_projection)
+
+        return {
+            "center": center,
+            "radius": r,
+            "inliers": inliers,
+            "error": None,
+            "loss": None
+        }
+    else:
+        raise ValueError(f"Center Point Extraction Method not Found: {method}")
 
 
 
-def use_label_candidates_and_extract_center_point(FIXME):
-    pass
+def use_label_candidates_and_extract_center_point(points, use_2d_version, label_value, 
+                                                  method="least_square", use_projection=True, cluster_if_needed=True):
+    candidates = []
+    
+    # 2D CASE
+    if use_2d_version:
+        if not isinstance(points, (list, tuple)):
+            raise ValueError(f"Points must be list or tuple, but got: {type(points)}")
+
+        x, y = points
+
+        raise NotImplementedError("2D labeling logic not implemented yet")
+
+    # 3D CASE
+    else:
+        if not isinstance(points, o3d.t.geometry.PointCloud):
+            raise ValueError(f"Points must be o3d.t.geometry.PointCloud, but got: {type(points)}")
+        
+        semantic_class_idx = get_class_attribute(points)
+        instance_ids_idx = get_instance_attribute(points)
+
+        if instance_ids_idx is not None:
+            instance_ids = points.point[instance_ids].numpy().ravel()
+            unique_ids = np.unique(instance_ids)
+            labels = points.point[semantic_class_idx].numpy().ravel()
+            # FIXME -> labels not used -> instance must be from label_value in the labels!
+
+            for cur_instance_id in unique_ids:
+                if cur_instance_id < 0:
+                    continue
+
+                indices = np.where(instance_ids == cur_instance_id)[0]
+                # transform indices to o3d.core.Tensor?
+                cluster = points.select_by_index(indices)
+
+                if len(indices) < 30:
+                    continue
+
+                cluster_points = cluster.point[get_class_attribute(cluster)].numpy()
+
+                result = extract_center_point(
+                    points=cluster_points,
+                    method=method,
+                    use_2d_version=False,
+                    use_projection=use_projection
+                )
+
+                if result is None:
+                    continue
+
+                center = result["center"]
+                radius = result["radius"]
+                inliers = result["inliers"]
+                error = result["error"]
+                loss = result["loss"]
+
+                if 0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30):
+                    candidates.append((center, radius, cluster, error, loss))
+        
+            return candidates
+        else:
+            if semantic_class_idx is not None:
+                labels = points.point[semantic_class_idx].numpy().ravel()
+
+                # filter by desired class
+                indices = np.where(labels == label_value)[0]
+
+                if len(indices) == 0:
+                    return []
+
+                filtered_points = points.select_by_index(indices)
+            else:
+                filtered_points = points
+
+            if not cluster_if_needed:
+                return []
+            
+            points = filtered_points.point[get_coordinate_attribute(filtered_points)].numpy()
+
+            # or use this for clustering:
+            # features = np.column_stack((points, intensity))
+            db = DBSCAN(eps=0.15, min_samples=20).fit(points)
+            cluster_labels = db.labels_
+
+            unique_labels = np.unique(cluster_labels)
+
+            for cur_label in unique_labels:
+                if cur_label == -1:
+                    continue
+
+                indices = np.where(cluster_labels == cur_label)[0]
+                cluster = filtered_points.select_by_index(indices)
+
+                if len(indices) < 30:
+                    continue
+
+                cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()
+
+                result = extract_center_point(
+                    points=cluster_points,
+                    method=method,
+                    use_2d_version=False,
+                    use_projection=use_projection
+                )
+
+                if result is None:
+                    continue
+
+                center = result["center"]
+                radius = result["radius"]
+                inliers = result["inliers"]
+                error = result["error"]
+                loss = result["loss"]
+
+                if 0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30):
+                    candidates.append((center, radius, cluster, error, loss))
+        
+            return candidates
 
 
 
-def find_candidates_and_extract_center_point(point_cloud, method="least_square", cluster_method="sklearn", extract_ground=False, ground_extraction_method="csf"):
+def find_candidates_and_extract_center_point(point_cloud, method="least_square", cluster_method="sklearn", 
+                                             extract_ground=False, ground_extraction_method="csf",
+                                             use_projection=True):
     """
     - method: "least_square", "ransac"
     - cluster_method: "sklearn", "o3d"
@@ -298,11 +458,10 @@ def find_candidates_and_extract_center_point(point_cloud, method="least_square",
         points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
         intensity = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
 
-        # normalization
-        intensity_scaled = intensity * 0.1 
-
         # combine features, to [N, 4]
-        features = np.column_stack((points, intensity_scaled))
+        features = np.column_stack((points, intensity))
+
+        features = StandardScaler().fit_transform(features)
 
         # # run meanshift
         # bandwidth = estimate_bandwidth(features, quantile=0.2, n_samples=500)
@@ -328,7 +487,7 @@ def find_candidates_and_extract_center_point(point_cloud, method="least_square",
             continue  # Skip noise
         
         # create a boolean mask for the current cluster
-        indices = np.where(labels.numpy() == label)[0]
+        indices = np.where(labels == label)[0]
         
         # select points belonging to this cluster
         cluster = point_cloud.select_by_index(indices)
@@ -338,18 +497,21 @@ def find_candidates_and_extract_center_point(point_cloud, method="least_square",
     detected_manhole_candidates = []
 
     for cluster in clusters:
-        points_numpy = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
+        points_numpy = cluster.point[get_coordinate_attribute(cluster)].numpy()
 
         # skip too small point clouds
         xy = points_numpy[:, :2]
         if len(xy) < 30:
             continue
 
-        result = extract_center_point()
-        # center, radius, inliers = fit_circle_ransac_3D(points_numpy)
+        # FIXME -> also make 2D available?
+        result = extract_center_point(points=points_numpy, method=method, use_2d_version=False, use_projection=use_projection)
+        center = result["center"]
+        radius = result["radius"]
+        inliers = result["inliers"]
 
         # Realistic Manhole-Radius: 20–40 cm
-        if 0.20 < radius < 0.50 and len(inliers) > 30:
+        if 0.20 < radius < 0.50 and (inliers is not None or len(inliers) > 30):
             detected_manhole_candidates.append((center, radius, cluster))
             print("Candidate:", center, radius)
 

@@ -290,19 +290,69 @@ def train_testing(config):
 
 
 
+def center_prediction_use_labels_as_candidates_test(config):
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    testdata=False, 
+                                    transform=get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    for batch in data_loader:
+        point_cloud = batch[0]
+        print_pc(point_cloud)
+
+        # FIXME
+
+        break
+
+
+
+def center_prediction_use_labels_as_candidates_without_instances_test(config):
+    pass
+
+
+
+def center_prediction_without_labels_test(config):
+    pass
+
+
+
+def center_2D_prediction_use_labels_as_candidates_test(config):
+    pass
+
+
+
+def center_2D_prediction_use_labels_as_candidates_without_instances_test(config):
+    pass
+
+
+
+def center_2D_prediction_without_labels_test(config):
+    pass
+
+
+
 # --------------
 # > Playground <
 # --------------
 def tryout(config):
     # simple_viusalize_point_cloud(config)
     # torch_tensor_loading(config)
+
     # bev_trying(config)
     # bev_segmentation_trying(config)
     # bev_working_testing(config)
-    bev_preprocessed_loading_working_testing(config)
+    # bev_preprocessed_loading_working_testing(config)  # still try this again!
+
     # train_data_testing(config)
     # train_testing(config)
-
+    
+    center_prediction_use_labels_as_candidates_test(config)
+    # center_prediction_use_labels_as_candidates_without_instances_test(config)
+    # center_prediction_without_labels_test(config)
+    # center_2D_prediction_use_labels_as_candidates_test(config)
+    # center_2D_prediction_use_labels_as_candidates_without_instances_test(config)
+    # center_2D_prediction_without_labels_test(config)
     
 
     
