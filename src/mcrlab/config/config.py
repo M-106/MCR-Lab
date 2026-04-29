@@ -62,11 +62,17 @@ class DataConfig(BaseModel):
 
 
 
+class PreprocessingConfig(BaseModel):
+    file_ending: str
+
+
+
 class Config(BaseModel):
     mode: str
     train: TrainConfig
     test: TestConfig
     # inference: InferenceConfig
+    preprocessing: PreprocessingConfig
     model: ModelConfig
     data: DataConfig
     device: Union[str, None]

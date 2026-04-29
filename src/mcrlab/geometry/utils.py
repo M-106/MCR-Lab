@@ -50,6 +50,7 @@ def plane_basis(normal):
     else:
         v = np.array([0, 1, 0])
 
+    normal = np.asarray(normal).reshape(-1)
     basis_x = np.cross(normal, v)
     basis_x /= np.linalg.norm(basis_x)
 

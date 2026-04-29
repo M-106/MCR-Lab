@@ -23,6 +23,7 @@ from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, \
                                      get_class_attribute
+from mcrlab.geometry.shape_fit import use_label_candidates_and_extract_center_point
 
 
 
@@ -289,18 +290,116 @@ def train_testing(config):
     pass
 
 
+def center_estimation_3d_pipeline_debugging(point_cloud, method):
+    """
+    Helper Function
+    """
+    print("Compute centers...")
+    center_points = use_label_candidates_and_extract_center_point(points=point_cloud, 
+                                                                use_2d_version=False, 
+                                                                label_value=104002, 
+                                                                method=method, 
+                                                                use_projection=True, 
+                                                                cluster_if_needed=True)
+    
+    # visualize -> all points in black, manholes in yellow and center point in red
+    print("Compute loss and error + preprare visualization...")
+    pcd_vis = point_cloud.clone()
+
+    class_key = get_class_attribute(point_cloud)
+    classes = point_cloud.point[class_key].cpu().numpy()
+
+    color = np.full([classes.shape[0], 3], 0.0, dtype=np.float32)
+    # color[classes != 104002] = [0.0, 0.0, 0.0]
+    color[(classes == 104002).flatten()] = [1.0, 0.95, 0.0]
+    pcd_vis.point["colors"] = o3d.core.Tensor(color, dtype=o3d.core.Dtype.Float32)
+
+    # visualize found points (and show losses!)
+    center_coordinates = np.full((len(center_points), 3), 0.0, dtype=np.float32)
+    total_error = np.full((len(center_points),), -99.0, dtype=np.float32)
+    error_exists = True
+    total_loss = np.full((len(center_points),), -99.0, dtype=np.float32)
+    loss_exists = True
+    for idx, item in enumerate(center_points):
+        center, radius, cluster, error, loss = item
+        center_coordinates[idx] = center
+
+        if error_exists is True and error is not None:
+            total_error[idx] = error
+        else:
+            error_exists = False
+
+        if loss_exists is True and loss is not None:
+            total_loss[idx] = loss
+        else:
+            loss_exists = False
+
+    if len(center_points) == 0:
+        raise ValueError("No center points found!")
+    if np.any(total_error == -99) and error_exists:
+        raise ValueError("Found a not set error value!")
+    if np.any(total_loss == -99) and loss_exists:
+        raise ValueError("Found a not set loss value!")
+
+    # Residuals → “per-point mistake”
+    # Error → “average mistake”
+    # Loss → “how much we care about mistakes (with punishment for big ones)”
+
+    if error_exists:
+        print(f"\nError (mean absolute geometric distance to the circle):\n    - Mean: {total_error.mean()}\n    - STD: {total_error.std()}\n    - Min: {total_error.min()}\n    - Max: {total_error.max()}")
+    else:
+        print("\nNo Error available.")
+
+    # also good: loss='soft_l1'
+    if loss_exists:
+        # penalizes outliers
+        # smooth function, good for back-propagation/gradients
+        print(f"\nLoss (sum of square geometric distance to the circle):\n    - Mean: {total_loss.mean()}\n    - STD: {total_loss.std()}\n    - Min: {total_loss.min()}\n    - Max: {total_loss.max()}\n")
+    else:
+        print("\nNo Loss available.")
+
+    print("Visualize (yellow are manhole and red the predicted center points)")
+    new_colors = np.full((center_coordinates.shape[0], 3), [1.0, 0.0, 0.1], dtype=np.float32)
+    new_colors = o3d.core.Tensor(new_colors, dtype=o3d.core.Dtype.Float32)
+
+    coordinate_key = get_coordinate_attribute(point_cloud)
+    new_point = o3d.core.Tensor(center_coordinates, dtype=pcd_vis.point[coordinate_key].dtype)
+    pcd_vis.point[coordinate_key] = o3d.core.concatenate([pcd_vis.point[coordinate_key], new_point], axis=0)
+    pcd_vis.point["colors"] = o3d.core.concatenate([pcd_vis.point["colors"], new_colors], axis=0)
+
+    visualize(pcd_vis, color_mode=None)
+
+    return center_coordinates
+
+
 
 def center_prediction_use_labels_as_candidates_test(config):
+    print("\n --- Center Estimation (with labels) ---")
+
+    print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
                                     testdata=False, 
-                                    transform=get_basic_transform(num_points=-1),
+                                    transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
     for batch in data_loader:
         point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
         print_pc(point_cloud)
 
+        print("\n> Least Square Circle Fit Check <\n")
+        center_coordinates_square = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square")
+
+        # print("\n> RANSAC Fit Check <\n")
+        # center_coordinates_ransac = center_estimation_3d_pipeline_debugging(point_cloud, method="ransac")
+        # FIXME -> RANSAC check, look at the outputed points
+        # print(f"Center Coordinates, RANSAC: {center_coordinates_ransac}")
+
+        # compare similarity?
+        # FIXME -> check the difference of the center points! Should have the same order
+
+        # Visualize Error
         # FIXME
 
         break

@@ -12,7 +12,9 @@ import open3d as o3d
 import open3d.core as ocore
 
 from mcrlab.point_cloud.las_utils import las_to_o3d, save_as_las
-from mcrlab.point_cloud.utils import get_intensity_attribute, set_color
+from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, \
+                                     get_class_attribute, get_instance_attribute, \
+                                     set_color
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
 from mcrlab.point_cloud.inspect import print_pc
 # from mcrlab.point_cloud.data import ToPointCloudTensorTransform
@@ -121,6 +123,38 @@ def save_point_cloud(path, point_cloud):
         #     print(f"Successfully loaded point cloud with {loaded_pcd.point['intensity'].shape} intensity values.")
         # else:
         #     print("Loading failed: Intensity attribute not found.")
+    elif path.endswith(".h5"):
+        with h5py.File(path, "w") as file_:
+            # positions
+            coordinate_key = get_coordinate_attribute(point_cloud)
+            coords = point_cloud.point[coordinate_key].cpu().numpy()
+            file_.create_dataset("coords", data=coords)
+
+            instance_key = get_instance_attribute(point_cloud)
+            if instance_key is not None:
+                instances = point_cloud.point[instance_key].cpu().numpy().reshape(-1)
+                file_.create_dataset("instances", data=instances)
+            else:
+                print("[WARNING] did not found instance key and therefore did not include instance in h5 file.")
+
+            class_key = get_class_attribute(point_cloud)
+            if class_key is not None:
+                semantics = point_cloud.point[class_key].cpu().numpy().reshape(-1)
+                file_.create_dataset("semantics", data=semantics)
+            else:
+                print("[WARNING] did not found class key and therefore did not include class in h5 file.")
+
+            intensity_key = get_intensity_attribute(point_cloud)
+            if intensity_key is not None:
+                intensity = point_cloud.point[intensity_key].cpu().numpy().reshape(-1)
+                file_.create_dataset("intensity", data=intensity)
+            else:
+                print("[WARNING] did not found intensity key and therefore did not include intensity in h5 file.")
+
+            # if "number_returns" in point_cloud.point:
+            #     nr = point_cloud.point["number_returns"].cpu().numpy().reshape(-1)
+            #     file_.create_dataset("number_returns", data=nr)
+            file_.create_dataset("number_returns", data=np.full(coords.shape[0], -1, dtype=np.int8))
     else:
         _, file_ = os.path.split(path)
         raise ValueError(f"Can't save '{file_}' as point-cloud.") 

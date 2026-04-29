@@ -1,4 +1,4 @@
-mode: preprocessing    # train, test, inference, tryout, preprocessing
+mode: tryout    # train, test, inference, tryout, preprocessing
 
 train:
   batch_size: 32
@@ -16,6 +16,9 @@ train:
 test:
   metrices: []
   batch_size: 5
+
+preprocessing:
+  file_ending: ".h5"  # ".h5", ".ply"
 
 model:
   name: "sam2"

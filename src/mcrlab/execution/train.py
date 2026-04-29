@@ -346,7 +346,7 @@ def train_hf_pipeline(config):
     trainer = HFTrainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset,  # load bev/meta files and extract in right format
+        train_dataset=train_dataset,  # load bev/meta files and extract in right format -> use BEV Dataset
         eval_dataset=val_dataset,
         data_collator=collate_fn,
         compute_metrics=compute_metrics
@@ -365,6 +365,7 @@ def train(config):
     if model_name.lower() in ["sam2", "sam3", "segformer", "dinomask2former"]:
         train_hf_pipeline(config)
     else:
+        raise RuntimeError("Only Huggingface Pipeline is available right now")
         train_pipeline(config)
 
 

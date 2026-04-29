@@ -140,9 +140,17 @@ class CircleModel:
         x, y = data[:, 0], data[:, 1]
 
         # Check for collinearity (area of triangle ~ 0)
-        mat = np.column_stack((x, y, np.ones(3)))
-        if abs(np.linalg.det(mat)) < 1e-6:
+        # print(f"X Shape: {x.shape}")
+        # print(f"Y Shape: {y.shape}")
+        # print(f"All original Shape: {data.shape}")
+        mat = np.column_stack((x, y, np.ones(len(x))))
+        if len(x) < 3:
             return False
+
+        if len(x) == 3:
+            mat = np.column_stack((x, y, np.ones(3)))
+            if abs(np.linalg.det(mat)) < 1e-6:
+                return False
 
         # Build linear system: 2x*cx + 2y*cy + r^2 - cx^2 - cy^2 = x^2 + y^2
         A = np.column_stack((2 * x, 2 * y, np.ones(len(x))))
@@ -318,28 +326,30 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
     else:
         if not isinstance(points, o3d.t.geometry.PointCloud):
             raise ValueError(f"Points must be o3d.t.geometry.PointCloud, but got: {type(points)}")
-        
-        semantic_class_idx = get_class_attribute(points)
-        instance_ids_idx = get_instance_attribute(points)
 
-        if instance_ids_idx is not None:
-            instance_ids = points.point[instance_ids].numpy().ravel()
+        semantic_class_idx = get_class_attribute(points)
+        instance_idx = get_instance_attribute(points)
+
+        if instance_idx is not None:
+            instance_ids = points.point[instance_idx].numpy().ravel()
             unique_ids = np.unique(instance_ids)
             labels = points.point[semantic_class_idx].numpy().ravel()
-            # FIXME -> labels not used -> instance must be from label_value in the labels!
 
             for cur_instance_id in unique_ids:
                 if cur_instance_id < 0:
                     continue
 
                 indices = np.where(instance_ids == cur_instance_id)[0]
-                # transform indices to o3d.core.Tensor?
                 cluster = points.select_by_index(indices)
 
                 if len(indices) < 30:
                     continue
 
-                cluster_points = cluster.point[get_class_attribute(cluster)].numpy()
+                # check if manhole class
+                if np.all(labels[indices] != label_value):
+                    continue
+
+                cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()
 
                 result = extract_center_point(
                     points=cluster_points,
@@ -394,7 +404,7 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                 indices = np.where(cluster_labels == cur_label)[0]
                 cluster = filtered_points.select_by_index(indices)
 
-                if len(indices) < 30:
+                if len(indices) < 30 or len(indices) > 10000:
                     continue
 
                 cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()

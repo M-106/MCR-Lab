@@ -566,16 +566,20 @@ def get_basic_transform(num_points=-1):
 
 
 
-def get_preprocessing_transform(grid_size=0.01):
-    transform = Compose([
+def get_preprocessing_transform(grid_size=0.01, do_voxelation=True):
+    transformations = [
         # ToFixPointsTransform(num_points=1000000, allow_padding=False, reduction_by_height=True),  # 7250451 -> 5000000
         # NaivMinHistoGroundKeepFilterTransform(),
         OutlierRemovalTransform(mode="statistical", nb_points=8, radius=0.2, std_ratio=2.0),
         # RANSACGroundKeepFilterTransform(dist_threshold=0.5, ransac_tries=3),
         # RoadExtractionTransform(mode="height")
-        CSFGroundFilterTransform(invert_z=False),
-        VoxelDownsamplerTransform(grid_size=grid_size)
-    ])
+        CSFGroundFilterTransform(invert_z=False)
+    ]
+
+    if do_voxelation:
+        transformations.append(VoxelDownsamplerTransform(grid_size=grid_size))
+    
+    transform = Compose(transformations)
     return transform
 
 
@@ -848,7 +852,8 @@ class BEVDataset(Dataset):
         else:
             for cur_path in self.path:
                 root, filename = os.path.split(cur_path)
-                bev_file_name = filename.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
+                filename = ".".join(filename.split(".")[:-1]) + ".pkl"
+                bev_file_name = filename.replace("preprocessed_", "preprocessed_bev_") 
                 all_bev_paths.append(os.path.join(root, bev_file_name))
                 
         # merge the found files
@@ -900,7 +905,7 @@ class BEVDataset(Dataset):
         
     def get_via_bev_filename(self, file_name, extract_from_full_ply_path=False):
         if extract_from_full_ply_path:
-            bev_file_name = self.extract_from_full_ply_path(file_name)
+            bev_file_name = self.extract_bev_path_from_full_path(file_name)
         else:
             bev_file_name = file_name
         # bev_file_name = file_name.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
@@ -924,9 +929,10 @@ class BEVDataset(Dataset):
                 "meta": meta
             }
 
-    def extract_from_full_ply_path(self, path):
+    def extract_bev_path_from_full_path(self, path):
         _, bev_file_name = os.path.split(path)
-        bev_file_name = bev_file_name.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
+        bev_file_name = ".".join(bev_file_name.split(".")[:-1]) + ".pkl"
+        bev_file_name = bev_file_name.replace("preprocessed_", "preprocessed_bev_")
         return bev_file_name
 
     def __len__(self):
@@ -1019,7 +1025,8 @@ def get_whu_data_loader(path, testdata=False, transform=None,
 
 
 def preprocess_data(data_name, path, testdata=False, device="cpu",
-                    bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5):
+                    bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5,
+                    file_ending=".ply"):
     print("--- Data Preprocessing ---")
     data_loader = get_data_loader(data_name, path, testdata=testdata, transform=get_preprocessing_transform(grid_size=bev_resolution),
                                   batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
@@ -1054,7 +1061,7 @@ def preprocess_data(data_name, path, testdata=False, device="cpu",
             os.makedirs(cur_root_path, exist_ok=True)
             preprocessed_path_cleaned = True
 
-        new_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name +".ply")
+        new_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name +file_ending)
 
         if not isinstance(batch, list):  # Dataset
             raise TypeError(f"Batch is not a list, else it is '{type(batch)}'.")
