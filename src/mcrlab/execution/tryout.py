@@ -24,6 +24,7 @@ from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, \
                                      get_class_attribute
 from mcrlab.geometry.shape_fit import use_label_candidates_and_extract_center_point
+from mcrlab.geometry.utils import visualize_circle_fit
 
 
 
@@ -290,7 +291,7 @@ def train_testing(config):
     pass
 
 
-def center_estimation_3d_pipeline_debugging(point_cloud, method):
+def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return=False):
     """
     Helper Function
     """
@@ -320,6 +321,11 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method):
     error_exists = True
     total_loss = np.full((len(center_points),), -99.0, dtype=np.float32)
     loss_exists = True
+
+    if extended_return:
+        all_radius = np.full((len(center_points), 1), 0.0, dtype=np.float32)
+        cluster_points = []
+
     for idx, item in enumerate(center_points):
         center, radius, cluster, error, loss = item
         center_coordinates[idx] = center
@@ -333,6 +339,10 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method):
             total_loss[idx] = loss
         else:
             loss_exists = False
+
+        if extended_return:
+            all_radius[idx] = radius
+            cluster_points.append(cluster.point[get_coordinate_attribute(cluster)].numpy())
 
     if len(center_points) == 0:
         raise ValueError("No center points found!")
@@ -369,7 +379,10 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method):
 
     visualize(pcd_vis, color_mode=None)
 
-    return center_coordinates
+    if extended_return:
+        return center_coordinates, all_radius, cluster_points, total_error
+    else:
+        return center_coordinates
 
 
 
@@ -389,7 +402,14 @@ def center_prediction_use_labels_as_candidates_test(config):
         print_pc(point_cloud)
 
         print("\n> Least Square Circle Fit Check <\n")
-        center_coordinates_square = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square")
+        center_coordinates_square, radius, points, error = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True)
+
+        # visualize error
+        for cur_vis in range(len(points)):
+            visualize_circle_fit(points=points[cur_vis], 
+                                 center_pred=center_coordinates_square[cur_vis], 
+                                 radius=radius[cur_vis], 
+                                 error=error[cur_vis])
 
         # print("\n> RANSAC Fit Check <\n")
         # center_coordinates_ransac = center_estimation_3d_pipeline_debugging(point_cloud, method="ransac")
