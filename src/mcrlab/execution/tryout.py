@@ -15,14 +15,14 @@ from dotenv import load_dotenv
 from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform, \
                                     preprocess_data, get_preprocessing_transform, \
                                     bev_gen_wrapper, extract_tiles_metas
-from mcrlab.point_cloud.inspect import print_pc, visualize
+from mcrlab.point_cloud.inspect import print_pc, visualize, visualize_intensity_in_2d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
 from mcrlab.projection import bev_projection, bev_back_projection, bev_back_projection_testing
 from mcrlab.image.utils import normalize_img_per_channel
 from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, \
-                                     get_class_attribute
+                                     get_class_attribute, get_instance_attribute
 from mcrlab.geometry.shape_fit import use_label_candidates_and_extract_center_point
 from mcrlab.geometry.utils import visualize_circle_fit
 
@@ -291,6 +291,126 @@ def train_testing(config):
     pass
 
 
+
+def extract_manhole(points, label_value=104002, points_around_dist=5):
+    if not isinstance(points, o3d.t.geometry.PointCloud):
+        raise ValueError(f"Points must be o3d.t.geometry.PointCloud, but got: {type(points)}")
+
+    manholes = []
+
+    semantic_class_idx = get_class_attribute(points)
+    instance_idx = get_instance_attribute(points)
+
+    if instance_idx is not None:
+        instance_ids = points.point[instance_idx].numpy().ravel()
+        unique_ids = np.unique(instance_ids)
+        labels = points.point[semantic_class_idx].numpy().ravel()
+
+        for cur_instance_id in unique_ids:
+            if cur_instance_id < 0:
+                continue
+
+            indices = np.where(instance_ids == cur_instance_id)[0]
+            cluster = points.select_by_index(indices)
+
+            if len(indices) < 30:
+                continue
+
+            # check if manhole class
+            if np.all(labels[indices] != label_value):
+                continue
+
+            cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()
+
+            # add other additional points from around
+            if points_around_dist > 0 :
+                min_bound = cluster_points.min(axis=0)
+                max_bound = cluster_points.max(axis=0)
+
+                # expand by your margin
+                min_bound[:2] -= points_around_dist
+                max_bound[:2] += points_around_dist
+
+                all_points = points.point[get_coordinate_attribute(points)].numpy()
+
+                mask = (
+                    (all_points[:, 0] >= min_bound[0]) & (all_points[:, 0] <= max_bound[0]) &
+                    (all_points[:, 1] >= min_bound[1]) & (all_points[:, 1] <= max_bound[1])
+                )
+
+                expanded_indices = np.where(mask)[0]
+                final_indices = np.union1d(indices, expanded_indices)
+                cluster_points = points.select_by_index(final_indices)
+                del all_points
+
+                manholes.append(cluster_points)
+        return manholes
+    else:
+        raise RuntimeError("PointCloud does not have instance Label! But is needed.")
+
+
+
+
+
+def manhole_intensity_test(config):
+    print("\n --- Center Estimation (with labels) ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    testdata=False, 
+                                    transform=None,  # get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    for batch in data_loader:
+        point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
+        print_pc(point_cloud)
+
+        print("\n> Manhole Intensity Check <\n")
+        manholes = extract_manhole(point_cloud, label_value=104002, points_around_dist=2)
+
+        for cur_manhole in manholes:
+            # Visualize Manhole
+
+            # 2D
+            points = cur_manhole.point[get_coordinate_attribute(cur_manhole)].numpy()
+            color = cur_manhole.point[get_intensity_attribute(cur_manhole)].numpy()
+            visualize_intensity_in_2d(points, color)
+
+            # 3D
+            visualize(cur_manhole, color_mode="intensity")
+
+            break
+    
+        break
+
+
+
+def manhole_BEV_intensity_test(config):
+    pass
+    # FIXME -> go through BEV images and if it have the label than plot the image/save image 
+    #                   -> have already a method right (but maybe use normalization if not visible)
+
+
+
+def manhole_density_test(config):
+    pass
+
+
+
+def preprocessing_speed_test(config):
+    pass
+
+
+
+def center_robustnest_test(config):
+    pass
+    # stress test for least squares if the data is not euqually distributed (in live system relevant)
+    # But for data annotation only relevant if the data is not always equal distributed 
+
+
+
 def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return=False):
     """
     Helper Function
@@ -466,7 +586,9 @@ def tryout(config):
     # train_data_testing(config)
     # train_testing(config)
     
-    center_prediction_use_labels_as_candidates_test(config)
+    manhole_intensity_test(config)
+
+    # center_prediction_use_labels_as_candidates_test(config)
     # center_prediction_use_labels_as_candidates_without_instances_test(config)
     # center_prediction_without_labels_test(config)
     # center_2D_prediction_use_labels_as_candidates_test(config)

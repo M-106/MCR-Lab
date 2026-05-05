@@ -4,6 +4,7 @@
 import numpy as np
 import open3d as o3d
 import torch
+import matplotlib.pyplot as plt
 
 # from mcrlab.point_cloud.io import get_device
 from mcrlab.point_cloud.utils import set_color
@@ -311,6 +312,46 @@ def visualize(point_cloud, color_mode=None):
 
 
 
+def visualize_intensity_in_2d(points, color):
+    if not isinstance(points, np.ndarray):
+        raise ValueError(f"Points must be a numpy array, but got: {type(points)}")
+    
+    if not isinstance(color, np.ndarray):
+        raise ValueError(f"Color must be a numpy array, but got: {type(color)}")
+
+    # matplotlib settings
+    # plt.style.use("seaborn-v0_8-whitegrid")
+    plt.style.use("default")
+    plt.rcParams.update({
+        "axes.spines.top": False,
+        "axes.spines.right": False
+    })
+
+    # extract data
+    x = points[:, 0]
+    y = points[:, 1]
+
+    # prepare color
+    # if color.max() > 1.0:
+    #     color /= 255
+    color = (color - np.min(color)) / (np.max(color) - np.min(color))
+    color = np.repeat(color[:, np.newaxis], 3, axis=1).squeeze()
+    # print(f"Color Shape: {color.shape}")
+
+    # plotting
+    plt.figure(figsize=(7, 7))
+
+    # points
+    plt.scatter(x, y, s=15, c=color, alpha=1.0)  # , label="Manhole Points")
+
+    # annotation
+    plt.title("Point Cloud Intensity (Orthogonal View)", fontsize=14, weight="bold", y=0.98)
+
+    plt.grid(alpha=0.3)
+    plt.axis("equal")
+    plt.margins(0.1)
+
+    plt.show()
 
 
 

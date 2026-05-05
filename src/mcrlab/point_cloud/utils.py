@@ -231,7 +231,7 @@ def get_color_from_instance(point_cloud):
 
 
 
-def set_color(point_cloud, mode):
+def set_color(point_cloud, mode, normalize=True):
     if mode == "height":
         colors = get_color_from_height(point_cloud)
     elif mode == "intensity":
@@ -244,6 +244,13 @@ def set_color(point_cloud, mode):
     if colors is not None:
         color_idx = get_color_attribute(point_cloud)
         color_idx = color_idx if color_idx else "colors"
+
+        if normalize:
+            # dtype = colors.dtype
+            if isinstance(colors, o3d.core.Tensor):
+                colors = colors.numpy()
+            colors = (colors - np.min(colors)) / (np.max(colors) - np.min(colors))
+
         point_cloud.point[color_idx] = o3d.core.Tensor(colors, dtype=o3d.core.Dtype.Float32)
     return point_cloud
 
