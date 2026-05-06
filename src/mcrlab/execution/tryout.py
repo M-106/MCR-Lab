@@ -15,14 +15,16 @@ from dotenv import load_dotenv
 from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform, \
                                     preprocess_data, get_preprocessing_transform, \
                                     bev_gen_wrapper, extract_tiles_metas
-from mcrlab.point_cloud.inspect import print_pc, visualize, visualize_intensity_in_2d
+from mcrlab.point_cloud.inspect import print_pc, visualize, visualize_intensity_in_2d, \
+                                       analyze_point_distribution
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
 from mcrlab.projection import bev_projection, bev_back_projection, bev_back_projection_testing
 from mcrlab.image.utils import normalize_img_per_channel
 from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, \
-                                     get_class_attribute, get_instance_attribute
+                                     get_class_attribute, get_instance_attribute, \
+                                     extract_manhole
 from mcrlab.geometry.shape_fit import use_label_candidates_and_extract_center_point
 from mcrlab.geometry.utils import visualize_circle_fit
 
@@ -33,10 +35,10 @@ from mcrlab.geometry.utils import visualize_circle_fit
 # -----------------------
 def simple_viusalize_point_cloud(config):
     # if config.data.name == "paris":
-    #     dataset = ParisLille3DDataset(path=config.data.path, testdata=False, transform=None, 
+    #     dataset = ParisLille3DDataset(path=config.data.path, type="train", transform=None, 
     #                                   preprocessed=config.data.preprocessed, return_train_format=False)
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                  testdata=False, 
+                                  type="train", 
                                   transform=get_basic_transform(num_points=-1),
                                   batch_size=1, shuffle=False, num_workers=1,
                                   preprocessed=config.data.preprocessed, return_train_format=False)
@@ -51,7 +53,7 @@ def simple_viusalize_point_cloud(config):
 def torch_tensor_loading(config):
     # PyTorch Dataset try out
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    testdata=False, 
+                                    type="train", 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -70,7 +72,7 @@ def torch_tensor_loading(config):
 def bev_trying(config):
     # PyTorch Dataset try out
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    testdata=False, 
+                                    type="train", 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -140,7 +142,7 @@ def bev_segmentation_trying(config):
 
     # PyTorch Dataset try out
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    testdata=False, 
+                                    type="train", 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -197,7 +199,7 @@ def bev_segmentation_trying(config):
 def bev_working_testing(config):
     # LOAD POINT CLOUD
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    testdata=False, 
+                                    type="train", 
                                     transform=None,  # get_basic_transform(num_points=-1), 
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -237,7 +239,7 @@ def bev_preprocessed_loading_working_testing(config):
 
     # LOAD POINT CLOUD
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    testdata=False, 
+                                    type="train", 
                                     transform=get_basic_transform(num_points=-1), 
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -266,7 +268,7 @@ def bev_preprocessed_loading_working_testing(config):
 
 def train_data_testing(config):
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    testdata=False, 
+                                    type="train", 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=True)
@@ -292,72 +294,12 @@ def train_testing(config):
 
 
 
-def extract_manhole(points, label_value=104002, points_around_dist=5):
-    if not isinstance(points, o3d.t.geometry.PointCloud):
-        raise ValueError(f"Points must be o3d.t.geometry.PointCloud, but got: {type(points)}")
-
-    manholes = []
-
-    semantic_class_idx = get_class_attribute(points)
-    instance_idx = get_instance_attribute(points)
-
-    if instance_idx is not None:
-        instance_ids = points.point[instance_idx].numpy().ravel()
-        unique_ids = np.unique(instance_ids)
-        labels = points.point[semantic_class_idx].numpy().ravel()
-
-        for cur_instance_id in unique_ids:
-            if cur_instance_id < 0:
-                continue
-
-            indices = np.where(instance_ids == cur_instance_id)[0]
-            cluster = points.select_by_index(indices)
-
-            if len(indices) < 30:
-                continue
-
-            # check if manhole class
-            if np.all(labels[indices] != label_value):
-                continue
-
-            cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()
-
-            # add other additional points from around
-            if points_around_dist > 0 :
-                min_bound = cluster_points.min(axis=0)
-                max_bound = cluster_points.max(axis=0)
-
-                # expand by your margin
-                min_bound[:2] -= points_around_dist
-                max_bound[:2] += points_around_dist
-
-                all_points = points.point[get_coordinate_attribute(points)].numpy()
-
-                mask = (
-                    (all_points[:, 0] >= min_bound[0]) & (all_points[:, 0] <= max_bound[0]) &
-                    (all_points[:, 1] >= min_bound[1]) & (all_points[:, 1] <= max_bound[1])
-                )
-
-                expanded_indices = np.where(mask)[0]
-                final_indices = np.union1d(indices, expanded_indices)
-                cluster_points = points.select_by_index(final_indices)
-                del all_points
-
-                manholes.append(cluster_points)
-        return manholes
-    else:
-        raise RuntimeError("PointCloud does not have instance Label! But is needed.")
-
-
-
-
-
 def manhole_intensity_test(config):
-    print("\n --- Center Estimation (with labels) ---")
+    print("\n --- Manhole Intensity Check ---")
 
     print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    testdata=False, 
+                                    type="train", 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -387,15 +329,119 @@ def manhole_intensity_test(config):
 
 
 
-def manhole_BEV_intensity_test(config):
-    pass
+def manhole_BEV_intensity_test(config, label_value=104002):
     # FIXME -> go through BEV images and if it have the label than plot the image/save image 
     #                   -> have already a method right (but maybe use normalization if not visible)
+    print("\n --- Manhole BEV Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type="train", 
+                                    transform=get_basic_transform(),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    for batch in data_loader:
+        point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
+        print_pc(point_cloud)
+
+        # get BEV images
+        print("Starting BEV projection...")
+        if point_cloud.bev_data is None:
+            raise ValueError("Preprocessed BEVs did not loaded.")
+            print("Starting BEV projection...")
+            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+            bev_gen = bev_gen_wrapper(tiles, metas)
+        else:
+            print("Loaded Bevs from file...")
+            bev_gen = point_cloud.get_bev()
+
+        for bev_item in bev_gen:
+            img = bev_item["pixel_values"].detach().cpu().numpy()
+            labels = bev_item["labels"].detach().cpu().numpy()
+            meta = bev_item["meta"] 
+
+            # extracting manholes? -> get all manhole points + clustering
+
+            # print(labels.shape)
+            if np.any(labels == label_value):
+                H, W = labels.shape
+                colored_img = np.full((H, W, 3), 0.0, dtype=np.float32)
+                colored_img[labels == label_value] = [255.0, 255.00, 0.0]
+
+                # fix img shape -> C, H, W -> H, W, C
+                img_t = np.transpose(img[:3, :, :], (1, 2, 0))
+
+                fig, ax = plt.subplots(figsize=(15,7), ncols=3, nrows=1)
+
+                ax[0].imshow(img_t, cmap="viridis")
+                ax[1].imshow((img_t - np.min(img_t))/(np.max(img_t) - np.min(img_t)), cmap="viridis")
+                ax[2].imshow(colored_img)
+
+                ax[0].axis("off")
+                ax[1].axis("off")
+                ax[2].axis("off")
+
+                ax[0].set_title("BEV Image", fontsize=14, fontweight='bold')
+                ax[1].set_title("Normalized BEV Image", fontsize=14, fontweight='bold')
+                ax[2].set_title("Manhole MArked BEV Image", fontsize=14, fontweight='bold')
+
+                plt.show()
+                break
+
+        # find BEVs with manholes
+    
+        break
 
 
 
 def manhole_density_test(config):
-    pass
+    print("\n --- Manhole Density Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type="train", 
+                                    transform=None,  # get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    total_result = dict()
+
+    print("\n> Manhole Density Check <\n")
+
+    for batch in tqdm(data_loader, total=len(data_loader), desc="Density Check"):
+        point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
+        # print_pc(point_cloud)
+
+        manholes = extract_manhole(point_cloud, label_value=104002, points_around_dist=0)
+
+        for cur_manhole in manholes:
+
+            points = cur_manhole.point[get_coordinate_attribute(cur_manhole)].numpy()
+            result = analyze_point_distribution(points, num_angle_bins=36)
+
+            for key, item in result.items():
+                if key in total_result.keys():
+                    total_result[key] += [item]
+                else:
+                    total_result[key] = [item]
+
+            # direction_strength.append(result["direction_strength"])
+            # print(f"DEBUGGING, added element: {result["direction_strength"]}")
+
+    # print(f"DEBUGGING, elements: {len(direction_strength)}")
+    # direction_strength = np.array(direction_strength)
+    # print(f"DEBUGGING, numpy elements: {direction_strength.shape}")
+
+    for key, values in total_result.items():
+        values = np.array(values)
+        print(f"\n{key}")
+        print(f"    ▷ Mean: {values.mean():.4f}")
+        print(f"    ▷ Max: {values.max():.4f}")
+        print(f"    ▷ Min: {values.min():.4f}")
+        print(f"    ▷ Std: {values.std():.4f}")
 
 
 
@@ -511,7 +557,7 @@ def center_prediction_use_labels_as_candidates_test(config):
 
     print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    testdata=False, 
+                                    type="train", 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -586,7 +632,9 @@ def tryout(config):
     # train_data_testing(config)
     # train_testing(config)
     
-    manhole_intensity_test(config)
+    # manhole_intensity_test(config)
+    # manhole_density_test(config)
+    manhole_BEV_intensity_test(config, label_value=104002)
 
     # center_prediction_use_labels_as_candidates_test(config)
     # center_prediction_use_labels_as_candidates_without_instances_test(config)

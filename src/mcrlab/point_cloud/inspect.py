@@ -6,6 +6,8 @@ import open3d as o3d
 import torch
 import matplotlib.pyplot as plt
 
+from sklearn.neighbors import NearestNeighbors
+
 # from mcrlab.point_cloud.io import get_device
 from mcrlab.point_cloud.utils import set_color
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_class_attribute, \
@@ -352,6 +354,140 @@ def visualize_intensity_in_2d(points, color):
     plt.margins(0.1)
 
     plt.show()
+
+
+
+# ---------------------------------
+# > Quantitative Inspection Utils <
+# ---------------------------------
+def estimate_scanline_density(points):
+    N = len(points)
+    if N < 2:
+        return 0
+
+    # remove the center
+    centered = points - np.mean(points, axis=0)
+
+    # PCA (find main axis)
+    cov = np.cov(centered.T)
+    eigvals, eigvecs = np.linalg.eig(cov)
+
+    # biggest Eigendirection = Scanlinie
+    main_axis = eigvecs[:, np.argmax(eigvals)]
+
+    # Projection on Line
+    projections = centered @ main_axis
+
+    # Length of the Scanline
+    length = projections.max() - projections.min()
+
+    if length < 1e-6:
+        return 0
+
+    # calc the density of the line
+    density = N / length
+    return density
+
+
+
+# mean_nn_distance high => low Density (not much points)
+# mean_nn_distance low => high Density (much points)
+# std_nn_distance high => unequal density
+def knn_density(points, k=2):
+    if len(points) < k:
+        return None
+
+    nbrs = NearestNeighbors(n_neighbors=k)
+    nbrs.fit(points)
+
+    distances, _ = nbrs.kneighbors(points)
+
+    # distances[:,0] = 0 (Punkt zu sich selbst)
+    nn_distances = distances[:, 1]
+
+    return {
+        "mean_nn_distance": np.mean(nn_distances),
+        "std_nn_distance": np.std(nn_distances),
+        "min_nn_distance": np.min(nn_distances),
+        "max_nn_distance": np.max(nn_distances)
+    }
+
+
+
+# diskrete Scanlinien
+def analyze_point_distribution(points, num_angle_bins=36):
+    if not isinstance(points, np.ndarray):
+        raise ValueError("points must be numpy array")
+
+    x = points[:, 0]
+    y = points[:, 1]
+
+    N = len(points)
+
+    # Global Density
+    r = np.sqrt(x**2 + y**2)
+    R = np.max(r)
+    area = np.pi * R**2
+    density = N / area
+
+    # Left / Right
+    left = np.sum(x < 0)
+    right = np.sum(x >= 0)
+    lr_bias = (right - left) / N
+
+    # Angel Inspection
+    theta = np.arctan2(y, x)
+
+    hist, bin_edges = np.histogram(theta, bins=num_angle_bins, range=(-np.pi, np.pi))
+    hist = hist / np.sum(hist)  # normalized
+
+    uniform = 1 / num_angle_bins
+    hist_variance = np.var(hist - uniform)
+
+    entropy = -np.sum(hist * np.log(hist + 1e-10))
+
+    # directed asymmetry
+    A = np.mean(np.cos(theta))
+    B = np.mean(np.sin(theta))
+    R_dir = np.sqrt(A**2 + B**2)
+    direction = np.arctan2(B, A)
+
+    # radial consistency
+    radial_hist, _ = np.histogram(r, bins=20)
+    radial_variance = np.var(radial_hist)
+
+    # distances between points
+    distances = np.sqrt(np.sum(np.diff(points, axis=0)**2, axis=1))
+    mean_dist = np.mean(distances)
+
+    # # eine große Eigenvalue → Linie
+    # cov = np.cov(points.T)
+    # eigvals, eigvecs = np.linalg.eig(cov)
+
+    line_density = estimate_scanline_density(points)
+    knn_stats = knn_density(points)
+
+    return {
+        "density": density,
+        "lr_bias": lr_bias,
+        "direction_strength": R_dir,  # direction_strength ≈ 0 → gleichverteilt  # > 0 → klare Richtung vorhanden -> because of scanlines should be bigger than 0
+        "preferred_direction": direction,
+        "angle_histogram": hist,
+        "angle_bins": bin_edges,
+        "hist_variance": hist_variance,  # small → uniform distribution, large → uneven sampling (likely speed variation)
+        "radial_variance": radial_variance,
+        "entropy": entropy,  # high entropy → uniform distribution  # low entropy → clustered points
+        "mean_dist": mean_dist,
+        "line_density": line_density,
+        "mean_nn_distance": knn_stats["mean_nn_distance"],
+        "std_nn_distance": knn_stats["std_nn_distance"],
+        "min_nn_distance": knn_stats["min_nn_distance"],
+        "max_nn_distance": knn_stats["max_nn_distance"]
+    }
+
+
+
+
 
 
 

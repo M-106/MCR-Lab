@@ -361,8 +361,66 @@ def filter_ground_with_height(point_cloud, threshold=0.3):
 
 
 
+# ---------------
+# > Other Utils <
+# ---------------
+def extract_manhole(points, label_value=104002, points_around_dist=5):
+    if not isinstance(points, o3d.t.geometry.PointCloud):
+        raise ValueError(f"Points must be o3d.t.geometry.PointCloud, but got: {type(points)}")
 
+    manholes = []
 
+    semantic_class_idx = get_class_attribute(points)
+    instance_idx = get_instance_attribute(points)
+
+    if instance_idx is not None:
+        instance_ids = points.point[instance_idx].numpy().ravel()
+        unique_ids = np.unique(instance_ids)
+        labels = points.point[semantic_class_idx].numpy().ravel()
+
+        for cur_instance_id in unique_ids:
+            if cur_instance_id < 0:
+                continue
+
+            indices = np.where(instance_ids == cur_instance_id)[0]
+            cluster = points.select_by_index(indices)
+
+            if len(indices) < 30:
+                continue
+
+            # check if manhole class
+            if np.all(labels[indices] != label_value):
+                continue
+
+            # FIXME -> get not as Tensor but as PointCloud
+            cluster_points = cluster
+            cluster_points_arr = cluster.point[get_coordinate_attribute(cluster)].numpy()
+
+            # add other additional points from around
+            if points_around_dist > 0 :
+                min_bound = cluster_points_arr.min(axis=0)
+                max_bound = cluster_points_arr.max(axis=0)
+
+                # expand by your margin
+                min_bound[:2] -= points_around_dist
+                max_bound[:2] += points_around_dist
+
+                all_points = points.point[get_coordinate_attribute(points)].numpy()
+
+                mask = (
+                    (all_points[:, 0] >= min_bound[0]) & (all_points[:, 0] <= max_bound[0]) &
+                    (all_points[:, 1] >= min_bound[1]) & (all_points[:, 1] <= max_bound[1])
+                )
+
+                expanded_indices = np.where(mask)[0]
+                final_indices = np.union1d(indices, expanded_indices)
+                cluster_points = points.select_by_index(final_indices)
+                del all_points
+
+            manholes.append(cluster_points)
+        return manholes
+    else:
+        raise RuntimeError("PointCloud does not have instance Label! But is needed.")
 
 
 

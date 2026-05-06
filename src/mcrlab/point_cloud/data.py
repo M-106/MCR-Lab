@@ -588,20 +588,22 @@ def get_preprocessing_transform(grid_size=0.01, do_voxelation=True):
 # > Dataset <
 # -----------
 class ParisLille3DDataset(Dataset):
-    def __init__(self, path, testdata=False, transform=None, 
+    def __init__(self, path, type="train", transform=None, 
                  preprocessed=False, return_train_format=False):
         self.path = path
-        self.testdata = testdata
+        self.type = type
         self.transform = transform
         self.preprocessed = preprocessed
         self.return_train_format = return_train_format
 
         self.POINT_LIMIT = 1024
 
-        if self.testdata:
+        if self.type == "test":
             self.path = os.path.join(self.path, "test_10_classes")
-        else:
+        elif self.type == "train":
             self.path = os.path.join(self.path, "training_10_classes")
+        else:
+            raise ValueError(f"Got unknown dataset type: {self.type}")
 
         self.point_cloud_paths = []
         self.bev_paths = dict()
@@ -674,10 +676,10 @@ class ParisLille3DDataset(Dataset):
 
 
 class WHUUrban3DDataset(Dataset):
-    def __init__(self, path, testdata=False, transform=None, 
+    def __init__(self, path, type="train", transform=None, 
                  preprocessed=False, return_train_format=False):
         self.path = os.path.join(path, "mls", "h5")
-        self.testdata = testdata  # see in https://pypi.org/project/pywhu3d/ which scenes are train/val/test split
+        self.type = type  # see in https://pypi.org/project/pywhu3d/ which scenes are train/val/test split
         self.transform = transform
         self.preprocessed = preprocessed
         self.return_train_format = return_train_format
@@ -984,15 +986,15 @@ def extract_tiles_metas(bev_gen, amount=5, as_numpy=True):
 
 
 
-def get_data_loader(data_name, path, testdata=False, transform=None,
+def get_data_loader(data_name, path, type="train", transform=None,
                     batch_size=32, shuffle=True, num_workers=4,
                     preprocessed=False, return_train_format=False):
     if data_name == "paris":
-        data_loader = get_paris_data_loader(path, testdata=testdata, transform=transform,
+        data_loader = get_paris_data_loader(path, type=type, transform=transform,
                                             batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                             preprocessed=preprocessed, return_train_format=return_train_format)
     elif data_name == "whu":
-        data_loader = get_whu_data_loader(path, testdata=testdata, transform=transform,
+        data_loader = get_whu_data_loader(path, type=type, transform=transform,
                                           batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                           preprocessed=preprocessed, return_train_format=return_train_format)
     else:
@@ -1002,10 +1004,10 @@ def get_data_loader(data_name, path, testdata=False, transform=None,
 
 
 
-def get_paris_data_loader(path, testdata=False, transform=None,
+def get_paris_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
                           preprocessed=False, return_train_format=False):
-    dataset = ParisLille3DDataset(path=path, testdata=testdata, transform=transform,
+    dataset = ParisLille3DDataset(path=path, type=type, transform=transform,
                                   preprocessed=preprocessed, return_train_format=return_train_format)
 
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
@@ -1013,10 +1015,10 @@ def get_paris_data_loader(path, testdata=False, transform=None,
 
 
 
-def get_whu_data_loader(path, testdata=False, transform=None,
+def get_whu_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
                           preprocessed=False, return_train_format=False):
-    dataset = WHUUrban3DDataset(path=path, testdata=testdata, transform=transform,
+    dataset = WHUUrban3DDataset(path=path, type=type, transform=transform,
                                 preprocessed=preprocessed, return_train_format=return_train_format)
 
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
@@ -1024,11 +1026,11 @@ def get_whu_data_loader(path, testdata=False, transform=None,
 
 
 
-def preprocess_data(data_name, path, testdata=False, device="cpu",
+def preprocess_data(data_name, path, type="train", device="cpu",
                     bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5,
                     file_ending=".ply"):
     print("--- Data Preprocessing ---")
-    data_loader = get_data_loader(data_name, path, testdata=testdata, transform=get_preprocessing_transform(grid_size=bev_resolution),
+    data_loader = get_data_loader(data_name, path, type=type, transform=get_preprocessing_transform(grid_size=bev_resolution),
                                   batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
                                   return_train_format=False)
     

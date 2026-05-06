@@ -46,7 +46,7 @@ def main():
 
     elif config.mode == "preprocessing":
         preprocess_data(config.data.name, config.data.path, 
-                        testdata=False,
+                        type="train",  # maybe also define over config!
                         device="cpu",
                         bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5,  # bev_tile_size=35.0, bev_resolution=0.05)
                         file_ending=config.preprocessing.file_ending)
