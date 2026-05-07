@@ -74,7 +74,9 @@ def project_to_plane(points, centroid, basis_x, basis_y):
 # -----------------
 # def visualize_center_points_in_point_cloud(point_cloud, center_points):
 #     o3d.visualization.draw_geometries([point_cloud] + [center_points])
-def visualize_circle_fit(points, center_pred, radius, error):
+def visualize_circle_fit(points, center_pred, radius, error, name="Approach 1", 
+                         additional_center_pred=None, additional_radius_pred=None, additional_name="Approach 2",
+                         save_path=None, should_plot=True):
     """
     Visualizes circle fit quality.
 
@@ -94,10 +96,10 @@ def visualize_circle_fit(points, center_pred, radius, error):
 
     # color palette
     POINT_COLOR = "#6c757d"
-    CIRCLE_COLOR = "#0077b6"
     ERROR_COLOR = "#90e0ef"
     MEAN_COLOR = "#52b788"
-    CENTER_COLOR = "#d62828"
+    APPROACH_1_COLOR = "#d62828"
+    APPROACH_2_COLOR = "#0077b6"
 
     # extract the data
     x = points[:, 0]
@@ -108,6 +110,8 @@ def visualize_circle_fit(points, center_pred, radius, error):
 
     # reduce prediction to 2D
     center_pred = center_pred[:2]
+    if additional_center_pred is not None:
+        additional_center_pred = additional_center_pred[:2]
 
     # L1 distance between centers
     l1_center_error = np.sum(np.abs(center_pred - center_mean))
@@ -119,6 +123,12 @@ def visualize_circle_fit(points, center_pred, radius, error):
     cx, cy = center_pred
     x_c = cx + radius * np.cos(t)
     y_c = cy + radius * np.sin(t)
+
+    # additional predicted circle
+    if additional_center_pred is not None:
+        cx_2, cy_2 = additional_center_pred
+        x_c_2 = cx_2 + additional_radius_pred * np.cos(t)
+        y_c_2 = cy_2 + additional_radius_pred * np.sin(t)
 
     # error band (inner + outer circle)
     x_outer = cx + (radius + error) * np.cos(t)
@@ -136,13 +146,15 @@ def visualize_circle_fit(points, center_pred, radius, error):
     y_mean = center_mean[1] + radius_farest * np.sin(t)
 
     # plotting
-    plt.figure(figsize=(7, 7))
+    plt.figure(figsize=(16, 7))
 
     # points
     plt.scatter(x, y, s=15, color=POINT_COLOR, alpha=0.6, label="Manhole Points")
 
     # predicted circle
-    plt.plot(x_c, y_c, color=CIRCLE_COLOR, linewidth=2.5, label="Predicted circle")
+    plt.plot(x_c, y_c, color=APPROACH_1_COLOR, linewidth=2.5, label=f"Predicted circle ({name})")
+    if additional_center_pred is not None:
+        plt.plot(x_c_2, y_c_2, color=APPROACH_2_COLOR, linewidth=2.5, label=f"Predicted circle ({additional_name})")
 
     # error band -> area 
     # plt.plot(x_outer, y_outer, "--", label="+ error band")
@@ -155,7 +167,9 @@ def visualize_circle_fit(points, center_pred, radius, error):
     plt.plot(x_mean, y_mean, "g:", label="Mean-center circle")
 
     # centers
-    plt.scatter(*center_pred, color=CENTER_COLOR, s=80, edgecolor="white", zorder=5, label="Predicted center")
+    plt.scatter(*center_pred, color=APPROACH_1_COLOR, s=80, edgecolor="white", zorder=5, label=f"Predicted center ({name})")
+    if additional_center_pred is not None:
+        plt.scatter(*additional_center_pred, color=APPROACH_2_COLOR, s=80, edgecolor="white", zorder=5, label=f"Predicted center ({additional_name})")
     plt.scatter(*center_mean, color=MEAN_COLOR, s=60, edgecolor="white", zorder=5, label="Mean center")
 
     # center difference
@@ -166,6 +180,21 @@ def visualize_circle_fit(points, center_pred, radius, error):
         linestyle=":",
         linewidth=1
     )
+    if additional_center_pred is not None:
+        plt.plot(
+            [additional_center_pred[0], center_mean[0]],
+            [additional_center_pred[1], center_mean[1]],
+            color="black",
+            linestyle=":",
+            linewidth=1
+        )
+        plt.plot(
+            [additional_center_pred[0], center_pred[0]],
+            [additional_center_pred[1], center_pred[1]],
+            color="black",
+            linestyle=":",
+            linewidth=1
+        )
 
     # annotation
     plt.title("Circle Fit Evaluation", fontsize=14, weight="bold", y=0.98)
@@ -178,7 +207,11 @@ def visualize_circle_fit(points, center_pred, radius, error):
     plt.axis("equal")
     plt.margins(0.1)
 
-    plt.show()
+    if save_path is not None:
+        plt.savefig(save_path)
+
+    if should_plot:
+        plt.show()
 
 
 

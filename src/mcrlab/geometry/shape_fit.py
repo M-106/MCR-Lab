@@ -133,9 +133,20 @@ class CircleModel:
 
     Fits a circle to 2D points: (x - cx)^2 + (y - cy)^2 = r^2
     """
+    def __init__(self):
+        self.params = None
+
+    @classmethod
+    def from_estimate(cls, data, *args, **kwargs):
+        instance = cls()
+        success = instance.estimate(data, *args, **kwargs)
+        return instance if success else None
+
     def estimate(self, data):
         """
         Fit circle to minimal sample (3 points) using algebraic method.
+
+        Called every iteration of RANSAC with 3 random points.
         """
         x, y = data[:, 0], data[:, 1]
 
@@ -165,10 +176,13 @@ class CircleModel:
             # - no "learning"
         except np.linalg.LinAlgError:
             return False
+        
         cx, cy, c = result
+
         r_sq = c + cx**2 + cy**2
         if r_sq <= 0:
             return False
+        
         self.params = (cx, cy, np.sqrt(r_sq))
         return True
 
@@ -176,9 +190,25 @@ class CircleModel:
         """
         Euclidean distance from each point to the circle boundary.
         """
+        if self.params is None:
+            raise ValueError("Got no params, unexpected!")
+            return np.full(len(data), np.inf)
+        
         cx, cy, r = self.params
         x, y = data[:, 0], data[:, 1]
-        return np.abs( np.sqrt( (x - cx)**2 + (y - cy)**2 ) - r )
+        
+        # return np.abs( np.sqrt( (x - cx)**2 + (y - cy)**2 ) - r )
+    
+        # distances = np.sqrt((x - cx)**2 + (y - cy)**2)
+        # return (distance - r) ** 2
+
+        # return np.abs((x - cx)**2 + (y - cy)**2 - r**2)
+
+        f = (x - cx)**2 + (y - cy)**2 - r**2
+
+        grad_sq = 4 * ((x - cx)**2 + (y - cy)**2)
+
+        return np.abs(f) / np.sqrt(grad_sq + 1e-12)
 
     def predict_xy(self, t):
         cx, cy, r = self.params
@@ -197,8 +227,8 @@ def fit_circle_ransac(x, y, method="sklearn"):
             data,
             CircleModel,
             min_samples=3,
-            residual_threshold=0.01 * np.std(data),  # 1 cm tolerance (same as before) + dynamic thresholding
-            max_trials=1000,
+            residual_threshold=0.01,  #  * np.std(data),  # 1 cm tolerance (same as before) + dynamic thresholding
+            max_trials=10000,
         )
 
         if model is None:
@@ -208,6 +238,21 @@ def fit_circle_ransac(x, y, method="sklearn"):
         inlier_points = data[inliers]
         model.estimate(inlier_points)
 
+        # Residuals for all points
+        all_residuals = model.residuals(data)
+
+        # Residuals for inliers only
+        inlier_residuals = all_residuals[inliers]
+
+        # Common error metrics
+        error = np.mean(inlier_residuals)
+        # rmse = np.sqrt(np.mean(inlier_residuals**2))
+        # median_error = np.median(inlier_residuals)
+        # max_error = np.max(inlier_residuals)
+
+        # RANSAC quality
+        # inlier_ratio = np.sum(inliers) / len(inliers)
+
         cx, cy, radius = model.params
         center = np.array([cx, cy])
         axis = np.array([0, 0, 1])  # Normal axis (z), matches 3D RANSAC convention
@@ -216,12 +261,31 @@ def fit_circle_ransac(x, y, method="sklearn"):
         circle = pyrsc.Circle()
         center, axis, radius, inliers = circle.fit(points_3d, thresh=0.01)  # 5 cm tolerance -> maybe increase if not working because of scanline-artefacts (gaps)
         center = center[:2]
+        
+        distances = np.linalg.norm(
+            np.column_stack((x, y)) - center,
+            axis=1
+        )
+
+        # Residuals = distance to circle boundary
+        residuals = np.abs(distances - radius)
+
+        # Inlier residuals
+        inlier_residuals = residuals[inliers]
+
+        # Metrics
+        error = np.mean(inlier_residuals)
+        # rmse = np.sqrt(np.mean(inlier_residuals**2))
+        # median_error = np.median(inlier_residuals)
+        # max_error = np.max(inlier_residuals)
+
+        # inlier_ratio = len(inliers) / len(points_3d)
     else:
         raise ValueError(f"Got unknown method: '{method}'")
     
     # FIXME -> or own implementation? First get others work
 
-    return center, axis, radius, inliers
+    return center, axis, radius, inliers, error
 
 
 
@@ -238,16 +302,32 @@ def fit_circle_ransac_3D(points, use_projection=True):
         x, y = project_to_plane(centroid=centroid, points=points, basis_x=basis_x, basis_y=basis_y)
 
         # optimize circle shape
-        center, axis, radius, inliers = fit_circle_ransac(x, y)
+        center, axis, radius, inliers, error = fit_circle_ransac(x, y)
         axis = normal
 
         # back projection
         center = centroid + (center[0] * basis_x) + (center[1] * basis_y)
     else:
         circle = pyrsc.Circle()
-        center, axis, radius, inliers = circle.fit(points, thresh=0.01)
+        center, axis, radius, inliers = circle.fit(points, thresh=10.0, maxIteration=1000)
 
-    return center, axis, radius, inliers
+        print(center)
+
+        distances = np.linalg.norm(
+            points - center,
+            axis=1
+        )
+
+        # Residuals = distance to circle boundary
+        residuals = np.abs(distances - radius)
+
+        # Inlier residuals
+        inlier_residuals = residuals[inliers]
+
+        # Metric
+        error = np.mean(inlier_residuals)
+
+    return center, axis, radius, inliers, error
 
 
 
@@ -293,19 +373,48 @@ def extract_center_point(points, method, use_2d_version, use_projection=False):
             }
     elif method == "ransac":
         if use_2d_version:
-            center, axis, r, inliers = fit_circle_ransac(x, y, method="sklearn")
+            center, axis, r, inliers, error = fit_circle_ransac(x, y, method="sklearn")
         else:
-            center, axis, r, inliers = fit_circle_ransac_3D(points, use_projection=use_projection)
+            center, axis, r, inliers, error = fit_circle_ransac_3D(points, use_projection=use_projection)
 
         return {
             "center": center,
             "radius": r,
             "inliers": inliers,
-            "error": None,
+            "error": error,
             "loss": None
         }
     else:
         raise ValueError(f"Center Point Extraction Method not Found: {method}")
+
+
+
+def use_points_and_extract_center_point(clusters, method, use_projection=True):
+    candidates = []
+
+    for cluster in clusters:
+
+        cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()
+        result = extract_center_point(
+            points=cluster_points,
+            method=method,
+            use_2d_version=False,
+            use_projection=use_projection
+        )
+
+        if result is None:
+            continue
+
+        center = result["center"]
+        radius = result["radius"]
+        inliers = result["inliers"]
+        error = result["error"]
+        loss = result["loss"]
+
+        # if 0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30):
+        candidates.append((center, radius, cluster, error, loss))
+
+    return candidates
 
 
 

@@ -4,6 +4,8 @@
 import numpy as np
 import open3d as o3d
 
+from scipy.spatial.distance import pdist
+
 
 
 # ---------------------
@@ -422,6 +424,84 @@ def extract_manhole(points, label_value=104002, points_around_dist=5):
     else:
         raise RuntimeError("PointCloud does not have instance Label! But is needed.")
 
+
+
+# ----------------
+# > Circle Utils <
+# ----------------
+def sample_uniform_circle(n, max_radius=1.0, add_z=False):
+    theta = np.random.uniform(0, 2*np.pi, n)
+    r = max_radius * np.sqrt(np.random.uniform(0, 1, n))
+
+    # convert to x, y coordiantes from circle coordinates
+    x = r * np.cos(theta)
+    y = r * np.sin(theta)
+
+    if add_z:
+        return np.stack([x, y, np.zeros(x.shape)], axis=1)  
+    else:  
+        return np.stack([x, y], axis=1)
+
+
+
+def sample_biased_circle(n, radius=1.0, bias_strength=1.0):
+    points = []
+
+    while len(points) < n:
+        # candidate
+        p = sample_uniform_circle(1, radius)[0]
+        x, y = p
+
+        # Bias -> right/left side more dense?
+        weight = 0.5 + 0.5 * (1 + bias_strength * x / radius)
+
+        if np.random.rand() < weight:
+            points.append(p)
+
+    return np.array(points)
+
+
+
+def add_random_dense_manipulation(points, n):
+    # Choose a random point
+    idx = np.random.randint(0, len(points))
+    chosen_point = points[idx] # [x, y]
+
+    # calc max distance for point changing range
+    max_dist = np.max(pdist(points))
+    radius = max_dist * 0.01
+
+    # create new points
+    offsets = np.random.uniform(-radius, radius, size=(n, 2))
+    new_points = chosen_point + offsets
+
+    # merge to the old points
+    return np.concatenate([points, new_points], axis=0)
+
+
+
+def add_random_dense_manipulation_point_cloud(points, n):
+    points = points.clone()
+    points_arr = points.point[get_coordinate_attribute(points)].numpy()
+
+    # Choose a random point
+    idx = np.random.randint(0, len(points_arr))
+    chosen_point = points_arr[idx] # [x, y, z]
+
+    # calc max distance for point changing range
+    max_dist = np.max(pdist(points_arr))
+    radius = max_dist * 0.1
+
+    # create new points
+    offsets = np.random.uniform(-radius, radius, size=(n, 3))
+    new_points = chosen_point + offsets
+
+    # merge to the old points
+    merged = np.concatenate([points_arr, new_points], axis=0)
+
+    points.point[get_coordinate_attribute(points)] = o3d.core.Tensor(merged, o3d.core.Dtype.Float32)
+
+    return points
 
 
 

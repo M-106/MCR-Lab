@@ -214,5 +214,6 @@ cloth_nodes.txt
 
 /test_bev_images
 /bev_samples
+/center_estimation_stresstest
 
 .env

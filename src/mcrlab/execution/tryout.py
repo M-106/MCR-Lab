@@ -1,6 +1,8 @@
 # -----------
 # > Imports <
 # -----------
+import shutil
+
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -24,8 +26,9 @@ from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, \
                                      get_class_attribute, get_instance_attribute, \
-                                     extract_manhole
-from mcrlab.geometry.shape_fit import use_label_candidates_and_extract_center_point
+                                     extract_manhole, add_random_dense_manipulation_point_cloud
+from mcrlab.geometry.shape_fit import use_label_candidates_and_extract_center_point, \
+                                      use_points_and_extract_center_point
 from mcrlab.geometry.utils import visualize_circle_fit
 
 
@@ -388,11 +391,9 @@ def manhole_BEV_intensity_test(config, label_value=104002):
                 ax[2].set_title("Manhole MArked BEV Image", fontsize=14, fontweight='bold')
 
                 plt.show()
-                break
-
-        # find BEVs with manholes
+                # break
     
-        break
+        # break
 
 
 
@@ -449,37 +450,133 @@ def preprocessing_speed_test(config):
     pass
 
 
+def circular_manhole_classification_test(config):
+    pass
+
+    # plot the intensity / points and the classification (and maybe the 3D vis with a little bit environment)
+
 
 def center_robustnest_test(config):
-    pass
+    print("\n --- Stresstest Center Estimation (with labels) ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type="train", 
+                                    transform=None,  # get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    # clear save path
+    path = "./center_estimation_stresstest"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
+    least_square_errors = []
+    ransac_errors = []
+    for batch in tqdm(data_loader, total=len(data_loader), desc="Center Estimation Stresstest"):
+        point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
+        # print_pc(point_cloud)
+
+        # get cluster and manupilate it
+        _, _, _, original_cluster_pcs, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False)
+        
+        if original_cluster_pcs is None:
+            cur_pc += 1
+            continue
+
+        manipulated_clusters = []
+        for cur_cluster in original_cluster_pcs:
+            manipulated_clusters.append(
+                add_random_dense_manipulation_point_cloud(cur_cluster, n=np.random.randint(1, max(10, 10*cur_pc)))
+            )
+
+        print("\n> Least Square Circle Fit Check <\n")
+        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, error_s = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=manipulated_clusters)
+
+        print("\n> RANSAC Fit Check <\n")
+        center_coordinates_ransac, radius_ransac, points_ransac, cluster_point_clouds, error_r = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, should_visualize=False, clusters=manipulated_clusters)
+
+        # compare similarity
+        for cur_vis in range(len(points_ransac)):
+            plot_name = f"pc_{cur_pc}_manhole_{cur_vis}.png"
+
+            # save them -> don't show
+            visualize_circle_fit(points=points_ransac[cur_vis], 
+                                 center_pred=center_coordinates_square[cur_vis], 
+                                 radius=radius_squares[cur_vis], 
+                                 error=error_s[cur_vis], 
+                                 name="Least-Squares", 
+                                 additional_center_pred=center_coordinates_ransac[cur_vis], 
+                                 additional_radius_pred=radius_ransac[cur_vis], 
+                                 additional_name="RANSAC",
+                                 should_plot=False,
+                                 save_path=os.path.join(path, plot_name))
+
+        cur_pc += 1
+        least_square_errors.append(np.array(error_s).mean())
+        ransac_errors.append(np.array(error_r).mean())
+
+
+    # sum error
+    least_square_errors = np.array(least_square_errors)
+    print(f"Least Square Error")
+    print(f"  - mean: {least_square_errors.mean():.4f}")
+    print(f"  - min: {least_square_errors.min():.4f}")
+    print(f"  - max: {least_square_errors.max():.4f}")
+    print(f"  - std: {least_square_errors.std():.4f}")
+
+    ransac_errors = np.array(ransac_errors)
+    print(f"RANSAC Error")
+    print(f"  - mean: {ransac_errors.mean():.4f}")
+    print(f"  - min: {ransac_errors.min():.4f}")
+    print(f"  - max: {ransac_errors.max():.4f}")
+    print(f"  - std: {ransac_errors.std():.4f}")
+
+    
     # stress test for least squares if the data is not euqually distributed (in live system relevant)
     # But for data annotation only relevant if the data is not always equal distributed 
 
 
 
-def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return=False):
+def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return=False, should_visualize=True, clusters=None):
     """
     Helper Function
     """
     print("Compute centers...")
-    center_points = use_label_candidates_and_extract_center_point(points=point_cloud, 
-                                                                use_2d_version=False, 
-                                                                label_value=104002, 
-                                                                method=method, 
-                                                                use_projection=True, 
-                                                                cluster_if_needed=True)
+    if point_cloud is not None:
+        center_points = use_label_candidates_and_extract_center_point(points=point_cloud, 
+                                                                    use_2d_version=False, 
+                                                                    label_value=104002, 
+                                                                    method=method, 
+                                                                    use_projection=True, 
+                                                                    cluster_if_needed=True)
+    else:
+        center_points = use_points_and_extract_center_point(clusters=clusters, 
+                                                            method=method, 
+                                                            use_projection=True)
+        
+    if len(center_points) <= 0:
+        if extended_return:
+            return center_points, None, None, None, None
+        else:
+            return center_points
     
     # visualize -> all points in black, manholes in yellow and center point in red
-    print("Compute loss and error + preprare visualization...")
-    pcd_vis = point_cloud.clone()
+    if should_visualize:
+        if point_cloud is not None:
+            print("Compute loss and error + preprare visualization...")
+            pcd_vis = point_cloud.clone()
 
-    class_key = get_class_attribute(point_cloud)
-    classes = point_cloud.point[class_key].cpu().numpy()
+            class_key = get_class_attribute(point_cloud)
+            classes = point_cloud.point[class_key].cpu().numpy()
 
-    color = np.full([classes.shape[0], 3], 0.0, dtype=np.float32)
-    # color[classes != 104002] = [0.0, 0.0, 0.0]
-    color[(classes == 104002).flatten()] = [1.0, 0.95, 0.0]
-    pcd_vis.point["colors"] = o3d.core.Tensor(color, dtype=o3d.core.Dtype.Float32)
+            color = np.full([classes.shape[0], 3], 0.0, dtype=np.float32)
+            # color[classes != 104002] = [0.0, 0.0, 0.0]
+            color[(classes == 104002).flatten()] = [1.0, 0.95, 0.0]
+            pcd_vis.point["colors"] = o3d.core.Tensor(color, dtype=o3d.core.Dtype.Float32)
 
     # visualize found points (and show losses!)
     center_coordinates = np.full((len(center_points), 3), 0.0, dtype=np.float32)
@@ -491,6 +588,7 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return
     if extended_return:
         all_radius = np.full((len(center_points), 1), 0.0, dtype=np.float32)
         cluster_points = []
+        cluster_point_clouds = []
 
     for idx, item in enumerate(center_points):
         center, radius, cluster, error, loss = item
@@ -509,6 +607,7 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return
         if extended_return:
             all_radius[idx] = radius
             cluster_points.append(cluster.point[get_coordinate_attribute(cluster)].numpy())
+            cluster_point_clouds.append(cluster)
 
     if len(center_points) == 0:
         raise ValueError("No center points found!")
@@ -534,19 +633,21 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return
     else:
         print("\nNo Loss available.")
 
-    print("Visualize (yellow are manhole and red the predicted center points)")
-    new_colors = np.full((center_coordinates.shape[0], 3), [1.0, 0.0, 0.1], dtype=np.float32)
-    new_colors = o3d.core.Tensor(new_colors, dtype=o3d.core.Dtype.Float32)
+    if should_visualize:
+        if point_cloud is not None:
+            print("Visualize (yellow are manhole and red the predicted center points)")
+            new_colors = np.full((center_coordinates.shape[0], 3), [1.0, 0.0, 0.1], dtype=np.float32)
+            new_colors = o3d.core.Tensor(new_colors, dtype=o3d.core.Dtype.Float32)
 
-    coordinate_key = get_coordinate_attribute(point_cloud)
-    new_point = o3d.core.Tensor(center_coordinates, dtype=pcd_vis.point[coordinate_key].dtype)
-    pcd_vis.point[coordinate_key] = o3d.core.concatenate([pcd_vis.point[coordinate_key], new_point], axis=0)
-    pcd_vis.point["colors"] = o3d.core.concatenate([pcd_vis.point["colors"], new_colors], axis=0)
+            coordinate_key = get_coordinate_attribute(point_cloud)
+            new_point = o3d.core.Tensor(center_coordinates, dtype=pcd_vis.point[coordinate_key].dtype)
+            pcd_vis.point[coordinate_key] = o3d.core.concatenate([pcd_vis.point[coordinate_key], new_point], axis=0)
+            pcd_vis.point["colors"] = o3d.core.concatenate([pcd_vis.point["colors"], new_colors], axis=0)
 
-    visualize(pcd_vis, color_mode=None)
+            visualize(pcd_vis, color_mode=None)
 
     if extended_return:
-        return center_coordinates, all_radius, cluster_points, total_error
+        return center_coordinates, all_radius, cluster_points, cluster_point_clouds, total_error
     else:
         return center_coordinates
 
@@ -568,22 +669,66 @@ def center_prediction_use_labels_as_candidates_test(config):
         print_pc(point_cloud)
 
         print("\n> Least Square Circle Fit Check <\n")
-        center_coordinates_square, radius, points, error = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True)
+        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, error = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True)
 
-        # visualize error
+        # # visualize error
+        # for cur_vis in range(len(points_square)):
+        #     visualize_circle_fit(points=points_square[cur_vis], 
+        #                          center_pred=center_coordinates_square[cur_vis], 
+        #                          radius=radius_squares[cur_vis], 
+        #                          error=error[cur_vis])
+
+        print("\n> RANSAC Fit Check <\n")
+        center_coordinates_ransac, radius_ransac, points, cluster_point_clouds, error = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, clusters=cluster_point_clouds)
+        # print(f"Center Coordinates, RANSAC: {center_coordinates_ransac}")
+        # # visualize error
+        # for cur_vis in range(len(points)):
+        #     visualize_circle_fit(points=points[cur_vis], 
+        #                          center_pred=center_coordinates_ransac[cur_vis], 
+        #                          radius=radius_ransac[cur_vis], 
+        #                          error=error[cur_vis])
+
+        # DEBUGGING
+        print(points[0].shape)
+        print(points_square[0].shape)
+        # print(points == points_square)
+
+        # compare similarity?
+        print(f"len(points) = {len(points)}\nlen(points_square) = {len(points_square)}")
+        assert len(points) == len(points_square)
+        clusters_are_equal = True
+        for cur_cluster_idx in range(len(points)):
+            if points[cur_cluster_idx].shape != points_square[cur_cluster_idx].shape:
+                clusters_are_equal = False
+                raise ValueError("Shapes does not match")
+                break
+        print("Cluster Point arrangment is equal.")
+
+        # approach_2_to_1_mapping = {}
+        # for cur_idx_approach_2 in range(len(points)):
+        #     mapping_found = False
+        #     for cur_idx_approach_1 in range(len(points_square)):
+        #         if points[cur_idx_approach_1].shape == points_square[cur_idx_approach_2].shape and \
+        #             points[cur_idx_approach_1] == points_square[cur_idx_approach_2]:
+        #             approach_2_to_1_mapping[cur_idx_approach_1] = cur_idx_approach_2
+        #             mapping_found = True
+        #             break
+
+        #     if not mapping_found:
+        #         raise RuntimeError("Mapping could not be completed.")
+            
+        # raise RuntimeError("Debugging Stop.")
+
+
         for cur_vis in range(len(points)):
             visualize_circle_fit(points=points[cur_vis], 
                                  center_pred=center_coordinates_square[cur_vis], 
-                                 radius=radius[cur_vis], 
-                                 error=error[cur_vis])
-
-        # print("\n> RANSAC Fit Check <\n")
-        # center_coordinates_ransac = center_estimation_3d_pipeline_debugging(point_cloud, method="ransac")
-        # FIXME -> RANSAC check, look at the outputed points
-        # print(f"Center Coordinates, RANSAC: {center_coordinates_ransac}")
-
-        # compare similarity?
-        # FIXME -> check the difference of the center points! Should have the same order
+                                 radius=radius_squares[cur_vis], 
+                                 error=error[cur_vis], 
+                                 name="Least-Squares", 
+                                 additional_center_pred=center_coordinates_ransac[cur_vis], 
+                                 additional_radius_pred=radius_ransac[cur_vis], 
+                                 additional_name="RANSAC")
 
         # Visualize Error
         # FIXME
@@ -634,8 +779,9 @@ def tryout(config):
     
     # manhole_intensity_test(config)
     # manhole_density_test(config)
-    manhole_BEV_intensity_test(config, label_value=104002)
+    # manhole_BEV_intensity_test(config, label_value=104002)
 
+    center_robustnest_test(config)
     # center_prediction_use_labels_as_candidates_test(config)
     # center_prediction_use_labels_as_candidates_without_instances_test(config)
     # center_prediction_without_labels_test(config)
