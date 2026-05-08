@@ -314,7 +314,7 @@ def visualize(point_cloud, color_mode=None):
 
 
 
-def visualize_intensity_in_2d(points, color):
+def visualize_intensity_in_2d(points, color, should_plot=True, save_path=None):
     if not isinstance(points, np.ndarray):
         raise ValueError(f"Points must be a numpy array, but got: {type(points)}")
     
@@ -353,7 +353,13 @@ def visualize_intensity_in_2d(points, color):
     plt.axis("equal")
     plt.margins(0.1)
 
-    plt.show()
+    if save_path is not None:
+        plt.savefig(save_path)
+
+    if should_plot:
+        plt.show()
+
+    plt.close()
 
 
 

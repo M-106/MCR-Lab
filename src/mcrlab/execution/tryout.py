@@ -26,7 +26,8 @@ from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, \
                                      get_class_attribute, get_instance_attribute, \
-                                     extract_manhole, add_random_dense_manipulation_point_cloud
+                                     extract_manhole, add_random_dense_manipulation_point_cloud, \
+                                     classify_manhole
 from mcrlab.geometry.shape_fit import use_label_candidates_and_extract_center_point, \
                                       use_points_and_extract_center_point
 from mcrlab.geometry.utils import visualize_circle_fit
@@ -307,6 +308,14 @@ def manhole_intensity_test(config):
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
+    # clear save path
+    path = "./output/manhole_intensity"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
+
     for batch in data_loader:
         point_cloud = batch[0]
         # point_cloud = point_cloud.get_as_o3d()
@@ -315,20 +324,22 @@ def manhole_intensity_test(config):
         print("\n> Manhole Intensity Check <\n")
         manholes = extract_manhole(point_cloud, label_value=104002, points_around_dist=2)
 
-        for cur_manhole in manholes:
+        for cur_vis, cur_manhole in enumerate(manholes):
             # Visualize Manhole
 
             # 2D
+            plot_name = f"pc_{cur_pc}_manhole_{cur_vis}.png"
             points = cur_manhole.point[get_coordinate_attribute(cur_manhole)].numpy()
             color = cur_manhole.point[get_intensity_attribute(cur_manhole)].numpy()
-            visualize_intensity_in_2d(points, color)
+            visualize_intensity_in_2d(points, color, should_plot=False, save_path=os.path.join(path, plot_name))
 
             # 3D
-            visualize(cur_manhole, color_mode="intensity")
+            # visualize(cur_manhole, color_mode="intensity")
 
-            break
+            # break
     
-        break
+        cur_pc += 1
+        # break
 
 
 
@@ -450,10 +461,45 @@ def preprocessing_speed_test(config):
     pass
 
 
-def circular_manhole_classification_test(config):
-    pass
 
-    # plot the intensity / points and the classification (and maybe the 3D vis with a little bit environment)
+def circular_manhole_classification_test(config):
+    print("\n --- Center Shape Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type="train", 
+                                    transform=None,  # get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    # clear save path
+    path = "./output/center_shape_check"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
+    total_result = {"Circle": 0, "No Circle": 0}
+    for batch in tqdm(data_loader, total=len(data_loader), desc="Center Estimation Stresstest"):
+        point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
+        # print_pc(point_cloud)
+
+        # get maholes
+        manholes = extract_manhole(point_cloud, label_value=104002, points_around_dist=0)
+
+        for cur_vis, cur_manhole in enumerate(manholes):
+            plot_name = f"pc_{cur_pc}_manhole_{cur_vis}.png"
+            is_circle = classify_manhole(cur_manhole, save_path=os.path.join(path, plot_name), should_plot=False)
+            if is_circle:
+                total_result["Circle"] += 1
+            else:
+                total_result["No Circle"] += 1
+
+        cur_pc += 1
+        
+    print(total_result)
+
 
 
 def center_robustnest_test(config):
@@ -467,7 +513,7 @@ def center_robustnest_test(config):
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
     # clear save path
-    path = "./center_estimation_stresstest"
+    path = "./output/center_estimation_stresstest"
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path, exist_ok=True)
@@ -663,13 +709,28 @@ def center_prediction_use_labels_as_candidates_test(config):
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
+    # clear save path
+    path = "./output/center_estimation"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
+
     for batch in data_loader:
         point_cloud = batch[0]
         # point_cloud = point_cloud.get_as_o3d()
         print_pc(point_cloud)
 
+        # get cluster
+        _, _, _, original_cluster_pcs, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False)
+
+        if original_cluster_pcs is None:
+            cur_pc += 1
+            continue
+
         print("\n> Least Square Circle Fit Check <\n")
-        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, error = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True)
+        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, error = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=original_cluster_pcs)
 
         # # visualize error
         # for cur_vis in range(len(points_square)):
@@ -679,7 +740,7 @@ def center_prediction_use_labels_as_candidates_test(config):
         #                          error=error[cur_vis])
 
         print("\n> RANSAC Fit Check <\n")
-        center_coordinates_ransac, radius_ransac, points, cluster_point_clouds, error = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, clusters=cluster_point_clouds)
+        center_coordinates_ransac, radius_ransac, points, cluster_point_clouds, error = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, clusters=original_cluster_pcs, should_visualize=False)
         # print(f"Center Coordinates, RANSAC: {center_coordinates_ransac}")
         # # visualize error
         # for cur_vis in range(len(points)):
@@ -721,6 +782,7 @@ def center_prediction_use_labels_as_candidates_test(config):
 
 
         for cur_vis in range(len(points)):
+            plot_name = f"pc_{cur_pc}_manhole_{cur_vis}.png"
             visualize_circle_fit(points=points[cur_vis], 
                                  center_pred=center_coordinates_square[cur_vis], 
                                  radius=radius_squares[cur_vis], 
@@ -728,12 +790,13 @@ def center_prediction_use_labels_as_candidates_test(config):
                                  name="Least-Squares", 
                                  additional_center_pred=center_coordinates_ransac[cur_vis], 
                                  additional_radius_pred=radius_ransac[cur_vis], 
-                                 additional_name="RANSAC")
+                                 additional_name="RANSAC",
+                                 save_path=os.path.join(path, plot_name), 
+                                 should_plot=False)
 
-        # Visualize Error
-        # FIXME
+        cur_pc += 1
 
-        break
+    print("Successfull finished!")
 
 
 
@@ -780,14 +843,17 @@ def tryout(config):
     # manhole_intensity_test(config)
     # manhole_density_test(config)
     # manhole_BEV_intensity_test(config, label_value=104002)
+    # circular_manhole_classification_test(config)
 
-    center_robustnest_test(config)
-    # center_prediction_use_labels_as_candidates_test(config)
-    # center_prediction_use_labels_as_candidates_without_instances_test(config)
-    # center_prediction_without_labels_test(config)
-    # center_2D_prediction_use_labels_as_candidates_test(config)
-    # center_2D_prediction_use_labels_as_candidates_without_instances_test(config)
-    # center_2D_prediction_without_labels_test(config)
+    # center_robustnest_test(config)
+    center_prediction_use_labels_as_candidates_test(config)
+
+    # Not done
+        # center_prediction_use_labels_as_candidates_without_instances_test(config)
+        # center_prediction_without_labels_test(config)
+        # center_2D_prediction_use_labels_as_candidates_test(config)
+        # center_2D_prediction_use_labels_as_candidates_without_instances_test(config)
+        # center_2D_prediction_without_labels_test(config)
     
 
     

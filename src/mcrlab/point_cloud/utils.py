@@ -5,6 +5,8 @@ import numpy as np
 import open3d as o3d
 
 from scipy.spatial.distance import pdist
+from scipy.spatial import ConvexHull
+import matplotlib.pyplot as plt
 
 
 
@@ -502,6 +504,278 @@ def add_random_dense_manipulation_point_cloud(points, n):
     points.point[get_coordinate_attribute(points)] = o3d.core.Tensor(merged, o3d.core.Dtype.Float32)
 
     return points
+
+
+
+# def classify_manhole(points,
+#                      num_angle_bins=180,
+#                      radial_percentile=95,
+#                      residual_threshold=0.03,
+#                      min_coverage=0.7,
+#                      save_path=None,
+#                      should_plot=False):
+
+#     """
+#     Detect whether a 2D point cloud represents a circular structure.
+
+#     This method is designed for sparse and noisy LiDAR point clouds where
+#     the interior point distribution is unreliable due to scanlines,
+#     occlusions, varying density, or incomplete coverage.
+
+#     Instead of analyzing the full point distribution, the algorithm focuses
+#     on the OUTER BOUNDARY of the point cloud, because the geometric shape
+#     of a circle is primarily encoded in its border.
+
+#     Algorithm Overview
+#     ------------------
+#     1. Estimate an initial center using the mean of all points.
+
+#     2. Convert all points into polar coordinates:
+#            radius r
+#            angle theta
+
+#     3. Split the point cloud into angular bins.
+
+#     4. For each angular bin:
+#            select only the outermost points
+#            (using a high radial percentile)
+
+#        This extracts a robust approximation of the boundary even when:
+#            - scanlines are visible
+#            - point density is anisotropic
+#            - the interior is noisy
+#            - parts of the circle are missing
+
+#     5. Fit a circle to the extracted boundary points using least squares.
+
+#     6. Measure:
+#            - radial residual error
+#            - angular coverage
+
+#     7. Decide whether the shape is circular based on:
+#            - normalized fitting error
+#            - sufficient angular coverage
+#     """
+
+#     if not isinstance(points, np.ndarray):
+#         raise ValueError("points must be numpy array")
+
+#     x = points[:, 0]
+#     y = points[:, 1]
+
+#     # 1. estimate center
+#     cx = np.mean(x)
+#     cy = np.mean(y)
+
+#     x0 = x - cx
+#     y0 = y - cy
+
+#     theta = np.arctan2(y0, x0)
+#     r = np.sqrt(x0**2 + y0**2)
+
+#     # 2. extract boundary points
+#     bins = np.linspace(-np.pi, np.pi, num_angle_bins + 1)
+
+#     boundary_points = []
+
+#     for i in range(num_angle_bins):
+
+#         mask = (theta >= bins[i]) & (theta < bins[i+1])
+
+#         if np.sum(mask) == 0:
+#             continue
+
+#         r_bin = r[mask]
+
+#         # take outer percentile instead of max
+#         r_thresh = np.percentile(r_bin, radial_percentile)
+
+#         idx = np.where(mask)[0]
+
+#         selected = idx[r_bin >= r_thresh]
+
+#         boundary_points.extend(selected.tolist())
+
+#     boundary_points = np.unique(boundary_points)
+
+#     bx = x[boundary_points]
+#     by = y[boundary_points]
+
+#     # 3. circle fit
+#     A = np.column_stack([
+#         2*bx,
+#         2*by,
+#         np.ones(len(bx))
+#     ])
+
+#     b = bx**2 + by**2
+
+#     params, *_ = np.linalg.lstsq(A, b, rcond=None)
+
+#     cx_fit, cy_fit, c = params
+
+#     radius = np.sqrt(c + cx_fit**2 + cy_fit**2)
+
+#     # 4. residuals
+#     distances = np.sqrt(
+#         (bx - cx_fit)**2 +
+#         (by - cy_fit)**2
+#     )
+
+#     residuals = np.abs(distances - radius)
+
+#     mean_residual = np.mean(residuals)
+
+#     # normalized residual
+#     normalized_error = mean_residual / radius
+
+#     # 5. angular coverage
+#     theta_boundary = np.arctan2(by - cy_fit, bx - cx_fit)
+
+#     hist, _ = np.histogram(
+#         theta_boundary,
+#         bins=num_angle_bins
+#     )
+
+#     coverage = np.sum(hist > 0) / num_angle_bins
+
+    
+#     # 6. make final decision
+#     is_circle = (
+#         normalized_error < residual_threshold
+#         and coverage > min_coverage
+#     )
+
+#     result = {
+#         "is_circle": is_circle,
+#         "center": np.array([cx_fit, cy_fit]),
+#         "radius": radius,
+#         "normalized_error": normalized_error,
+#         "coverage": coverage,
+#         "boundary_points": boundary_points
+#     }
+
+    
+#     # 7. visualize
+#     if should_plot or save_path is not None:
+#         fig, ax = plt.subplots(figsize=(7,7))
+
+#         ax.scatter(x, y, s=5, alpha=0.3)
+
+#         ax.scatter(
+#             bx,
+#             by,
+#             s=12,
+#             label="boundary"
+#         )
+
+#         circle = plt.Circle(
+#             (cx_fit, cy_fit),
+#             radius,
+#             fill=False,
+#             linewidth=2
+#         )
+
+#         ax.add_patch(circle)
+
+#         ax.set_aspect("equal")
+#         ax.legend()
+
+#         if is_circle:
+#             ax.set_title("Shape Check (✅ Is a Circle)")
+#         else:
+#             ax.set_title("Shape Check (❌ Is not a Circle)")
+
+#         if save_path is not None:
+#             plt.savefig(save_path)
+
+#         if should_plot:
+#             plt.show()
+
+#     return result
+
+
+
+def classify_manhole(points, save_path=None, should_plot=False):
+    plt.style.use("seaborn-v0_8-whitegrid")
+
+    # 1. check data format
+    if isinstance(points, o3d.t.geometry.PointCloud):
+        points = points.point[get_coordinate_attribute(points)].numpy()
+    
+    # 2. Project to 2D
+    points_2d = points[:, :2]
+    
+    # 3. Compute the Convex Hull -> the "envelope" of the points
+    # This gives us a clean shape even if the LIDAR points are sparse inside
+    hull = ConvexHull(points_2d)
+    
+    # 4. Extract Area and Perimeter (length) from the hull
+    area = hull.volume  # In 2D, 'volume' is the area
+    perimeter = hull.area  # In 2D, 'area' is the perimeter
+    
+    # 5. Calculate Circularity
+    # -> https://en.wikipedia.org/wiki/Isoperimetric_inequality
+    circularity = (4 * np.pi * area) / (perimeter ** 2)
+    
+    # 6. Classification Logic
+    # Threshold is usually around 0.88 - 0.90
+    if circularity > 0.89:
+        # result = ("Circular", circularity)
+        is_circle = True
+    else:
+        # result = ("Square/Rectangular", circularity)
+        is_circle = False
+    
+
+    # 7. visualize
+    if should_plot or save_path is not None:
+        fig, ax = plt.subplots(figsize=(7,7))
+
+        ax.scatter(points_2d[:, 0], points_2d[:, 1], s=5, alpha=0.3, label="Points")
+
+        # hull vertices in correct order
+        hull_points = points_2d[hull.vertices]
+
+        # close the polygon by repeating the first point
+        hull_points = np.vstack([hull_points, hull_points[0]])
+
+        # plot convex hull
+        ax.plot(hull_points[:, 0],
+                hull_points[:, 1],
+                'r-', lw=2, label="Convex Hull")
+
+        # # highlight hull vertices
+        # ax.scatter(hull_points[:, 0],
+        #         hull_points[:, 1],
+        #         color='red', s=30)
+
+        ax.set_aspect("equal")
+        ax.legend()
+
+        if is_circle:
+            ax.set_title("Shape Check (✅ Is a Circle)")
+        else:
+            ax.set_title("Shape Check (❌ Is not a Circle)")
+
+        if save_path is not None:
+            plt.savefig(save_path)
+
+        if should_plot:
+            plt.show()
+
+        plt.close(fig)
+
+
+    return is_circle
+
+
+
+
+
+
+
+
 
 
 
