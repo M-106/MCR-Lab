@@ -28,9 +28,10 @@ from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_att
                                      get_class_attribute, get_instance_attribute, \
                                      extract_manhole, add_random_dense_manipulation_point_cloud, \
                                      classify_manhole
-from mcrlab.geometry.shape_fit import use_label_candidates_and_extract_center_point, \
-                                      use_points_and_extract_center_point
-from mcrlab.geometry.utils import visualize_circle_fit
+from mcrlab.classic.shape_fit import use_label_candidates_and_extract_center_point, \
+                                      use_points_and_extract_center_point, \
+                                      classic_manhole_prediction_pipeline
+from mcrlab.classic.utils import visualize_circle_fit
 
 
 
@@ -42,7 +43,7 @@ def simple_viusalize_point_cloud(config):
     #     dataset = ParisLille3DDataset(path=config.data.path, type="train", transform=None, 
     #                                   preprocessed=config.data.preprocessed, return_train_format=False)
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                  type="train", 
+                                  type=config.data.type, 
                                   transform=get_basic_transform(num_points=-1),
                                   batch_size=1, shuffle=False, num_workers=1,
                                   preprocessed=config.data.preprocessed, return_train_format=False)
@@ -57,7 +58,7 @@ def simple_viusalize_point_cloud(config):
 def torch_tensor_loading(config):
     # PyTorch Dataset try out
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -76,7 +77,7 @@ def torch_tensor_loading(config):
 def bev_trying(config):
     # PyTorch Dataset try out
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -146,7 +147,7 @@ def bev_segmentation_trying(config):
 
     # PyTorch Dataset try out
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -203,7 +204,7 @@ def bev_segmentation_trying(config):
 def bev_working_testing(config):
     # LOAD POINT CLOUD
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1), 
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -243,7 +244,7 @@ def bev_preprocessed_loading_working_testing(config):
 
     # LOAD POINT CLOUD
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1), 
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -272,7 +273,7 @@ def bev_preprocessed_loading_working_testing(config):
 
 def train_data_testing(config):
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=True)
@@ -303,13 +304,13 @@ def manhole_intensity_test(config):
 
     print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
     # clear save path
-    path = "./output/manhole_intensity"
+    path = f"./output/manhole_intensity_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path, exist_ok=True)
@@ -322,7 +323,11 @@ def manhole_intensity_test(config):
         print_pc(point_cloud)
 
         print("\n> Manhole Intensity Check <\n")
-        manholes = extract_manhole(point_cloud, label_value=104002, points_around_dist=2)
+        if config.data.name == "sud":
+            label_value = 4
+        else:
+            label_value = 104002
+        manholes = extract_manhole(point_cloud, label_value=label_value, points_around_dist=2)
 
         for cur_vis, cur_manhole in enumerate(manholes):
             # Visualize Manhole
@@ -343,19 +348,30 @@ def manhole_intensity_test(config):
 
 
 
-def manhole_BEV_intensity_test(config, label_value=104002):
+def manhole_BEV_intensity_test(config):
+    if config.data.name == "sud":
+        label_value = 8
+    else:
+        label_value = 104002
     # FIXME -> go through BEV images and if it have the label than plot the image/save image 
     #                   -> have already a method right (but maybe use normalization if not visible)
     print("\n --- Manhole BEV Check ---")
 
     print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=get_basic_transform(),
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
+    path = f"./output/bev_image_manhole_investigation_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
     for batch in data_loader:
+        cur_pc += 1
         point_cloud = batch[0]
         # point_cloud = point_cloud.get_as_o3d()
         print_pc(point_cloud)
@@ -371,7 +387,7 @@ def manhole_BEV_intensity_test(config, label_value=104002):
             print("Loaded Bevs from file...")
             bev_gen = point_cloud.get_bev()
 
-        for bev_item in bev_gen:
+        for idx, bev_item in enumerate(bev_gen):
             img = bev_item["pixel_values"].detach().cpu().numpy()
             labels = bev_item["labels"].detach().cpu().numpy()
             meta = bev_item["meta"] 
@@ -401,7 +417,12 @@ def manhole_BEV_intensity_test(config, label_value=104002):
                 ax[1].set_title("Normalized BEV Image", fontsize=14, fontweight='bold')
                 ax[2].set_title("Manhole MArked BEV Image", fontsize=14, fontweight='bold')
 
-                plt.show()
+                current_name = f"pc_{cur_pc}_bevimg_{idx}.png"
+                plt.savefig(os.path.join(path, current_name))
+
+                # plt.show()
+
+                plt.close(fig)
                 # break
     
         # break
@@ -413,7 +434,7 @@ def manhole_density_test(config):
 
     print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
@@ -427,7 +448,11 @@ def manhole_density_test(config):
         # point_cloud = point_cloud.get_as_o3d()
         # print_pc(point_cloud)
 
-        manholes = extract_manhole(point_cloud, label_value=104002, points_around_dist=0)
+        if config.data.name == "sud":
+            label_value = 8
+        else:
+            label_value = 104002
+        manholes = extract_manhole(point_cloud, label_value=label_value, points_around_dist=0)
 
         for cur_manhole in manholes:
 
@@ -467,13 +492,13 @@ def circular_manhole_classification_test(config):
 
     print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
     # clear save path
-    path = "./output/center_shape_check"
+    path = f"./output/center_shape_check_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path, exist_ok=True)
@@ -486,7 +511,11 @@ def circular_manhole_classification_test(config):
         # print_pc(point_cloud)
 
         # get maholes
-        manholes = extract_manhole(point_cloud, label_value=104002, points_around_dist=0)
+        if config.data.name == "sud":
+            label_value = 8
+        else:
+            label_value = 104002
+        manholes = extract_manhole(point_cloud, label_value=label_value, points_around_dist=0)
 
         for cur_vis, cur_manhole in enumerate(manholes):
             plot_name = f"pc_{cur_pc}_manhole_{cur_vis}.png"
@@ -507,13 +536,13 @@ def center_robustnest_test(config):
 
     print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
     # clear save path
-    path = "./output/center_estimation_stresstest"
+    path = f"./output/center_estimation_stresstest_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path, exist_ok=True)
@@ -536,7 +565,7 @@ def center_robustnest_test(config):
         manipulated_clusters = []
         for cur_cluster in original_cluster_pcs:
             manipulated_clusters.append(
-                add_random_dense_manipulation_point_cloud(cur_cluster, n=np.random.randint(1, max(10, 10*cur_pc)))
+                add_random_dense_manipulation_point_cloud(cur_cluster, n=np.random.randint(20, max(20, 1000)))
             )
 
         print("\n> Least Square Circle Fit Check <\n")
@@ -584,6 +613,37 @@ def center_robustnest_test(config):
     
     # stress test for least squares if the data is not euqually distributed (in live system relevant)
     # But for data annotation only relevant if the data is not always equal distributed 
+
+
+
+def point_amount_check(config):
+    print("\n --- Point Amount Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type=config.data.type, 
+                                    transform=get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    # clear save path
+    path = f"./output/center_estimation_stresstest_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    points = []
+    for batch in tqdm(data_loader, total=len(data_loader), desc="Point Amount Check"):
+        point_cloud = batch[0]
+        points.append(len(point_cloud.coordinates))
+
+    points = np.array(points)
+
+    print(f"Point Amount in Point Clouds from {config.data.name}")
+    print(f"- mean: {points.mean():.2f}")
+    print(f"- min: {points.min():.2f}")
+    print(f"- max: {points.max():.2f}")
+    print(f"- std: {points.std():.2f}")
 
 
 
@@ -704,13 +764,13 @@ def center_prediction_use_labels_as_candidates_test(config):
 
     print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type="train", 
+                                    type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
     # clear save path
-    path = "./output/center_estimation"
+    path = f"./output/center_estimation_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path, exist_ok=True)
@@ -825,6 +885,118 @@ def center_2D_prediction_without_labels_test(config):
 
 
 
+def clustering_tryout(config):
+    pass
+
+
+
+def classic_2D_pipeline_test(config):
+    print("\n --- Center Estimation with 2D Classic Pipeline ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type=config.data.type, 
+                                    transform=get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    # clear save path
+    path = f"./output/center_estimation_2d_geomtry_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
+
+    print("Geometry processing...")
+    for batch in tqdm(data_loader, total=len(data_loader), desc="Center Estimation Geometry 2D"):
+        point_cloud = batch[0]
+        classic_manhole_prediction_pipeline(point_cloud, type=config.data.type, plot_path=path)
+
+
+
+def make_split(config, test_size=0.2, val_size=0.1):
+    print("\n --- Make Split ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type="all", 
+                                    transform=None,  # get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    dataset = data_loader.dataset
+    paths = dataset.point_cloud_paths
+
+    # countering which files have manholes
+    cur_pc = 0
+    pc_with_manholes = []
+    pc_without_manholes = []
+    for idx, batch in enumerate(data_loader):
+        path = paths[idx]
+        point_cloud = batch[0]
+
+        # get cluster
+        _, _, _, original_cluster_pcs, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False)
+
+        cur_pc += 1
+
+        if original_cluster_pcs is None:
+            pc_without_manholes.append(path)
+        else:
+            pc_with_manholes.append(path)
+
+    # making the split (but first only with pc with manholes to ensure enogh manhole sin every set)
+    pc_with_manholes = np.array(pc_with_manholes)
+    np.random.shuffle(pc_with_manholes)
+    
+    num_total = len(pc_with_manholes)
+    num_test = int(num_total * test_size)
+    num_val = int(num_total * val_size)
+
+    test_set = pc_with_manholes[:num_test]
+    val_set = pc_with_manholes[num_test : num_test + num_val]
+    train_set = pc_with_manholes[num_test + num_val:]
+
+    # now add point clouds which do not have manholes
+    pc_without_manholes = np.array(pc_without_manholes)
+    np.random.shuffle(pc_without_manholes)
+
+    num_total = len(pc_without_manholes)
+    num_test = int(num_total * test_size)
+    num_val = int(num_total * val_size)
+
+    # combine results
+    test_set = np.concatenate((test_set, pc_without_manholes[:num_test]))
+    val_set = np.concatenate((val_set, pc_without_manholes[num_test : num_test + num_val])) 
+    train_set = np.concatenate((train_set, pc_without_manholes[num_test + num_val:]))
+
+    # summerize result
+    complete = len(pc_with_manholes) + len(pc_without_manholes)
+    # split_text = f"Used {complete}/{cur_pc} ({(complete/cur_pc)*100:.2f}%) Point Clouds because of missing manhole labels."
+    split_text = f"Found {len(pc_with_manholes)}/{complete} ({(len(pc_with_manholes)/complete)*100:.2f}%) Point Clouds with manhole labels (but uses all point clouds for split)."
+    split_text += f"\n\nSplit complete:\n    Train={len(train_set)} ({(len(train_set)/complete)*100:.2f}%)\n    Val={len(val_set)} ({(len(val_set)/complete)*100:.2f}%)\n    Test={len(test_set)} ({(len(test_set)/complete)*100:.2f}%)"
+ 
+    split_text += "\n\n--- File-Paths ---"
+    split_text += f"\n\nTrain Samples:\n{train_set.tolist()}"
+    split_text += f"\n\nVal Samples:\n{val_set.tolist()}"
+    split_text += f"\n\nTest Samples:\n{test_set.tolist()}"
+
+    split_text += "\n\n--- Same as before but only the File-name ---"
+    split_text += f"\n\nTrain Samples:\n{[os.path.split(x)[1] for x in train_set.tolist()]}"
+    split_text += f"\n\nVal Samples:\n{[os.path.split(x)[1] for x in val_set.tolist()]}"
+    split_text += f"\n\nTest Samples:\n{[os.path.split(x)[1] for x in test_set.tolist()]}"
+
+    with open(f"./output/{config.data.name}_data_split.txt", "w") as file_:
+        file_.write(split_text)
+
+    print(split_text)
+    
+    return train_set, val_set, test_set
+    
+
+
+
 # --------------
 # > Playground <
 # --------------
@@ -842,11 +1014,13 @@ def tryout(config):
     
     # manhole_intensity_test(config)
     # manhole_density_test(config)
-    # manhole_BEV_intensity_test(config, label_value=104002)
+    # manhole_BEV_intensity_test(config)
     # circular_manhole_classification_test(config)
+    # center_robustnest_test(config)  # stresstest
+    # point_amount_check(config)
 
-    # center_robustnest_test(config)
-    center_prediction_use_labels_as_candidates_test(config)
+    # center_prediction_use_labels_as_candidates_test(config)
+    classic_2D_pipeline_test(config)
 
     # Not done
         # center_prediction_use_labels_as_candidates_without_instances_test(config)
@@ -854,6 +1028,14 @@ def tryout(config):
         # center_2D_prediction_use_labels_as_candidates_test(config)
         # center_2D_prediction_use_labels_as_candidates_without_instances_test(config)
         # center_2D_prediction_without_labels_test(config)
+
+    # clustering_tryout(config)
+    # make_split(config)
     
+
+
+
+
+
 
     

@@ -1,18 +1,23 @@
 # ----------
 # > Import <
 # ----------
+import os
+
 import numpy as np
 from scipy.optimize import least_squares
 from sklearn.cluster import DBSCAN, MeanShift, estimate_bandwidth
 from sklearn.preprocessing import StandardScaler
-from skimage.measure import ransac
+from skimage.measure import ransac, CircleModel
 import pyransac3d as pyrsc
 
 import open3d as o3d
+import torch
 
-from mcrlab.geometry.utils import fit_plane, plane_basis, project_to_plane
+from mcrlab.classic.utils import fit_plane, plane_basis, project_to_plane, get_manhole_candidates_from_2d_img, \
+                                  visualize_circle_fit
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute, get_instance_attribute
-from mcrlab.point_cloud.data import CSFGroundFilterTransform
+from mcrlab.point_cloud.data import CSFGroundFilterTransform, bev_gen_wrapper
+from mcrlab.projection import bev_projection, bev_back_projection
 
 
 
@@ -85,6 +90,7 @@ def fit_circle_least_squares_3D(points):
 
     # prepraration for projection
     centroid, normal = fit_plane(points)
+    # print("Normal", normal.shape)
     basis_x, basis_y = plane_basis(normal)
 
     # projection into 2D
@@ -125,94 +131,94 @@ def fit_circle_least_squares_3D(points):
 # notice that ransac can be applied on
 # the whole point cloud or on candidates
 
-class CircleModel:
-    """
-    SkLearn/SkImage Model.
+# class CircleModel:
+#     """
+#     SkLearn/SkImage Model.
 
-    Least Square Fit Model for RANSAC.
+#     Least Square Fit Model for RANSAC.
 
-    Fits a circle to 2D points: (x - cx)^2 + (y - cy)^2 = r^2
-    """
-    def __init__(self):
-        self.params = None
+#     Fits a circle to 2D points: (x - cx)^2 + (y - cy)^2 = r^2
+#     """
+#     def __init__(self):
+#         self.params = None
 
-    @classmethod
-    def from_estimate(cls, data, *args, **kwargs):
-        instance = cls()
-        success = instance.estimate(data, *args, **kwargs)
-        return instance if success else None
+#     @classmethod
+#     def from_estimate(cls, data, *args, **kwargs):
+#         instance = cls()
+#         success = instance.estimate(data, *args, **kwargs)
+#         return instance if success else None
 
-    def estimate(self, data):
-        """
-        Fit circle to minimal sample (3 points) using algebraic method.
+#     def estimate(self, data):
+#         """
+#         Fit circle to minimal sample (3 points) using algebraic method.
 
-        Called every iteration of RANSAC with 3 random points.
-        """
-        x, y = data[:, 0], data[:, 1]
+#         Called every iteration of RANSAC with 3 random points.
+#         """
+#         x, y = data[:, 0], data[:, 1]
 
-        # Check for collinearity (area of triangle ~ 0)
-        # print(f"X Shape: {x.shape}")
-        # print(f"Y Shape: {y.shape}")
-        # print(f"All original Shape: {data.shape}")
-        mat = np.column_stack((x, y, np.ones(len(x))))
-        if len(x) < 3:
-            return False
+#         # Check for collinearity (area of triangle ~ 0)
+#         # print(f"X Shape: {x.shape}")
+#         # print(f"Y Shape: {y.shape}")
+#         # print(f"All original Shape: {data.shape}")
+#         mat = np.column_stack((x, y, np.ones(len(x))))
+#         if len(x) < 3:
+#             return False
 
-        if len(x) == 3:
-            mat = np.column_stack((x, y, np.ones(3)))
-            if abs(np.linalg.det(mat)) < 1e-6:
-                return False
+#         if len(x) == 3:
+#             mat = np.column_stack((x, y, np.ones(3)))
+#             if abs(np.linalg.det(mat)) < 1e-6:
+#                 return False
 
-        # Build linear system: 2x*cx + 2y*cy + r^2 - cx^2 - cy^2 = x^2 + y^2
-        A = np.column_stack((2 * x, 2 * y, np.ones(len(x))))
-        b = x**2 + y**2
+#         # Build linear system: 2x*cx + 2y*cy + r^2 - cx^2 - cy^2 = x^2 + y^2
+#         A = np.column_stack((2 * x, 2 * y, np.ones(len(x))))
+#         b = x**2 + y**2
 
-        try:
-            result, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
-            # This is also LEast Square Fit BUT:
-            # - solves a linear system
-            # - one shot (no iterations)
-            # - no gradients
-            # - no "learning"
-        except np.linalg.LinAlgError:
-            return False
+#         try:
+#             result, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+#             # This is also LEast Square Fit BUT:
+#             # - solves a linear system
+#             # - one shot (no iterations)
+#             # - no gradients
+#             # - no "learning"
+#         except np.linalg.LinAlgError:
+#             return False
         
-        cx, cy, c = result
+#         cx, cy, c = result
 
-        r_sq = c + cx**2 + cy**2
-        if r_sq <= 0:
-            return False
+#         r_sq = c + cx**2 + cy**2
+#         if r_sq <= 0:
+#             return False
         
-        self.params = (cx, cy, np.sqrt(r_sq))
-        return True
+#         self.params = (cx, cy, np.sqrt(r_sq))
+#         return True
 
-    def residuals(self, data):
-        """
-        Euclidean distance from each point to the circle boundary.
-        """
-        if self.params is None:
-            raise ValueError("Got no params, unexpected!")
-            return np.full(len(data), np.inf)
+#     def residuals(self, data):
+#         """
+#         Euclidean distance from each point to the circle boundary.
+#         """
+#         if self.params is None:
+#             raise ValueError("Got no params, unexpected!")
+#             return np.full(len(data), np.inf)
         
-        cx, cy, r = self.params
-        x, y = data[:, 0], data[:, 1]
+#         cx, cy, r = self.params
+#         x, y = data[:, 0], data[:, 1]
         
-        # return np.abs( np.sqrt( (x - cx)**2 + (y - cy)**2 ) - r )
+#         # return np.abs( np.sqrt( (x - cx)**2 + (y - cy)**2 ) - r )
     
-        # distances = np.sqrt((x - cx)**2 + (y - cy)**2)
-        # return (distance - r) ** 2
+#         # distances = np.sqrt((x - cx)**2 + (y - cy)**2)
+#         # return (distance - r) ** 2
 
-        # return np.abs((x - cx)**2 + (y - cy)**2 - r**2)
+#         # return np.abs((x - cx)**2 + (y - cy)**2 - r**2)
 
-        f = (x - cx)**2 + (y - cy)**2 - r**2
+#         f = (x - cx)**2 + (y - cy)**2 - r**2
 
-        grad_sq = 4 * ((x - cx)**2 + (y - cy)**2)
+#         grad_sq = 4 * ((x - cx)**2 + (y - cy)**2)
 
-        return np.abs(f) / np.sqrt(grad_sq + 1e-12)
+#         return np.abs(f) / np.sqrt(grad_sq + 1e-12)
 
-    def predict_xy(self, t):
-        cx, cy, r = self.params
-        return np.column_stack((cx + r * np.cos(t), cy + r * np.sin(t)))
+#     def predict_xy(self, t):
+#         cx, cy, r = self.params
+#         return np.column_stack((cx + r * np.cos(t), cy + r * np.sin(t)))
 
 
 
@@ -253,7 +259,10 @@ def fit_circle_ransac(x, y, method="sklearn"):
         # RANSAC quality
         # inlier_ratio = np.sum(inliers) / len(inliers)
 
-        cx, cy, radius = model.params
+        # cx, cy, radius = model.params
+        cx, cy = model.center
+        radius = model.radius
+        
         center = np.array([cx, cy])
         axis = np.array([0, 0, 1])  # Normal axis (z), matches 3D RANSAC convention
     elif method == "pyransac3d":
@@ -394,7 +403,13 @@ def use_points_and_extract_center_point(clusters, method, use_projection=True):
 
     for cluster in clusters:
 
-        cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()
+        if isinstance(cluster, np.ndarray):
+            cluster_points = cluster
+        else:
+            cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()
+
+        # print("Cluster-Point Shape", cluster_points.shape)
+
         result = extract_center_point(
             points=cluster_points,
             method=method,
@@ -637,6 +652,89 @@ def find_candidates_and_extract_center_point(point_cloud, method="least_square",
     return detected_manhole_candidates
 
 
+
+# FIXME -> make a 3D version with maybe features via Open3D
+def classic_manhole_prediction_pipeline(point_cloud, type, plot_path):
+
+    # points = point_cloud.point[get_coordinate_attribute(point_cloud)].cpu().numpy()
+    points = point_cloud.to_numpy(as_copy=True).coordinates
+
+    if point_cloud.bev_data is None:
+        print("Starting BEV projection...")
+        tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.01)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+        bev_gen = bev_gen_wrapper(tiles, metas, has_labels=False if type == "inference" else True)
+    else:
+        print("Loaded Bevs from file...")
+        bev_gen = point_cloud.get_bev()
+
+    center_points = []
+    for tile_id, bev_dict in enumerate(bev_gen):
+        bev = bev_dict["pixel_values"].cpu().detach().numpy()
+        meta = bev_dict["meta"]
+        height, width = bev.shape[1], bev.shape[2]
+        
+        manholes = get_manhole_candidates_from_2d_img(bev)
+        manholes_3d = []
+        for cur_manhole in manholes:
+            # "cluster"
+            # "center_px"
+            # "diameter_m"
+            # "circularity"
+            # "axis_ratio"
+            cluster = cur_manhole["cluster"]
+            # center_px = cur_manhole["center_px"]
+            # x = center_px[0]
+            # y = center_px[1]
+
+            # or compute circle
+            # a, b, r, mean_distance_error, loss = fit_circle_least_squares(x, y)
+
+            # get candidate in 3D
+            cluster_3d = []
+            for point in cluster:
+                # print("Point Shape", point.shape)
+                x = point[0]
+                y = point[1]
+                remapping = bev_back_projection(point_cloud, meta, tile_id, 
+                                                pixel_x=x, pixel_y=y, 
+                                                try_use_saved_local_points=False)
+                point_idx = remapping["global_indices"]
+
+                # empty pixel
+                if len(point_idx) == 0:
+                    continue
+
+                point_idx = np.array(point_idx).astype(np.int32)
+
+                # access looks like:
+                point_3d = points[point_idx]
+                cluster_3d.append(point_3d)
+
+            # find center
+            # cluster_3d = np.array(cluster_3d, dtype=np.float64)
+            if len(cluster_3d) > 5:
+                cluster_3d = np.concatenate(cluster_3d, axis=0)
+            else:
+                continue
+                cluster_3d = np.empty((0, 3)) # Handle empty case
+            # print("cluster_3d shape:", cluster_3d)
+            manholes_3d.append(cluster_3d)  # .squeeze()
+
+        center_points += use_points_and_extract_center_point(clusters=manholes_3d, 
+                                                             method="least_square", 
+                                                             use_projection=True)
+        
+    for idx, (center, radius, cluster, error, loss) in enumerate(center_points):
+        filename = f"2D_Geomtry_Pipeline_Center_Prediction_Tile_{tile_id}_Manhole_{idx}.png"
+        visualize_circle_fit(points=cluster, 
+                                center_pred=center, 
+                                radius=radius, 
+                                error=error,
+                                should_plot=False,
+                                save_path=os.path.join(plot_path, filename))
+    
+    
+                
 
 
 

@@ -1,0 +1,32 @@
+// Select Conda interpreter in VSCode
+// 1. Press: Ctrl+Shift+P
+// 2. Then: Python: Select Interpreter
+// 3. Choose: mcrlab (conda)
+// After this, VS Code debug sessions already run inside the env.
+
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run mcrlab",
+      "type": "python",
+      "request": "launch",
+
+      // "program": "C:/Users/tippolito/AppData/Local/anaconda3/envs/mcrlab/Scripts/mcrlab.exe",
+
+      "module": "mcrlab",
+
+      "args": [
+        "--config=./configs/config.yaml"
+      ],
+
+      "cwd": "${workspaceFolder}",
+
+      "console": "integratedTerminal",
+
+      "preLaunchTask": "prepare-mcrlab",
+
+      "justMyCode": false
+    }
+  ]
+}

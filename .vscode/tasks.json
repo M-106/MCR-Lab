@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "prepare-mcrlab",
+      "type": "shell",
+      "command": "C:\\Users\\tippolito\\AppData\\Local\\anaconda3\\Scripts\\conda.exe run -n mcrlab pip install -e .",
+      // "command": "C:\\Users\\tippolito\\AppData\\Local\\anaconda3\\Scripts\\conda.exe run -n mcrlab pip install -e .",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
+
+

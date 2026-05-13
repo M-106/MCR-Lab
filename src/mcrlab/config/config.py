@@ -59,6 +59,7 @@ class DataConfig(BaseModel):
     name: str
     path: str
     preprocessed: bool
+    type: str
 
 
 

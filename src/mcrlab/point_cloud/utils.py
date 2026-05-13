@@ -1,11 +1,15 @@
 # -----------
 # > Imports <
 # -----------
+import os
 import numpy as np
 import open3d as o3d
+from tqdm import tqdm
 
 from scipy.spatial.distance import pdist
 from scipy.spatial import ConvexHull
+from sklearn.cluster import DBSCAN
+
 import matplotlib.pyplot as plt
 
 
@@ -379,52 +383,76 @@ def extract_manhole(points, label_value=104002, points_around_dist=5):
 
     if instance_idx is not None:
         instance_ids = points.point[instance_idx].numpy().ravel()
-        unique_ids = np.unique(instance_ids)
+        item_ = np.unique(instance_ids)
+        labels = points.point[semantic_class_idx].numpy().ravel()
+    else:
+        # raise RuntimeError("PointCloud does not have instance Label! But is needed.")
         labels = points.point[semantic_class_idx].numpy().ravel()
 
-        for cur_instance_id in unique_ids:
+        # Filter to only manhole points before clustering
+        manhole_mask = labels == label_value
+        manhole_indices = np.where(manhole_mask)[0]
+
+        if len(manhole_indices) == 0:
+            return manholes
+
+        all_coords = points.point[get_coordinate_attribute(points)].numpy()
+        manhole_coords = all_coords[manhole_indices]
+
+        dbscan = DBSCAN(eps=3, min_samples=2)
+        dbscan.fit(manhole_coords)
+
+        cluster_labels = dbscan.labels_           # shape: (n_manhole_points,)
+        item_ = np.unique(cluster_labels)
+
+    for cur_item in item_:
+        
+        if instance_idx is not None:
+            cur_instance_id = cur_item
             if cur_instance_id < 0:
                 continue
-
             indices = np.where(instance_ids == cur_instance_id)[0]
-            cluster = points.select_by_index(indices)
-
-            if len(indices) < 30:
+        else:
+            if cur_item < 0:                      # skip noise points
                 continue
+            # indices back into the *original* point cloud
+            indices = manhole_indices[cluster_labels == cur_item]
 
-            # check if manhole class
-            if np.all(labels[indices] != label_value):
-                continue
+        cluster = points.select_by_index(indices)
 
-            # FIXME -> get not as Tensor but as PointCloud
-            cluster_points = cluster
-            cluster_points_arr = cluster.point[get_coordinate_attribute(cluster)].numpy()
+        if len(indices) < 30:
+            continue
 
-            # add other additional points from around
-            if points_around_dist > 0 :
-                min_bound = cluster_points_arr.min(axis=0)
-                max_bound = cluster_points_arr.max(axis=0)
+        # check if manhole class
+        if np.all(labels[indices] != label_value):
+            continue
 
-                # expand by your margin
-                min_bound[:2] -= points_around_dist
-                max_bound[:2] += points_around_dist
+        cluster_points = cluster
+        cluster_points_arr = cluster.point[get_coordinate_attribute(cluster)].numpy()
 
-                all_points = points.point[get_coordinate_attribute(points)].numpy()
+        # add other additional points from around
+        if points_around_dist > 0 :
+            min_bound = cluster_points_arr.min(axis=0)
+            max_bound = cluster_points_arr.max(axis=0)
 
-                mask = (
-                    (all_points[:, 0] >= min_bound[0]) & (all_points[:, 0] <= max_bound[0]) &
-                    (all_points[:, 1] >= min_bound[1]) & (all_points[:, 1] <= max_bound[1])
-                )
+            # expand by your margin
+            min_bound[:2] -= points_around_dist
+            max_bound[:2] += points_around_dist
 
-                expanded_indices = np.where(mask)[0]
-                final_indices = np.union1d(indices, expanded_indices)
-                cluster_points = points.select_by_index(final_indices)
-                del all_points
+            all_points = points.point[get_coordinate_attribute(points)].numpy()
 
-            manholes.append(cluster_points)
-        return manholes
-    else:
-        raise RuntimeError("PointCloud does not have instance Label! But is needed.")
+            mask = (
+                (all_points[:, 0] >= min_bound[0]) & (all_points[:, 0] <= max_bound[0]) &
+                (all_points[:, 1] >= min_bound[1]) & (all_points[:, 1] <= max_bound[1])
+            )
+
+            expanded_indices = np.where(mask)[0]
+            final_indices = np.union1d(indices, expanded_indices)
+            cluster_points = points.select_by_index(final_indices)
+            del all_points
+
+        manholes.append(cluster_points)
+    return manholes
 
 
 
@@ -770,6 +798,77 @@ def classify_manhole(points, save_path=None, should_plot=False):
     return is_circle
 
 
+
+# -------------------
+# > Splitting Utils <
+# -------------------
+def split_point_cloud_into_multiple(point_cloud, path,  init_tile_size=500.0, overlap=3.0):
+    if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
+        raise TypeError(f"Expected point cloud as o3d.t.geometry.PointCloud but got: `{type(point_cloud)}`")
+
+    # print(f"Point Cloud have following attributes: {point_cloud.point.keys()}")
+
+    points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()  # np.asarray(pc_legacy.points)
+
+    print(f"Point Amount: {points.shape}")
+
+    x_min, y_min = points[:, :2].min(axis=0)
+    x_max, y_max = points[:, :2].max(axis=0)
+
+    print(f"Create Chunks from ({x_min}, {y_min}) to ({x_max}, {y_max})")
+
+    tile_size = init_tile_size
+    step = tile_size - overlap
+
+    x_values = np.arange(x_min, x_max + step, step)
+    y_values = np.arange(y_min, y_max + step, step)
+
+    chunk_id = 0
+
+    sizes = []
+
+    for x in tqdm(x_values, total=len(x_values), desc="Creating Chunks"):
+        for y in y_values:
+            mask = (
+                (points[:, 0] >= x) &
+                (points[:, 0] <= (x+tile_size)) &
+                (points[:, 1] >= y) &
+                (points[:, 1] <= (y+tile_size))
+            )
+
+            idx = np.where(mask)[0]
+
+            if len(idx) == 0:
+                continue
+
+            sizes.append(len(idx))
+
+            idx_tensor = o3d.core.Tensor(
+                idx,
+                dtype=o3d.core.Dtype.Int64
+            )
+
+            tile = point_cloud.select_by_index(idx_tensor)
+
+            filename = f"sud_splitted_chunk_{chunk_id}.ply"
+
+            # unsqueeze one dimensional attributes
+            for key, tensor in tile.point.items():
+                if len(tensor.shape) == 1:
+                    tile.point[key] = tensor.reshape((-1, 1))
+
+            o3d.t.io.write_point_cloud(os.path.join(path, filename), 
+                                     tile)
+
+            chunk_id += 1
+
+    print(f"Splitted Point Cloud into {len(sizes)} chunks.")
+    sizes = np.array(sizes)
+    print(f"Mean Points: {sizes.mean():.2f}")
+    print(f"Min Points: {sizes.min():.2f}")
+    print(f"Max Points: {sizes.max():.2f}")
+    print(f"STD Points: {sizes.std():.2f}\n")
+                
 
 
 

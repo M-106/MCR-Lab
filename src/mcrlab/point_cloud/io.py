@@ -76,7 +76,10 @@ def load_point_cloud(path):
 
             # extract data
             coordinates = file_["coords"][:]
-            instances = file_["instances"][:]
+            if "instances" in file_:
+                instances = file_["instances"][:]
+            else:
+                instances = None
             intensities = file_["intensity"][:]
             semantics = file_["semantics"][:]
             number_returns = file_["number_returns"][:]
@@ -92,7 +95,8 @@ def load_point_cloud(path):
         #                                                           semantics.reshape(-1, 1)], axis=0), 
         #                                                dtype=o3d.core.Dtype.Int32)
         point_cloud.point["classes"] = o3d.core.Tensor(semantics.reshape(-1, 1), dtype=o3d.core.Dtype.Int32)
-        point_cloud.point["instances"] = o3d.core.Tensor(instances.reshape(-1, 1), dtype=o3d.core.Dtype.Int32)
+        if instances is not None:
+            point_cloud.point["instances"] = o3d.core.Tensor(instances.reshape(-1, 1), dtype=o3d.core.Dtype.Int32)
         point_cloud.point["intensity"] = o3d.core.Tensor(intensities.reshape(-1, 1), dtype=o3d.core.Dtype.Float32)
         
         return point_cloud

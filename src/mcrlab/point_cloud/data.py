@@ -18,7 +18,8 @@ from tqdm import tqdm
 from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_with_RANSAC, \
                                      get_coordinate_attribute, get_class_attribute, \
                                      get_intensity_attribute, get_color_attribute, \
-                                     get_normal_attribute, get_instance_attribute
+                                     get_normal_attribute, get_instance_attribute, \
+                                     split_point_cloud_into_multiple
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.semantic_kitti_utils import load_semantic_kitti_as_o3d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
@@ -289,6 +290,26 @@ class CSFGroundFilterTransform:
         # point_cloud.select_by_index(o3d.core.Tensor(ground_points))
 
         return ground_points
+
+
+
+class SegmentationGroundKeepFilterTransform:
+    def __init__(self):
+        pass
+
+    def __call__(self, point_cloud):
+        if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
+            raise ValueError(f"Can't apply ToPointCloudTensorTransform on '{type(point_cloud)}'")
+
+        plane_model, inliers = point_cloud.segment_plane(
+            distance_threshold=0.02,
+            ransac_n=3,
+            num_iterations=1000
+        )
+
+        road_cloud = point_cloud.select_by_index(inliers)
+
+        return road_cloud
 
 
 
@@ -574,6 +595,7 @@ def get_preprocessing_transform(grid_size=0.01, do_voxelation=True):
         # RANSACGroundKeepFilterTransform(dist_threshold=0.5, ransac_tries=3),
         # RoadExtractionTransform(mode="height")
         CSFGroundFilterTransform(invert_z=False)
+        # SegmentationGroundKeepFilterTransform
     ]
 
     if do_voxelation:
@@ -620,7 +642,7 @@ class ParisLille3DDataset(Dataset):
                 self.point_cloud_paths.append(os.path.join(path, cur_file))
 
         if preprocessed:
-            self.bev_gen = BEVDataset(path=self.point_cloud_paths, search_files=False, mode="linear")
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, type=self.type, search_files=False, mode="linear", has_labels=False if self.type == "inference" else True)
 
         print(f"Found {len(self.point_cloud_paths)} point clouds.")
 
@@ -684,6 +706,15 @@ class WHUUrban3DDataset(Dataset):
         self.preprocessed = preprocessed
         self.return_train_format = return_train_format
 
+        self.train_ids = ['8018', '4938', '0414', '2002', '0444', '1046', '5642', '4333', '4629', '0424', '2421', '0947', '0434', '2022', '2719', '2810', '8048', '2423', '2522', '8008', '0502', '6017', '3918', '2422', '2322', '3405', '2323', '8038']
+        self.val_ids = ['0404', '6027', '3648']
+        self.test_ids = ['0940', '2447', '6037', '2321', '8028', '5627', '2521']
+
+        if preprocessed:
+            self.train_ids = ['preprocessed_'+x for x in self.train_ids]
+            self.val_ids = ['preprocessed_'+x for x in self.val_ids]
+            self.test_ids = ['preprocessed_'+x for x in self.test_ids]
+
         self.point_cloud_paths = []
         self.bev_paths = dict()
         preprocesed_path = os.path.join(self.path, "preprocessed")
@@ -696,10 +727,17 @@ class WHUUrban3DDataset(Dataset):
                 elif not preprocessed and cur_file.startswith("preprocessed_"):
                     continue
 
+                if self.type == "train" and not any([cur_file.startswith(cur_id) for cur_id in self.train_ids]):
+                    continue
+                elif self.type == "test" and not any([cur_file.startswith(cur_id) for cur_id in self.test_ids]):
+                    continue
+                elif self.type == "val" and not any([cur_file.startswith(cur_id) for cur_id in self.val_ids]):
+                    continue
+
                 self.point_cloud_paths.append(os.path.join(path, cur_file))
 
         if preprocessed:
-            self.bev_gen = BEVDataset(path=self.point_cloud_paths, search_files=False, mode="linear")
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, type=self.type, search_files=False, mode="linear", has_labels=False if self.type == "inference" else True)
 
         print(f"Found {len(self.point_cloud_paths)} point clouds.")
 
@@ -731,6 +769,8 @@ class WHUUrban3DDataset(Dataset):
             
             # cur_bev_gen = self.bev_gen.get_via_bev_filename(self.point_cloud_paths[idx], extract_from_full_ply_path=True)
 
+        # FIXME check if complete?
+
         # use labels
         if isinstance(point_cloud, PointCloudTensor):
             if point_cloud.labels is not None:
@@ -748,6 +788,75 @@ class WHUUrban3DDataset(Dataset):
             return point_cloud.get_as_one_tensor(include_intensity=True), y
         else:
             # print(point_cloud.point[get_coordinate_attribute(point_cloud)].shape)
+            return point_cloud  # PointCloudTensor or o3d.t.geometry.Tensor
+
+
+
+class SUDROADDataset(Dataset):
+    def __init__(self, path, type="train", transform=None, 
+                 preprocessed=False, return_train_format=False):
+        self.path = path
+        self.type = type  # have the additional special type not_splitted
+        self.transform = transform
+        self.preprocessed = preprocessed
+        self.return_train_format = return_train_format
+
+        self.point_cloud_paths = []
+        self.bev_paths = dict()
+
+        if self.type == "load_unsplitted":
+            self.point_cloud_paths.append(os.path.join(path, "SUD_road.las"))
+        else:
+            preprocesed_path = os.path.join(self.path, "preprocessed")
+            path = preprocesed_path if preprocessed else self.path
+
+            for cur_file in os.listdir(path):
+                # if any([cur_file.endswith(ending) for ending in [".las", ".laz", ".ply"]]):
+                if cur_file.endswith((".ply", ".h5")):
+                    if cur_file == "SUD_road.las":
+                        continue
+
+                    if preprocessed and not cur_file.startswith("preprocessed_"):
+                        continue
+                    elif not preprocessed and cur_file.startswith("preprocessed_"):
+                        continue
+
+                    self.point_cloud_paths.append(os.path.join(path, cur_file))
+
+        if preprocessed:
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, type=self.type, search_files=False, mode="linear", has_labels=False if self.type == "inference" else True)
+
+        print(f"Found {len(self.point_cloud_paths)} point clouds.")
+
+    def __len__(self):
+        return len(self.point_cloud_paths)
+
+    def __getitem__(self, idx):
+        point_cloud = load_point_cloud(self.point_cloud_paths[idx])
+
+        if self.transform:
+            point_cloud = self.transform(point_cloud)
+
+        # add BEV information
+        if isinstance(point_cloud, PointCloudTensor) and self.preprocessed:
+            point_cloud.set_bev(self.bev_gen, self.point_cloud_paths[idx])
+            
+        # use labels
+        if isinstance(point_cloud, PointCloudTensor):
+            if point_cloud.labels is not None:
+                y = point_cloud.labels
+            else:
+                y = None
+
+        if self.return_train_format:
+
+            if isinstance(point_cloud, PointCloudTensor):
+                if y is None:
+                    raise ValueError(f"Can't find labels in PointCloudTensor!")
+            else:
+                raise ValueError(f"Can't handle Data type `{type(point_cloud)}`")
+            return point_cloud.get_as_one_tensor(include_intensity=True), y
+        else:
             return point_cloud  # PointCloudTensor or o3d.t.geometry.Tensor
 
 
@@ -823,7 +932,7 @@ class BEVDataset(Dataset):
 
     1 Sample = 1 Tile
     """
-    def __init__(self, path=None, search_files=False, mode="linear", file_paths=[]):
+    def __init__(self, path=None, type="train", search_files=False, mode="linear", file_paths=[], has_labels=False):
         """
         path is a list of point cloud file or a list of paths to search the bev images.
 
@@ -839,8 +948,18 @@ class BEVDataset(Dataset):
             path = [path]
 
         self.path = path
+        self.type = type
         self.mode = mode
         self.file_paths = file_paths
+        self.has_labels = has_labels
+
+        self.train_ids = ['8018', '4938', '0414', '2002', '0444', '1046', '5642', '4333', '4629', '0424', '2421', '0947', '0434', '2022', '2719', '2810', '8048', '2423', '2522', '8008', '0502', '6017', '3918', '2422', '2322', '3405', '2323', '8038']
+        self.val_ids = ['0404', '6027', '3648']
+        self.test_ids = ['0940', '2447', '6037', '2321', '8028', '5627', '2521']
+
+        self.train_ids = ['preprocessed_bev_'+x for x in self.train_ids]
+        self.val_ids = ['preprocessed_bev_'+x for x in self.val_ids]
+        self.test_ids = ['preprocessed_bev_'+x for x in self.test_ids]
 
         # find pkl files
         all_bev_paths = []
@@ -854,8 +973,17 @@ class BEVDataset(Dataset):
         else:
             for cur_path in self.path:
                 root, filename = os.path.split(cur_path)
+
                 filename = ".".join(filename.split(".")[:-1]) + ".pkl"
                 bev_file_name = filename.replace("preprocessed_", "preprocessed_bev_") 
+                
+                if self.type == "train" and not any([bev_file_name.startswith(cur_id) for cur_id in self.train_ids]):
+                    continue
+                elif self.type == "test" and not any([bev_file_name.startswith(cur_id) for cur_id in self.test_ids]):
+                    continue
+                elif self.type == "val" and not any([bev_file_name.startswith(cur_id) for cur_id in self.val_ids]):
+                    continue
+
                 all_bev_paths.append(os.path.join(root, bev_file_name))
                 
         # merge the found files
@@ -876,6 +1004,8 @@ class BEVDataset(Dataset):
                 self.bev_tile_mapping.append((cur_pc_idx, file_idx))
                 self.idx_to_fileid[(cur_pc_idx, file_idx)] = cur_file
             cur_pc_idx += 1
+
+        # print(f"BEV Available: {self.bev_tile_mapping.keys()}")
 
         print(f"Found {len(self.bev_tile_mapping)} bev images (orthogonal images) in {len(self.bev_paths)} files.")
 
@@ -911,6 +1041,10 @@ class BEVDataset(Dataset):
         else:
             bev_file_name = file_name
         # bev_file_name = file_name.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
+        
+        # print(f"File_name: {bev_file_name}")
+        # print(f"Available keys: {self.bev_paths.keys()}")
+        
         return self.generator(self.bev_paths[bev_file_name])
 
     def generator(self, file_paths=None):
@@ -922,14 +1056,23 @@ class BEVDataset(Dataset):
 
         for cur_file_path in file_paths:
             tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
-            x = torch.from_numpy(tile[:-1]).float()
-            y = torch.from_numpy(tile[-1]).long()
-            assert y.ndim == 2
-            yield {
-                "pixel_values": x,   # (C, H, W)
-                "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
-                "meta": meta
-            }
+
+            if self.has_labels:
+                x = torch.from_numpy(tile[:-1]).float()
+                y = torch.from_numpy(tile[-1]).long()
+                assert y.ndim == 2
+                yield {
+                    "pixel_values": x,   # (C, H, W)
+                    "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
+                    "meta": meta
+                }
+            else:
+                x = torch.from_numpy(tile).float()
+                yield {
+                    "pixel_values": x,   # (C, H, W)
+                    "labels": None,
+                    "meta": meta
+                }
 
     def extract_bev_path_from_full_path(self, path):
         _, bev_file_name = os.path.split(path)
@@ -940,10 +1083,12 @@ class BEVDataset(Dataset):
     def __len__(self):
         return len(self.bev_tile_mapping)
     
-def bev_gen_wrapper(self, tiles, metas):
-        for idx in range(len(tiles)):
-            tile = tiles[idx]
-            meta = metas[idx]
+def bev_gen_wrapper(tiles, metas, has_labels=False):
+    for idx in range(len(tiles)):
+        tile = tiles[idx]
+        meta = metas[idx]
+
+        if has_labels:
             x = torch.from_numpy(tile[:-1]).float()
             y = torch.from_numpy(tile[-1]).long()
             assert y.ndim == 2
@@ -952,6 +1097,13 @@ def bev_gen_wrapper(self, tiles, metas):
                 "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
                 "meta": meta
             }
+        else:
+            x = torch.from_numpy(tile).float()
+            yield {
+                "pixel_values": x,   # (C, H, W)
+                "labels": None,
+                "meta": meta
+            } 
 
 def extract_tiles_metas(bev_gen, amount=5, as_numpy=True):
     tiles = []
@@ -997,6 +1149,10 @@ def get_data_loader(data_name, path, type="train", transform=None,
         data_loader = get_whu_data_loader(path, type=type, transform=transform,
                                           batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                           preprocessed=preprocessed, return_train_format=return_train_format)
+    elif data_name == "sud":
+        data_loader = get_sud_data_loader(path, type=type, transform=transform,
+                                          batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
+                                          preprocessed=preprocessed, return_train_format=return_train_format)
     else:
         raise ValueError(f"No Dataset with the name '{data_name}' founded. Try 'paris'.")
 
@@ -1026,11 +1182,23 @@ def get_whu_data_loader(path, type="train", transform=None,
 
 
 
+def get_sud_data_loader(path, type="train", transform=None,
+                          batch_size=32, shuffle=True, num_workers=4,
+                          preprocessed=False, return_train_format=False):
+    dataset = SUDROADDataset(path=path, type=type, transform=transform,
+                             preprocessed=preprocessed, return_train_format=return_train_format)
+
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
+                      collate_fn=collate_point_clouds)
+
+
+
 def preprocess_data(data_name, path, type="train", device="cpu",
                     bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5,
                     file_ending=".ply"):
     print("--- Data Preprocessing ---")
-    data_loader = get_data_loader(data_name, path, type=type, transform=get_preprocessing_transform(grid_size=bev_resolution),
+    data_loader = get_data_loader(data_name, path, type="load_unsplitted" if data_name=="sud"  else type, 
+                                  transform=None if data_name=="sud"  else get_preprocessing_transform(grid_size=bev_resolution),
                                   batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
                                   return_train_format=False)
     
@@ -1043,6 +1211,26 @@ def preprocess_data(data_name, path, type="train", device="cpu",
         dir_path = os.path.join(sample_root_path, dir)
         if os.path.isdir(dir_path) and dir.startswith(f"{data_name}_"):
             shutil.rmtree(dir_path)
+
+    if data_name == "sud":
+        print("Splitting Dataset into subdatasets...")
+        # first cleaning
+        for cur_file in os.listdir(path):
+            cur_file_path = os.path.join(path, cur_file)
+            if os.path.isfile(cur_file_path) and cur_file != "SUD_road.las":
+                os.remove(cur_file_path)
+
+        point_cloud = next(iter(data_loader))[0]
+        split_point_cloud_into_multiple(point_cloud, path,  init_tile_size=100.0, overlap=3.0)
+
+        # load new point clouds
+        data_loader = get_data_loader(data_name, path, type=type, transform=get_preprocessing_transform(grid_size=bev_resolution),
+                                      batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
+                                      return_train_format=False)
+        
+        # to_device = ToDevice(device)
+        dataset = data_loader.dataset
+
 
     print("Start Preprocessing your dataset...")
 

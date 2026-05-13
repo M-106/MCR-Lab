@@ -4,6 +4,9 @@
 import numpy as np
 import open3d as o3d
 import matplotlib.pyplot as plt
+import cv2
+from sklearn.cluster import DBSCAN
+from scipy.spatial import ConvexHull
 
 
 
@@ -213,11 +216,133 @@ def visualize_circle_fit(points, center_pred, radius, error, name="Approach 1",
     if should_plot:
         plt.show()
 
+    plt.close()
 
 
 
+# --------------------
+# > Candidate Search <
+# --------------------
+def get_manhole_candidates_from_2d_img(bev_image):
+    # print("BEV Image Shape:", bev_image.shape)
 
+    intensity_map = bev_image[2, :, :]
 
+    # find local features / edges
+    blur = cv2.GaussianBlur(intensity_map, (5,5), 0)
+    lap = cv2.Laplacian(
+        blur.astype(np.float32),
+        cv2.CV_32F
+    )
+    threshold = np.mean(np.abs(lap)) + 2*np.std(np.abs(lap))
+    edges = np.abs(lap) > threshold
+    # edges = cv2.Canny(img8, 50, 150)
+
+    # morphological closing
+    kernel = np.ones((3,3), np.uint8)
+
+    edges = cv2.morphologyEx(
+        edges.astype(np.uint8),
+        cv2.MORPH_CLOSE,
+        kernel
+    )
+
+    candidate_points = np.column_stack(np.where(edges))
+
+    if candidate_points.shape[0] == 0:
+        return []
+
+    clustering = DBSCAN(
+        eps=3,
+        min_samples=20
+    ).fit(candidate_points)
+
+    labels = clustering.labels_
+
+    unique_labels = np.unique(labels)
+
+    final_manholes = []
+
+    for label in unique_labels:
+
+        if label == -1:
+            continue
+
+        cluster = candidate_points[labels == label]
+
+        center = cluster.mean(axis=0)
+
+        dists = np.linalg.norm(
+            cluster - center,
+            axis=1
+        )
+
+        diameter_px = 2 * dists.max()
+
+        diameter_m = diameter_px * 0.01
+
+        if not (0.4 < diameter_m < 1.2):
+            continue
+
+        # circles = cv2.HoughCircles(
+        #     bev_image,
+        #     cv2.HOUGH_GRADIENT,
+        #     dp=1,
+        #     minDist=20,
+        #     param1=50,
+        #     param2=20,
+        #     minRadius=5,
+        #     maxRadius=20
+        # )
+
+        # model, inliers = ransac(
+        #     cluster_xy,
+        #     CircleModel,
+        #     min_samples=3,
+        #     residual_threshold=0.02,
+        #     max_trials=100
+        # )
+
+        if len(cluster) < 20:
+            continue
+
+        # Shape Check
+        hull = ConvexHull(cluster)
+        
+        # Extract Area and Perimeter (length) from the hull
+        area = hull.volume  # In 2D, 'volume' is the area
+        perimeter = hull.area  # In 2D, 'area' is the perimeter
+        
+        # Calculate Circularity
+        # -> https://en.wikipedia.org/wiki/Isoperimetric_inequality
+        circularity = (4 * np.pi * area) / (perimeter ** 2)
+        
+
+        # PCA shape check
+        cov = np.cov(cluster.T)
+
+        eigvals, _ = np.linalg.eigh(cov)
+
+        axis_ratio = (
+            eigvals.min() /
+            eigvals.max()
+        )
+
+        # Classification Logic
+        # Threshold is usually around 0.88 - 0.90
+        if circularity > 0.75 and \
+            axis_ratio > 0.5:
+            final_manholes.append({
+                "cluster": cluster,
+                "center_px": center,
+                "diameter_m": diameter_m,
+                "circularity": circularity,
+                "axis_ratio": axis_ratio
+            })
+        else:
+            continue
+
+    return final_manholes
 
 
 
