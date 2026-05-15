@@ -1,4 +1,4 @@
-mode: tryout    # train, test, inference, tryout, preprocessing
+mode: preprocessing    # train, test, inference, tryout, preprocessing
 
 train:
   batch_size: 32
@@ -31,7 +31,7 @@ data:
   # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"  
   # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d",
   # "D:/data/whu3d-dataset-wo-test-label"
-  preprocessed: True
+  preprocessed: False
   type: all   # train, test, val, all, load_unsplitted (sud special)
 
 device: cpu  # cpu, cuda, cuda:0

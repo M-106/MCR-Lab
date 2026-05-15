@@ -10,6 +10,9 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 
+# from skimage.ndimage import label as ski_label
+from sklearn.cluster import DBSCAN
+
 import open3d as o3d
 import CSF  # package: cloth-simulation-filter
 
@@ -19,7 +22,8 @@ from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_wi
                                      get_coordinate_attribute, get_class_attribute, \
                                      get_intensity_attribute, get_color_attribute, \
                                      get_normal_attribute, get_instance_attribute, \
-                                     split_point_cloud_into_multiple
+                                     split_point_cloud_into_multiple, \
+                                     circle_shape_check
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.semantic_kitti_utils import load_semantic_kitti_as_o3d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
@@ -384,6 +388,82 @@ class VoxelDownsamplerTransform:
 
 
 
+class FilterAndRelabelingTransform:
+    """
+    Filters manhole labels and relabels to:
+    - 0: no manholes
+    - 1: manholes
+    - 255: ignore -> special cases (not round manholes)
+    """
+    def __init__(self):
+        pass
+
+    def __call__(self, point_cloud, manhole_label=104002):
+        if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
+            raise ValueError(f"Can't apply FilterAndRelabelingTransform on '{type(point_cloud)}'")
+
+        semantic_key = get_class_attribute(point_cloud)
+        semantics = point_cloud.point[semantic_key].cpu().numpy()
+
+        positions = point_cloud.point[get_coordinate_attribute(point_cloud)].cpu().numpy()
+
+        semantic_out = np.zeros(len(semantics), dtype=np.int32)
+
+        # filter labels -> only instances with label 104002
+        mask = semantics == manhole_label
+        mask_indices = np.where(mask)[0]
+        # manhole_points = positions[mask]
+        
+        if len(mask_indices) == 0:
+            point_cloud.point[semantic_key] = o3d.core.Tensor(
+                semantic_out, dtype=o3d.core.Dtype.Int32
+            )
+            return point_cloud
+        
+        manhole_points = positions[mask_indices]
+
+        # get manhole instances via clustering
+        clustering = DBSCAN(eps=0.3, min_samples=20).fit(manhole_points)
+        clusters = clustering.labels_
+
+        # remove noise (-1)
+        valid = clusters >= 0
+
+        masked_indices = np.where(mask)[0]
+
+        # process each cluster
+        for cluster_id in np.unique(clusters[valid]):
+            # get manhole with current cluster id
+            local_mask = clusters == cluster_id
+            global_indices = masked_indices[local_mask]
+            instance_points = positions[global_indices]
+  
+            is_circle, _ = circle_shape_check(
+                            instance_points,
+                            save_path=None,
+                            should_plot=False,
+                            threshold=0.6
+                        )
+            
+            if is_circle:
+                semantic_out[global_indices] = 1
+            else:
+                semantic_out[global_indices] = 255
+
+            # everything else stays 0
+
+        # ignore noisy clusters/manholes
+        noise_mask = clusters == -1
+        noise_indices = np.where(mask)[0][noise_mask]
+        semantic_out[noise_indices] = 255
+
+        # add to point-cloud again
+        # point_cloud.point[instance_key] = o3d.core.Tensor(instances, dtype=o3d.core.Dtype.Int32)
+        point_cloud.point[semantic_key] = o3d.core.Tensor(semantic_out, dtype=o3d.core.Dtype.Int32)
+
+        return point_cloud
+
+
 # add more augmentations! -> random rotate, jitter
 
 
@@ -594,8 +674,9 @@ def get_preprocessing_transform(grid_size=0.01, do_voxelation=True):
         OutlierRemovalTransform(mode="statistical", nb_points=8, radius=0.2, std_ratio=2.0),
         # RANSACGroundKeepFilterTransform(dist_threshold=0.5, ransac_tries=3),
         # RoadExtractionTransform(mode="height")
-        CSFGroundFilterTransform(invert_z=False)
+        CSFGroundFilterTransform(invert_z=False),
         # SegmentationGroundKeepFilterTransform
+        FilterAndRelabelingTransform()
     ]
 
     if do_voxelation:
@@ -1198,7 +1279,7 @@ def preprocess_data(data_name, path, type="train", device="cpu",
                     file_ending=".ply"):
     print("--- Data Preprocessing ---")
     data_loader = get_data_loader(data_name, path, type="load_unsplitted" if data_name=="sud"  else type, 
-                                  transform=None if data_name=="sud"  else get_preprocessing_transform(grid_size=bev_resolution),
+                                  transform=None if data_name=="sud"  else get_preprocessing_transform(grid_size=bev_resolution, do_voxelation=False),
                                   batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
                                   return_train_format=False)
     
@@ -1263,6 +1344,8 @@ def preprocess_data(data_name, path, type="train", device="cpu",
         # print(f"Data-Shape: {batch.shape}") if hasattr(batch, "shape") else ""
         # print(f"Data-Type (batch 0): {type(batch[0])}")
         # print_pc(batch[0])
+
+        # print(f"Semantic Label Shape: {batch[0].point[get_class_attribute(batch[0])].shape}")
 
         save_point_cloud(path=new_file_path, point_cloud=batch[0])
 

@@ -27,7 +27,7 @@ from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, \
                                      get_class_attribute, get_instance_attribute, \
                                      extract_manhole, add_random_dense_manipulation_point_cloud, \
-                                     classify_manhole
+                                     circle_shape_check
 from mcrlab.classic.shape_fit import use_label_candidates_and_extract_center_point, \
                                       use_points_and_extract_center_point, \
                                       classic_manhole_prediction_pipeline
@@ -519,7 +519,7 @@ def circular_manhole_classification_test(config):
 
         for cur_vis, cur_manhole in enumerate(manholes):
             plot_name = f"pc_{cur_pc}_manhole_{cur_vis}.png"
-            is_circle = classify_manhole(cur_manhole, save_path=os.path.join(path, plot_name), should_plot=False)
+            is_circle, _ = circle_shape_check(cur_manhole, save_path=os.path.join(path, plot_name), should_plot=False)
             if is_circle:
                 total_result["Circle"] += 1
             else:
@@ -1015,12 +1015,12 @@ def tryout(config):
     # manhole_intensity_test(config)
     # manhole_density_test(config)
     # manhole_BEV_intensity_test(config)
-    # circular_manhole_classification_test(config)
+    circular_manhole_classification_test(config)
     # center_robustnest_test(config)  # stresstest
     # point_amount_check(config)
 
     # center_prediction_use_labels_as_candidates_test(config)
-    classic_2D_pipeline_test(config)
+    # classic_2D_pipeline_test(config)
 
     # Not done
         # center_prediction_use_labels_as_candidates_without_instances_test(config)

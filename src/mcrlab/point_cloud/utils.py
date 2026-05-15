@@ -724,9 +724,8 @@ def add_random_dense_manipulation_point_cloud(points, n):
 
 
 
-def classify_manhole(points, save_path=None, should_plot=False):
-    plt.style.use("seaborn-v0_8-whitegrid")
-
+# shape_check
+def circle_shape_check(points, save_path=None, should_plot=False, threshold=0.6):
     # 1. check data format
     if isinstance(points, o3d.t.geometry.PointCloud):
         points = points.point[get_coordinate_attribute(points)].numpy()
@@ -737,27 +736,47 @@ def classify_manhole(points, save_path=None, should_plot=False):
     # 3. Compute the Convex Hull -> the "envelope" of the points
     # This gives us a clean shape even if the LIDAR points are sparse inside
     hull = ConvexHull(points_2d)
-    
-    # 4. Extract Area and Perimeter (length) from the hull
+
+    # Extract Area and Perimeter (length) from the hull
     area = hull.volume  # In 2D, 'volume' is the area
     perimeter = hull.area  # In 2D, 'area' is the perimeter
     
-    # 5. Calculate Circularity
+    # Calculate Circularity
     # -> https://en.wikipedia.org/wiki/Isoperimetric_inequality
-    circularity = (4 * np.pi * area) / (perimeter ** 2)
-    
-    # 6. Classification Logic
-    # Threshold is usually around 0.88 - 0.90
-    if circularity > 0.89:
-        # result = ("Circular", circularity)
-        is_circle = True
-    else:
-        # result = ("Square/Rectangular", circularity)
-        is_circle = False
+    circularity = (4 * np.pi * area) / (perimeter ** 2 + 1e-8)
+
+    # 4. PCA shape check
+    cov = np.cov(points_2d.T)
+    # eigvals, _ = np.linalg.eigh(cov)
+    eigvals = np.linalg.eigvalsh(cov)
+    eigvals = np.sort(eigvals)
+    # anisotropy = 1 - (eigvals[0] / eigvals[1])
+    pca_score = eigvals[0] / (eigvals[1] + 1e-8)
+
+    # 5. Radial Variance
+    center = points_2d.mean(axis=0)
+    center_norm = np.linalg.norm(points_2d - center, axis=1)
+
+    radial_var = np.std(center_norm) / (np.mean(center_norm) + 1e-8)
+
+    # Least Square Fit Shape Check?
+    # ...
+
+    # 6. Voting
+    vote_circle = 0
+    vote_circle += circularity > 0.85
+    vote_circle += pca_score > 0.5
+    vote_circle += radial_var < 0.25
+
+    score = vote_circle / 3.0
+
+    is_circle_ = score >= threshold
     
 
     # 7. visualize
     if should_plot or save_path is not None:
+        plt.style.use("seaborn-v0_8-whitegrid")
+
         fig, ax = plt.subplots(figsize=(7,7))
 
         ax.scatter(points_2d[:, 0], points_2d[:, 1], s=5, alpha=0.3, label="Points")
@@ -781,7 +800,7 @@ def classify_manhole(points, save_path=None, should_plot=False):
         ax.set_aspect("equal")
         ax.legend()
 
-        if is_circle:
+        if is_circle_:
             ax.set_title("Shape Check (✅ Is a Circle)")
         else:
             ax.set_title("Shape Check (❌ Is not a Circle)")
@@ -795,7 +814,12 @@ def classify_manhole(points, save_path=None, should_plot=False):
         plt.close(fig)
 
 
-    return is_circle
+    return is_circle_, {
+        "circularity": circularity,
+        "pca_score": pca_score,
+        "radial_var": radial_var,
+        "score": score
+    }
 
 
 

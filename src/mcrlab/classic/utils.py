@@ -6,7 +6,8 @@ import open3d as o3d
 import matplotlib.pyplot as plt
 import cv2
 from sklearn.cluster import DBSCAN
-from scipy.spatial import ConvexHull
+
+from mcrlab.point_cloud.utils import circle_shape_check
 
 
 
@@ -307,37 +308,19 @@ def get_manhole_candidates_from_2d_img(bev_image):
             continue
 
         # Shape Check
-        hull = ConvexHull(cluster)
-        
-        # Extract Area and Perimeter (length) from the hull
-        area = hull.volume  # In 2D, 'volume' is the area
-        perimeter = hull.area  # In 2D, 'area' is the perimeter
-        
-        # Calculate Circularity
-        # -> https://en.wikipedia.org/wiki/Isoperimetric_inequality
-        circularity = (4 * np.pi * area) / (perimeter ** 2)
-        
-
-        # PCA shape check
-        cov = np.cov(cluster.T)
-
-        eigvals, _ = np.linalg.eigh(cov)
-
-        axis_ratio = (
-            eigvals.min() /
-            eigvals.max()
-        )
+        is_circle, shape_check_res = circle_shape_check(points=cluster, save_path=None, should_plot=False, threshold=0.6)
 
         # Classification Logic
         # Threshold is usually around 0.88 - 0.90
-        if circularity > 0.75 and \
-            axis_ratio > 0.5:
+        if is_circle:
             final_manholes.append({
                 "cluster": cluster,
                 "center_px": center,
                 "diameter_m": diameter_m,
-                "circularity": circularity,
-                "axis_ratio": axis_ratio
+                "circularity": shape_check_res["circularity"],
+                "pca_score": shape_check_res["pca_score"],
+                "radial_var": shape_check_res["radial_var"],
+                "score": shape_check_res["score"]
             })
         else:
             continue

@@ -34,6 +34,7 @@ def get_device(device):
 
 def load_point_cloud(path):
     if path.endswith(".las") or path.endswith(".laz"):
+        # FIXME
         point_cloud = las_to_o3d(path)
         # if as_point_cloud_tensor:
         #     point_cloud = ToPointCloudTensorTransform()(point_cloud)
