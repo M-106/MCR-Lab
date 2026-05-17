@@ -4,105 +4,26 @@
 import os
 
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy.optimize import least_squares
+from scipy.spatial import ConvexHull
 from sklearn.cluster import DBSCAN, MeanShift, estimate_bandwidth
 from sklearn.preprocessing import StandardScaler
 from skimage.measure import ransac, CircleModel
+import cv2
 import pyransac3d as pyrsc
 
 import open3d as o3d
 import torch
 
-from mcrlab.classic.utils import fit_plane, plane_basis, project_to_plane, get_manhole_candidates_from_2d_img, \
+from mcrlab.classic.utils import fit_plane, plane_basis, project_to_plane, \
                                   visualize_circle_fit
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute, get_instance_attribute
 from mcrlab.point_cloud.data import CSFGroundFilterTransform, bev_gen_wrapper
 from mcrlab.projection import bev_projection, bev_back_projection
 
-
-
-# ----------------------------
-# > Least Square Fit 2D & 3D <
-# ----------------------------
-# Short explanation: Iteratively minimize residuals -> perfect circle compared to current circle.
-#                    Optimized via gradients (the direction of where we want to go to complete the circle function), 
-#                    we have the ground truth, it is a perfect circle.
-#                    We don't know where the center is, but we improve the circle via gradients
-#                    so that the circle function gets minimized/approximal optimized.
-#                    - It minimized a nonlinear function
-#                    - uses gradients (kinda like backpropagation but a bit different)
-# Cite: FIXME
-
-def circle_residuals(params, x, y):
-    """
-    Computes distance error for each point.
-
-    > Residual is that what is left after a difference or the rest part.
-    > Here it is the rest part which is not optimal for a perfect circle.
-
-    Center: a, b
-    Radius: r
-    """
-    a, b, r = params
-
-    distances = np.sqrt( (x - a)**2 + (y - b)**2 )
-
-    return distances - r
-
-
-
-def fit_circle_least_squares(x, y):
-    """
-    Fits a circle to 2D points using nonlinear least squares.
-
-    Iteratively minimize circle function and optimize via back-propagation.
-    See: https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.least_squares.html
-    """
-    if not isinstance(x, np.ndarray) or not isinstance(y, np.ndarray):
-        raise TypeError(f"Points must be a numpy array, but got '{type(x)}, {type(y)}'")
-
-    # init guess
-    a0 = np.mean(x)
-    b0 = np.mean(y)
-    r0 = np.mean( np.sqrt((x - a0)**2 + (y - b0)**2) )
-    init_guess = [a0, b0, r0]
-
-    # optimize
-    result = least_squares(
-        circle_residuals,
-        init_guess,
-        args=(x, y),
-        method='lm',  # Levenberg-Marquardt (should be good for small/medium problems)
-        loss='linear'
-    )
-
-    a, b, r = result.x
-    # result.fun contains the residuals of every point, with the current optimized params
-    mean_distance_error = np.mean(np.abs(result.fun))
-    loss = result.cost
-    return a, b, abs(r), mean_distance_error, loss
-
-
-
-def fit_circle_least_squares_3D(points):
-    if not isinstance(points, np.ndarray):
-        raise TypeError(f"Points must be a numpy array, but got '{type(points)}'")
-
-    # prepraration for projection
-    centroid, normal = fit_plane(points)
-    # print("Normal", normal.shape)
-    basis_x, basis_y = plane_basis(normal)
-
-    # projection into 2D
-    x, y = project_to_plane(centroid=centroid, points=points, basis_x=basis_x, basis_y=basis_y)
-
-    # optimize circle shape
-    a, b, r, mean_distance_error, loss = fit_circle_least_squares(x, y)
-
-    # back projection
-    center_3D = centroid + (a * basis_x) + (b *basis_y)
-
-    return center_3D, normal, r, mean_distance_error, loss
+from mcrlab.classic.least_squares import fit_circle_least_squares, fit_circle_least_squares_3D
+from mcrlab.point_cloud.shape_check import circle_shape_check
 
 
 
@@ -470,7 +391,16 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                     continue
 
                 # check if manhole class
-                if np.all(labels[indices] != label_value):
+                if not isinstance(label_value, (list, tuple)):
+                    label_value = [label_value]
+
+                # not_have_manhole = True
+                # for cur_label_value in label_value:
+                #     not_have_manhole = not_have_manhole and np.all(labels[indices] != cur_label_value)
+                
+                # if not_have_manhole:
+                #     continue
+                if not np.any(np.isin(labels[indices], label_value)):
                     continue
 
                 cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()
@@ -500,7 +430,9 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                 labels = points.point[semantic_class_idx].numpy().ravel()
 
                 # filter by desired class
-                indices = np.where(labels == label_value)[0]
+                if not isinstance(label_value, (list, tuple)):
+                    label_value = [label_value]
+                indices = np.where(np.isin(labels, label_value))[0]
 
                 if len(indices) == 0:
                     return []
@@ -732,10 +664,115 @@ def classic_manhole_prediction_pipeline(point_cloud, type, plot_path):
                                 error=error,
                                 should_plot=False,
                                 save_path=os.path.join(plot_path, filename))
-    
-    
-                
 
+
+
+# --------------------
+# > Candidate Search <
+# --------------------
+def get_manhole_candidates_from_2d_img(bev_image):
+    # print("BEV Image Shape:", bev_image.shape)
+
+    intensity_map = bev_image[2, :, :]
+
+    # find local features / edges
+    blur = cv2.GaussianBlur(intensity_map, (5,5), 0)
+    lap = cv2.Laplacian(
+        blur.astype(np.float32),
+        cv2.CV_32F
+    )
+    threshold = np.mean(np.abs(lap)) + 2*np.std(np.abs(lap))
+    edges = np.abs(lap) > threshold
+    # edges = cv2.Canny(img8, 50, 150)
+
+    # morphological closing
+    kernel = np.ones((3,3), np.uint8)
+
+    edges = cv2.morphologyEx(
+        edges.astype(np.uint8),
+        cv2.MORPH_CLOSE,
+        kernel
+    )
+
+    candidate_points = np.column_stack(np.where(edges))
+
+    if candidate_points.shape[0] == 0:
+        return []
+
+    clustering = DBSCAN(
+        eps=3,
+        min_samples=20
+    ).fit(candidate_points)
+
+    labels = clustering.labels_
+
+    unique_labels = np.unique(labels)
+
+    final_manholes = []
+
+    for label in unique_labels:
+
+        if label == -1:
+            continue
+
+        cluster = candidate_points[labels == label]
+
+        center = cluster.mean(axis=0)
+
+        dists = np.linalg.norm(
+            cluster - center,
+            axis=1
+        )
+
+        diameter_px = 2 * dists.max()
+
+        diameter_m = diameter_px * 0.01
+
+        if not (0.4 < diameter_m < 1.2):
+            continue
+
+        # circles = cv2.HoughCircles(
+        #     bev_image,
+        #     cv2.HOUGH_GRADIENT,
+        #     dp=1,
+        #     minDist=20,
+        #     param1=50,
+        #     param2=20,
+        #     minRadius=5,
+        #     maxRadius=20
+        # )
+
+        # model, inliers = ransac(
+        #     cluster_xy,
+        #     CircleModel,
+        #     min_samples=3,
+        #     residual_threshold=0.02,
+        #     max_trials=100
+        # )
+
+        if len(cluster) < 20:
+            continue
+
+        # Shape Check
+        is_circle, shape_check_res = circle_shape_check(points=cluster, save_path=None, should_plot=False, threshold=0.6)
+
+        # Classification Logic
+        # Threshold is usually around 0.88 - 0.90
+        if is_circle:
+            final_manholes.append({
+                "cluster": cluster,
+                "center_px": center,
+                "diameter_m": diameter_m,
+                "circularity": shape_check_res["circularity"],
+                "pca_score": shape_check_res["pca_score"],
+                "radial_var": shape_check_res["radial_var"],
+                "least_squares_error": shape_check_res["least_squares_error"],
+                "score": shape_check_res["score"]
+            })
+        else:
+            continue
+
+    return final_manholes
 
 
 

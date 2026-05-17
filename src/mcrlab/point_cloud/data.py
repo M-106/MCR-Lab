@@ -22,8 +22,7 @@ from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_wi
                                      get_coordinate_attribute, get_class_attribute, \
                                      get_intensity_attribute, get_color_attribute, \
                                      get_normal_attribute, get_instance_attribute, \
-                                     split_point_cloud_into_multiple, \
-                                     circle_shape_check
+                                     split_point_cloud_into_multiple
 from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.semantic_kitti_utils import load_semantic_kitti_as_o3d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
@@ -31,6 +30,7 @@ from mcrlab.projection import bev_projection
 from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle, \
                             load_single_bev_tile_as_pickle
 from mcrlab.image.utils import normalize_img_per_channel
+from mcrlab.point_cloud.shape_check import circle_shape_check
 
 
 
@@ -422,20 +422,30 @@ class FilterAndRelabelingTransform:
         
         manhole_points = positions[mask_indices]
 
-        # get manhole instances via clustering
-        clustering = DBSCAN(eps=0.3, min_samples=20).fit(manhole_points)
-        clusters = clustering.labels_
+        instance_key = get_instance_attribute(point_cloud)
+        if instance_key is not None:
+            # use existing instance labels only for manhole points
+            all_instances = point_cloud.point[instance_key].cpu().numpy().squeeze()
 
-        # remove noise (-1)
-        valid = clusters >= 0
+            # keep only points that are semantic manholes
+            clusters = all_instances[mask_indices]
 
-        masked_indices = np.where(mask)[0]
+            # ignore invalid/noise instances if present
+            # valid = clusters >= 0
+            valid = np.full(clusters.shape, True, dtype=np.bool)
+        else:
+            # get manhole instances via clustering
+            clustering = DBSCAN(eps=0.3, min_samples=20).fit(manhole_points)
+            clusters = clustering.labels_
+
+            # remove noise (-1)
+            valid = clusters >= 0
 
         # process each cluster
         for cluster_id in np.unique(clusters[valid]):
             # get manhole with current cluster id
             local_mask = clusters == cluster_id
-            global_indices = masked_indices[local_mask]
+            global_indices = mask_indices[local_mask]
             instance_points = positions[global_indices]
   
             is_circle, _ = circle_shape_check(
@@ -778,6 +788,7 @@ class ParisLille3DDataset(Dataset):
         #     return point_cloud  # shape (1024, 3)
 
 
+# FIXME why only find Found 28 point clouds??? -> because of preprocessed flag, but where is it used?
 class WHUUrban3DDataset(Dataset):
     def __init__(self, path, type="train", transform=None, 
                  preprocessed=False, return_train_format=False):

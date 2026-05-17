@@ -6,8 +6,7 @@ import open3d as o3d
 import matplotlib.pyplot as plt
 import cv2
 from sklearn.cluster import DBSCAN
-
-from mcrlab.point_cloud.utils import circle_shape_check
+from scipy.spatial import ConvexHull
 
 
 
@@ -221,111 +220,62 @@ def visualize_circle_fit(points, center_pred, radius, error, name="Approach 1",
 
 
 
-# --------------------
-# > Candidate Search <
-# --------------------
-def get_manhole_candidates_from_2d_img(bev_image):
-    # print("BEV Image Shape:", bev_image.shape)
+def visualize_circle_shape_and_center_prediction(points_2d, center_pred, radius, 
+                                                 title, sub_title,
+                                                 should_plot=True, save_path=None):
+    hull = ConvexHull(points_2d)
 
-    intensity_map = bev_image[2, :, :]
+    # color palette
+    POINT_COLOR = "#6c757d"
+    APPROACH_1_COLOR = "#d62828"
+    HULL_COLOR = "#28d67f"
 
-    # find local features / edges
-    blur = cv2.GaussianBlur(intensity_map, (5,5), 0)
-    lap = cv2.Laplacian(
-        blur.astype(np.float32),
-        cv2.CV_32F
-    )
-    threshold = np.mean(np.abs(lap)) + 2*np.std(np.abs(lap))
-    edges = np.abs(lap) > threshold
-    # edges = cv2.Canny(img8, 50, 150)
+    # extract the data
+    x = points_2d[:, 0]
+    y = points_2d[:, 1]
 
-    # morphological closing
-    kernel = np.ones((3,3), np.uint8)
+    cx, cy, _ = center_pred
+    t = np.linspace(0, 2*np.pi, 400)
+    x_c = cx + radius * np.cos(t)
+    y_c = cy + radius * np.sin(t)
+    
+    if should_plot or save_path is not None:
+        plt.style.use("seaborn-v0_8-whitegrid")
 
-    edges = cv2.morphologyEx(
-        edges.astype(np.uint8),
-        cv2.MORPH_CLOSE,
-        kernel
-    )
+        fig, ax = plt.subplots(figsize=(7,7))
 
-    candidate_points = np.column_stack(np.where(edges))
+        ax.scatter(points_2d[:, 0], points_2d[:, 1], s=5, alpha=0.3, label="Points", color=POINT_COLOR)
 
-    if candidate_points.shape[0] == 0:
-        return []
+        ax.plot(x_c, y_c, color=APPROACH_1_COLOR, linewidth=2.5, label=f"Predicted Squares Circle")
+        ax.scatter(*center_pred[:2], color=APPROACH_1_COLOR, s=80, edgecolor="white", zorder=5, label=f"Predicted Squares Center")
 
-    clustering = DBSCAN(
-        eps=3,
-        min_samples=20
-    ).fit(candidate_points)
+        # hull vertices in correct order
+        hull_points = points_2d[hull.vertices]
 
-    labels = clustering.labels_
+        # close the polygon by repeating the first point
+        hull_points = np.vstack([hull_points, hull_points[0]])
 
-    unique_labels = np.unique(labels)
+        # plot convex hull
+        ax.plot(hull_points[:, 0],
+                hull_points[:, 1],
+                # 'r-', 
+                color=HULL_COLOR,
+                lw=2, 
+                label="Convex Hull")
 
-    final_manholes = []
+        ax.set_aspect("equal")
+        ax.legend()
 
-    for label in unique_labels:
+        plt.title(title, fontsize=14, weight="bold", y=0.98)
+        plt.suptitle(sub_title, fontsize=10, y=0.93)
 
-        if label == -1:
-            continue
+        if save_path is not None:
+            plt.savefig(save_path)
 
-        cluster = candidate_points[labels == label]
+        if should_plot:
+            plt.show()
 
-        center = cluster.mean(axis=0)
-
-        dists = np.linalg.norm(
-            cluster - center,
-            axis=1
-        )
-
-        diameter_px = 2 * dists.max()
-
-        diameter_m = diameter_px * 0.01
-
-        if not (0.4 < diameter_m < 1.2):
-            continue
-
-        # circles = cv2.HoughCircles(
-        #     bev_image,
-        #     cv2.HOUGH_GRADIENT,
-        #     dp=1,
-        #     minDist=20,
-        #     param1=50,
-        #     param2=20,
-        #     minRadius=5,
-        #     maxRadius=20
-        # )
-
-        # model, inliers = ransac(
-        #     cluster_xy,
-        #     CircleModel,
-        #     min_samples=3,
-        #     residual_threshold=0.02,
-        #     max_trials=100
-        # )
-
-        if len(cluster) < 20:
-            continue
-
-        # Shape Check
-        is_circle, shape_check_res = circle_shape_check(points=cluster, save_path=None, should_plot=False, threshold=0.6)
-
-        # Classification Logic
-        # Threshold is usually around 0.88 - 0.90
-        if is_circle:
-            final_manholes.append({
-                "cluster": cluster,
-                "center_px": center,
-                "diameter_m": diameter_m,
-                "circularity": shape_check_res["circularity"],
-                "pca_score": shape_check_res["pca_score"],
-                "radial_var": shape_check_res["radial_var"],
-                "score": shape_check_res["score"]
-            })
-        else:
-            continue
-
-    return final_manholes
+        plt.close(fig)
 
 
 
