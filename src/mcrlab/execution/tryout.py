@@ -577,6 +577,9 @@ def center_robustnest_test(config):
         print("\n> RANSAC Fit Check <\n")
         center_coordinates_ransac, radius_ransac, points_ransac, cluster_point_clouds, _, error_r, _ = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, should_visualize=False, clusters=manipulated_clusters, label_value=(1, 255) if config.data.preprocessed else 104002)
 
+        print("\n> RANSAC Downsampled Fit Check <\n")
+        center_coordinates_ransac_downsampled, radius_ransac_downsampled, points_ransac_downsampled, _, _, error_r, _ = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, should_visualize=False, clusters=manipulated_clusters, label_value=(1, 255) if config.data.preprocessed else 104002, apply_downsampling=True)
+
         # compare similarity
         for cur_vis in range(len(points_ransac)):
             plot_name = f"pc_{cur_pc}_manhole_{cur_vis}.png"
@@ -590,6 +593,18 @@ def center_robustnest_test(config):
                                  additional_center_pred=center_coordinates_ransac[cur_vis], 
                                  additional_radius_pred=radius_ransac[cur_vis], 
                                  additional_name="RANSAC",
+                                 should_plot=False,
+                                 save_path=os.path.join(path, plot_name))
+            
+            plot_name = f"pc_{cur_pc}_manhole_{cur_vis}_downsampled.png"
+            visualize_circle_fit(points=points_ransac_downsampled[cur_vis], 
+                                 center_pred=center_coordinates_square[cur_vis], 
+                                 radius=radius_squares[cur_vis], 
+                                 error=error_s[cur_vis], 
+                                 name="Least-Squares", 
+                                 additional_center_pred=center_coordinates_ransac_downsampled[cur_vis], 
+                                 additional_radius_pred=radius_ransac_downsampled[cur_vis], 
+                                 additional_name="RANSAC (Downsampled)",
                                  should_plot=False,
                                  save_path=os.path.join(path, plot_name))
 
@@ -951,9 +966,13 @@ def center_prediction_use_labels_as_candidates_test(config):
         #                          error=error[cur_vis])
 
         # DEBUGGING
-        print(points[0].shape)
-        print(points_square[0].shape)
+        # print(points[0].shape)
+        # print(points_square[0].shape)
         # print(points == points_square)
+
+        print("\n> RANSAC Downsampled Fit Check <\n")
+        center_coordinates_ransac_downsampled, radius_ransac_downsampled, points_ransac_downsampled, _, _, error_r, _ = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, should_visualize=False, clusters=original_cluster_pcs, label_value=(1, 255) if config.data.preprocessed else 104002, apply_downsampling=True)
+
 
         # compare similarity?
         print(f"len(points) = {len(points)}\nlen(points_square) = {len(points_square)}")
@@ -994,6 +1013,19 @@ def center_prediction_use_labels_as_candidates_test(config):
                                  additional_name="RANSAC",
                                  save_path=os.path.join(path, plot_name), 
                                  should_plot=False)
+            
+
+            plot_name = f"pc_{cur_pc}_manhole_{cur_vis}_downsampled.png"
+            visualize_circle_fit(points=points_ransac_downsampled[cur_vis], 
+                                 center_pred=center_coordinates_square[cur_vis], 
+                                 radius=radius_squares[cur_vis], 
+                                 error=error[cur_vis], 
+                                 name="Least-Squares", 
+                                 additional_center_pred=center_coordinates_ransac_downsampled[cur_vis], 
+                                 additional_radius_pred=radius_ransac_downsampled[cur_vis], 
+                                 additional_name="RANSAC (Downsampled)",
+                                 should_plot=False,
+                                 save_path=os.path.join(path, plot_name))
 
         cur_pc += 1
 
@@ -1214,11 +1246,11 @@ def tryout(config):
     # circular_manhole_classification_test(config)
     # center_robustnest_test(config)  # stresstest
     # ransac_inlier_test(config)
-    ransac_downsampling_test(config)
+    # ransac_downsampling_test(config)
     # point_amount_check(config)
     # squares_circle_shape_test(config)
 
-    # center_prediction_use_labels_as_candidates_test(config)
+    center_prediction_use_labels_as_candidates_test(config)
     # classic_2D_pipeline_test(config)
 
     # Not done
