@@ -9,6 +9,7 @@ from tqdm import tqdm
 from scipy.spatial.distance import pdist
 from scipy.spatial import ConvexHull
 from sklearn.cluster import DBSCAN
+from sklearn.neighbors import NearestNeighbors
 
 import matplotlib.pyplot as plt
 
@@ -799,6 +800,42 @@ def split_point_cloud_into_multiple(point_cloud, path,  init_tile_size=500.0, ov
     print(f"STD Points: {sizes.std():.2f}\n")
                 
 
+
+def barycentric_downsample_manhole(points, radius=0.03, min_neighbors=5):
+    """
+    Baryzentrisches Downsampling speziell für isolierte Manhole-Punkte.
+
+    Returns a numpy array -> [N, C]
+    """
+    if isinstance(points, o3d.t.geometry.PointCloud):
+        points = points.point[get_coordinate_attribute(points)].cpu().numpy()
+
+    # get nearest neighbors
+    nearest_neighbor = NearestNeighbors(radius=radius).fit(points)
+    neighbors = nearest_neighbor.radius_neighbors(points, return_distance=False)
+
+    # make downsapling dense based with nearest neighbors (barycentric)
+    visited = np.zeros(len(points), dtype=bool)
+    downsampled = []
+
+    for i in range(len(points)):
+        if visited[i]:
+            continue
+
+        # get neighbors (from already calculated neighbors)
+        idx = neighbors[i]
+        if len(idx) < min_neighbors:
+            continue
+
+        # compute mean as downsampled point
+        cluster = points[idx]
+
+        centroid = cluster.mean(axis=0)
+        downsampled.append(centroid)
+
+        visited[idx] = True
+
+    return np.array(downsampled)
 
 
 

@@ -18,7 +18,8 @@ import torch
 
 from mcrlab.classic.utils import fit_plane, plane_basis, project_to_plane, \
                                   visualize_circle_fit
-from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute, get_instance_attribute
+from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute, get_instance_attribute, \
+                                     barycentric_downsample_manhole
 from mcrlab.point_cloud.data import CSFGroundFilterTransform, bev_gen_wrapper
 from mcrlab.projection import bev_projection, bev_back_projection
 
@@ -154,7 +155,7 @@ def fit_circle_ransac(x, y, method="sklearn"):
             data,
             CircleModel,
             min_samples=3,
-            residual_threshold=0.01,  #  * np.std(data),  # 1 cm tolerance (same as before) + dynamic thresholding
+            residual_threshold=0.02,  #  * np.std(data),  # 1 cm tolerance (same as before) + dynamic thresholding
             max_trials=10000,
         )
 
@@ -163,7 +164,7 @@ def fit_circle_ransac(x, y, method="sklearn"):
         
         # refinment using all inliers:
         inlier_points = data[inliers]
-        model.estimate(inlier_points)
+        model.from_estimate(inlier_points)
 
         # Residuals for all points
         all_residuals = model.residuals(data)
@@ -275,10 +276,13 @@ def fit_circle_ransac_3D(points, use_projection=True):
 # > Pipelines <
 # -------------
 # FIXME -> Except Refinemethod and method, example pipeline: RANSAC -> find inliers -> scipy.optimize.least_squares (refinement)
-def extract_center_point(points, method, use_2d_version, use_projection=False):
+def extract_center_point(points, method, use_2d_version, use_projection=False, apply_downsampling=False):
     """
     method: "least_square", "ransac"
     """
+    if apply_downsampling:
+        points = barycentric_downsample_manhole(points, radius=0.03, min_neighbors=1)
+
     if use_2d_version:
         x, y = points
 
@@ -290,7 +294,8 @@ def extract_center_point(points, method, use_2d_version, use_projection=False):
                 "radius": r,
                 "inliers": None,
                 "error": mean_distance_error,
-                "loss": loss
+                "loss": loss,
+                "input_points": points
             }
         else:
             center_3D, normal, r, mean_distance_error, loss = fit_circle_least_squares_3D(points)
@@ -299,7 +304,8 @@ def extract_center_point(points, method, use_2d_version, use_projection=False):
                 "radius": r,
                 "inliers": None,
                 "error": mean_distance_error,
-                "loss": loss
+                "loss": loss,
+                "input_points": points
             }
     elif method == "ransac":
         if use_2d_version:
@@ -312,14 +318,15 @@ def extract_center_point(points, method, use_2d_version, use_projection=False):
             "radius": r,
             "inliers": inliers,
             "error": error,
-            "loss": None
+            "loss": None,
+            "input_points": points
         }
     else:
         raise ValueError(f"Center Point Extraction Method not Found: {method}")
 
 
 
-def use_points_and_extract_center_point(clusters, method, use_projection=True):
+def use_points_and_extract_center_point(clusters, method, use_projection=True, apply_downsampling=False):
     candidates = []
 
     for cluster in clusters:
@@ -335,7 +342,8 @@ def use_points_and_extract_center_point(clusters, method, use_projection=True):
             points=cluster_points,
             method=method,
             use_2d_version=False,
-            use_projection=use_projection
+            use_projection=use_projection,
+            apply_downsampling=apply_downsampling
         )
 
         if result is None:
@@ -346,16 +354,18 @@ def use_points_and_extract_center_point(clusters, method, use_projection=True):
         inliers = result["inliers"]
         error = result["error"]
         loss = result["loss"]
+        input_points = result["input_points"]
 
         # if 0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30):
-        candidates.append((center, radius, cluster, error, loss))
+        candidates.append((center, radius, cluster, inliers, error, loss, input_points))
 
     return candidates
 
 
 
 def use_label_candidates_and_extract_center_point(points, use_2d_version, label_value, 
-                                                  method="least_square", use_projection=True, cluster_if_needed=True):
+                                                  method="least_square", use_projection=True, cluster_if_needed=True,
+                                                  apply_downsampling=False):
     candidates = []
     
     # 2D CASE
@@ -409,7 +419,8 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                     points=cluster_points,
                     method=method,
                     use_2d_version=False,
-                    use_projection=use_projection
+                    use_projection=use_projection,
+                    apply_downsampling=apply_downsampling
                 )
 
                 if result is None:
@@ -420,9 +431,10 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                 inliers = result["inliers"]
                 error = result["error"]
                 loss = result["loss"]
+                input_points = result["input_points"]
 
                 if 0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30):
-                    candidates.append((center, radius, cluster, error, loss))
+                    candidates.append((center, radius, cluster, inliers, error, loss, input_points))
         
             return candidates
         else:
@@ -469,7 +481,8 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                     points=cluster_points,
                     method=method,
                     use_2d_version=False,
-                    use_projection=use_projection
+                    use_projection=use_projection,
+                    apply_downsampling=apply_downsampling
                 )
 
                 if result is None:
@@ -480,9 +493,10 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                 inliers = result["inliers"]
                 error = result["error"]
                 loss = result["loss"]
+                input_points = result["input_points"]
 
                 if 0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30):
-                    candidates.append((center, radius, cluster, error, loss))
+                    candidates.append((center, radius, cluster, inliers, error, loss, input_points))
         
             return candidates
 
@@ -490,7 +504,7 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
 
 def find_candidates_and_extract_center_point(point_cloud, method="least_square", cluster_method="sklearn", 
                                              extract_ground=False, ground_extraction_method="csf",
-                                             use_projection=True):
+                                             use_projection=True, apply_downsampling=False):
     """
     - method: "least_square", "ransac"
     - cluster_method: "sklearn", "o3d"
@@ -571,14 +585,15 @@ def find_candidates_and_extract_center_point(point_cloud, method="least_square",
             continue
 
         # FIXME -> also make 2D available?
-        result = extract_center_point(points=points_numpy, method=method, use_2d_version=False, use_projection=use_projection)
+        result = extract_center_point(points=points_numpy, method=method, use_2d_version=False, use_projection=use_projection, apply_downsampling=apply_downsampling)
         center = result["center"]
         radius = result["radius"]
         inliers = result["inliers"]
+        input_points = result["input_points"]
 
         # Realistic Manhole-Radius: 20–40 cm
         if 0.20 < radius < 0.50 and (inliers is not None or len(inliers) > 30):
-            detected_manhole_candidates.append((center, radius, cluster))
+            detected_manhole_candidates.append((center, radius, cluster, input_points))
             print("Candidate:", center, radius)
 
     return detected_manhole_candidates
@@ -656,7 +671,7 @@ def classic_manhole_prediction_pipeline(point_cloud, type, plot_path):
                                                              method="least_square", 
                                                              use_projection=True)
         
-    for idx, (center, radius, cluster, error, loss) in enumerate(center_points):
+    for idx, (center, radius, cluster, inlier, error, loss, input_points) in enumerate(center_points):
         filename = f"2D_Geomtry_Pipeline_Center_Prediction_Tile_{tile_id}_Manhole_{idx}.png"
         visualize_circle_fit(points=cluster, 
                                 center_pred=center, 

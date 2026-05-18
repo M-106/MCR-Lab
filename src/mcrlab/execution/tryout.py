@@ -30,7 +30,8 @@ from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_att
 from mcrlab.classic.shape_fit import use_label_candidates_and_extract_center_point, \
                                       use_points_and_extract_center_point, \
                                       classic_manhole_prediction_pipeline
-from mcrlab.classic.utils import visualize_circle_fit, visualize_circle_shape_and_center_prediction
+from mcrlab.classic.utils import visualize_circle_fit, visualize_circle_shape_and_center_prediction, \
+                                 visualize_ransac_inliers
 from mcrlab.point_cloud.shape_check import circle_shape_check
 
 
@@ -558,7 +559,7 @@ def center_robustnest_test(config):
         # print_pc(point_cloud)
 
         # get cluster and manupilate it
-        _, _, _, original_cluster_pcs, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
+        _, _, _, original_cluster_pcs, _, _, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
         
         if original_cluster_pcs is None:
             cur_pc += 1
@@ -571,10 +572,10 @@ def center_robustnest_test(config):
             )
 
         print("\n> Least Square Circle Fit Check <\n")
-        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, error_s = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=manipulated_clusters, label_value=(1, 255) if config.data.preprocessed else 104002)
+        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, _, error_s, _ = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=manipulated_clusters, label_value=(1, 255) if config.data.preprocessed else 104002)
 
         print("\n> RANSAC Fit Check <\n")
-        center_coordinates_ransac, radius_ransac, points_ransac, cluster_point_clouds, error_r = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, should_visualize=False, clusters=manipulated_clusters, label_value=(1, 255) if config.data.preprocessed else 104002)
+        center_coordinates_ransac, radius_ransac, points_ransac, cluster_point_clouds, _, error_r, _ = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, should_visualize=False, clusters=manipulated_clusters, label_value=(1, 255) if config.data.preprocessed else 104002)
 
         # compare similarity
         for cur_vis in range(len(points_ransac)):
@@ -619,14 +620,131 @@ def center_robustnest_test(config):
 
 
 def ransac_inlier_test(config):
+    """
+    RANSAC classifies all points as inliers or outliers 
+    depending on the distance to the circle 
+    which is build with 3 random points over 
+    multiple iterations and a optimization 
+    alogrithm like Least Squares. 
+    """
     # better understanding of why it chooses that
-    pass
+    print("\n --- RANSAC Center Estimation Investigation ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type=config.data.type, 
+                                    transform=None,  # get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    # clear save path
+    path = f"./output/ransac_inlier_test_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
+
+    for batch in tqdm(data_loader, total=len(data_loader), desc="RANSAC Inlier Test"):
+        point_cloud = batch[0]
+        # print_pc(point_cloud)
+
+        # get cluster
+        print("\n> RANSAC Fit Check <\n")
+        center_coordinates_ransac, radius_ransac, points, cluster_point_clouds, inliers, error, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="ransac", extended_return=True, clusters=None, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
+        
+        if points is None:
+            cur_pc += 1
+            continue
+
+        # # visualize error
+        for cur_vis in range(len(points)):
+
+            plot_name = f"pc_{cur_pc}_manhole_{cur_vis}.png"
+            cur_path = os.path.join(path, plot_name)
+            
+            visualize_ransac_inliers(points_2d=points[cur_vis][:, :2], 
+                                     center_pred=center_coordinates_ransac[cur_vis, :2], 
+                                     radius=radius_ransac[cur_vis], 
+                                     inliers=inliers[cur_vis],
+                                     should_plot=False, save_path=cur_path)
+
+        cur_pc += 1
+
+    print("Successfull finished!")
 
 
 
 def ransac_downsampling_test(config):
     # baristisches downsampling
-    pass
+    """
+    RANSAC samples from more dense regions and therefore a 
+    centroid based downsampling (barycentric) could help RANSAC.
+    """
+    # better understanding of why it chooses that
+    print("\n --- RANSAC Center Estimation Downsampling Investigation ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type=config.data.type, 
+                                    transform=None,  # get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    # clear save path
+    path = f"./output/ransac_downsampling_test_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
+
+    for batch in tqdm(data_loader, total=len(data_loader), desc="RANSAC Inlier Test"):
+        point_cloud = batch[0]
+
+        # get cluster and manupilate it
+        _, _, _, original_cluster_pcs, _, _, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
+        
+        if original_cluster_pcs is None:
+            cur_pc += 1
+            continue
+
+        # normal RANSAC
+        print("\n> RANSAC Fit Check <\n")
+        center_coordinates_ransac, radius_ransac, _, cluster_point_clouds, inliers, error, _ = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, clusters=original_cluster_pcs, 
+                                                                                                                                                       should_visualize=False, 
+                                                                                                                                                       label_value=(1, 255) if config.data.preprocessed else 104002,
+                                                                                                                                                       apply_downsampling=False)
+        
+        # downsampled RANSAC
+        print("\n> Downsampled RANSAC Fit Check <\n")
+        center_coordinates_ransac_downsampled, radius_ransac_downsampled, points, cluster_point_clouds, inliers, _, input_points = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, clusters=original_cluster_pcs, 
+                                                                                                                                                       should_visualize=False, 
+                                                                                                                                                       label_value=(1, 255) if config.data.preprocessed else 104002,
+                                                                                                                                                       apply_downsampling=True)
+
+        # # visualize error
+        for cur_vis in range(len(points)):
+
+            plot_name = f"pc_{cur_pc}_manhole_{cur_vis}.png"
+            cur_path = os.path.join(path, plot_name)
+            
+            visualize_circle_fit(points=points[cur_vis], 
+                                 center_pred=center_coordinates_ransac[cur_vis], 
+                                 radius=radius_ransac[cur_vis], 
+                                 error=error[cur_vis], 
+                                 name="RANSAC", 
+                                 additional_center_pred=center_coordinates_ransac_downsampled[cur_vis], 
+                                 additional_radius_pred=radius_ransac_downsampled[cur_vis], 
+                                 additional_name="Downsampled RANSAC",
+                                 additional_points=input_points[cur_vis], 
+                                 additional_points_label="Downsampled Points",
+                                 hide_mean=True,
+                                 save_path=cur_path, should_plot=False)
+
+        cur_pc += 1
+
+    print("Successfull finished!")
 
 
 
@@ -661,7 +779,7 @@ def point_amount_check(config):
 
 
 
-def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return=False, should_visualize=True, clusters=None, label_value=1):
+def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return=False, should_visualize=True, clusters=None, label_value=1, apply_downsampling=False):
     """
     Helper Function
     """
@@ -672,15 +790,17 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return
                                                                       label_value=label_value,  # 104002, 
                                                                       method=method, 
                                                                       use_projection=True, 
-                                                                      cluster_if_needed=True)
+                                                                      cluster_if_needed=True,
+                                                                      apply_downsampling=apply_downsampling)
     else:
         center_points = use_points_and_extract_center_point(clusters=clusters, 
                                                             method=method, 
-                                                            use_projection=True)
+                                                            use_projection=True,
+                                                            apply_downsampling=apply_downsampling)
         
     if len(center_points) <= 0:
         if extended_return:
-            return center_points, None, None, None, None
+            return center_points, None, None, None, None, None, None
         else:
             return center_points
     
@@ -712,9 +832,11 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return
         all_radius = np.full((len(center_points), 1), 0.0, dtype=np.float32)
         cluster_points = []
         cluster_point_clouds = []
+        all_inliers = []
+        all_input_points = []
 
     for idx, item in enumerate(center_points):
-        center, radius, cluster, error, loss = item
+        center, radius, cluster, inliers, error, loss, input_points = item
         center_coordinates[idx] = center
 
         if error_exists is True and error is not None:
@@ -731,6 +853,8 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return
             all_radius[idx] = radius
             cluster_points.append(cluster.point[get_coordinate_attribute(cluster)].numpy())
             cluster_point_clouds.append(cluster)
+            all_inliers.append(inliers)
+            all_input_points.append(input_points)
 
     if len(center_points) == 0:
         raise ValueError("No center points found!")
@@ -770,7 +894,7 @@ def center_estimation_3d_pipeline_debugging(point_cloud, method, extended_return
             visualize(pcd_vis, color_mode=None)
 
     if extended_return:
-        return center_coordinates, all_radius, cluster_points, cluster_point_clouds, total_error
+        return center_coordinates, all_radius, cluster_points, cluster_point_clouds, all_inliers, total_error, all_input_points
     else:
         return center_coordinates
 
@@ -800,14 +924,14 @@ def center_prediction_use_labels_as_candidates_test(config):
         print_pc(point_cloud)
 
         # get cluster
-        _, _, _, original_cluster_pcs, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
+        _, _, _, original_cluster_pcs, _, _, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
 
         if original_cluster_pcs is None:
             cur_pc += 1
             continue
 
         print("\n> Least Square Circle Fit Check <\n")
-        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, error = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=original_cluster_pcs, label_value=(1, 255) if config.data.preprocessed else 104002)
+        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, _, error, _ = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=original_cluster_pcs, label_value=(1, 255) if config.data.preprocessed else 104002)
 
         # # visualize error
         # for cur_vis in range(len(points_square)):
@@ -817,7 +941,7 @@ def center_prediction_use_labels_as_candidates_test(config):
         #                          error=error[cur_vis])
 
         print("\n> RANSAC Fit Check <\n")
-        center_coordinates_ransac, radius_ransac, points, cluster_point_clouds, error = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, clusters=original_cluster_pcs, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
+        center_coordinates_ransac, radius_ransac, points, cluster_point_clouds, _, error, _ = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, clusters=original_cluster_pcs, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
         # print(f"Center Coordinates, RANSAC: {center_coordinates_ransac}")
         # # visualize error
         # for cur_vis in range(len(points)):
@@ -901,14 +1025,14 @@ def squares_circle_shape_test(config):
         print_pc(point_cloud)
 
         # get cluster
-        _, _, _, original_cluster_pcs, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
+        _, _, _, original_cluster_pcs, _, _, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
 
         if original_cluster_pcs is None:
             cur_pc += 1
             continue
 
         print("\n> Least Square Circle Fit Check <\n")
-        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, error = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=original_cluster_pcs, label_value=(1, 255) if config.data.preprocessed else 104002)
+        center_coordinates_square, radius_squares, points_square, cluster_point_clouds, _, error, _ = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=original_cluster_pcs, label_value=(1, 255) if config.data.preprocessed else 104002)
 
         # visualize error
         for cur_vis in range(len(points_square)):
@@ -1010,7 +1134,7 @@ def make_split(config, test_size=0.2, val_size=0.1):
         point_cloud = batch[0]
 
         # get cluster
-        _, _, _, original_cluster_pcs, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
+        _, _, _, original_cluster_pcs, _, _, _ = center_estimation_3d_pipeline_debugging(point_cloud, method="least_square", extended_return=True, should_visualize=False, label_value=(1, 255) if config.data.preprocessed else 104002)
 
         cur_pc += 1
 
@@ -1089,8 +1213,8 @@ def tryout(config):
     # manhole_BEV_intensity_test(config)
     # circular_manhole_classification_test(config)
     # center_robustnest_test(config)  # stresstest
-    ransac_inlier_test(config)  # FIXME
-    # ransac_downsampling_test(config)  # FIXME
+    # ransac_inlier_test(config)
+    ransac_downsampling_test(config)
     # point_amount_check(config)
     # squares_circle_shape_test(config)
 

@@ -79,6 +79,8 @@ def project_to_plane(points, centroid, basis_x, basis_y):
 #     o3d.visualization.draw_geometries([point_cloud] + [center_points])
 def visualize_circle_fit(points, center_pred, radius, error, name="Approach 1", 
                          additional_center_pred=None, additional_radius_pred=None, additional_name="Approach 2",
+                         additional_points=None, additional_points_label="Other Points",
+                         hide_mean=False,
                          save_path=None, should_plot=True):
     """
     Visualizes circle fit quality.
@@ -99,6 +101,7 @@ def visualize_circle_fit(points, center_pred, radius, error, name="Approach 1",
 
     # color palette
     POINT_COLOR = "#6c757d"
+    POINT_COLOR_2 = "#f0af46"
     ERROR_COLOR = "#90e0ef"
     MEAN_COLOR = "#52b788"
     APPROACH_1_COLOR = "#d62828"
@@ -134,11 +137,11 @@ def visualize_circle_fit(points, center_pred, radius, error, name="Approach 1",
         y_c_2 = cy_2 + additional_radius_pred * np.sin(t)
 
     # error band (inner + outer circle)
-    x_outer = cx + (radius + error) * np.cos(t)
-    y_outer = cy + (radius + error) * np.sin(t)
+    # x_outer = cx + (radius + error) * np.cos(t)
+    # y_outer = cy + (radius + error) * np.sin(t)
 
-    x_inner = cx + max(radius - error, 0) * np.cos(t)
-    y_inner = cy + max(radius - error, 0) * np.sin(t)
+    # x_inner = cx + max(radius - error, 0) * np.cos(t)
+    # y_inner = cy + max(radius - error, 0) * np.sin(t)
 
     # radius farest point
     distances = np.sqrt((x - center_mean[0])**2 + (y - center_mean[1])**2)
@@ -154,6 +157,11 @@ def visualize_circle_fit(points, center_pred, radius, error, name="Approach 1",
     # points
     plt.scatter(x, y, s=15, color=POINT_COLOR, alpha=0.6, label="Manhole Points")
 
+    if additional_points is not None:
+        x_ = additional_points[:, 0]
+        y_ = additional_points[:, 1]
+        plt.scatter(x_, y_, s=15, color=POINT_COLOR_2, alpha=0.3, label=additional_points_label)
+
     # predicted circle
     plt.plot(x_c, y_c, color=APPROACH_1_COLOR, linewidth=2.5, label=f"Predicted circle ({name})")
     if additional_center_pred is not None:
@@ -167,30 +175,34 @@ def visualize_circle_fit(points, center_pred, radius, error, name="Approach 1",
     # plt.fill(x_inner, y_inner, color="white")
 
     # mean-center circle
-    plt.plot(x_mean, y_mean, "g:", label="Mean-center circle")
+    if not hide_mean:
+        plt.plot(x_mean, y_mean, "g:", label="Mean-center circle")
 
     # centers
     plt.scatter(*center_pred, color=APPROACH_1_COLOR, s=80, edgecolor="white", zorder=5, label=f"Predicted center ({name})")
     if additional_center_pred is not None:
         plt.scatter(*additional_center_pred, color=APPROACH_2_COLOR, s=80, edgecolor="white", zorder=5, label=f"Predicted center ({additional_name})")
-    plt.scatter(*center_mean, color=MEAN_COLOR, s=60, edgecolor="white", zorder=5, label="Mean center")
+    if not hide_mean:
+        plt.scatter(*center_mean, color=MEAN_COLOR, s=60, edgecolor="white", zorder=5, label="Mean center")
 
     # center difference
-    plt.plot(
-        [center_pred[0], center_mean[0]],
-        [center_pred[1], center_mean[1]],
-        color="black",
-        linestyle=":",
-        linewidth=1
-    )
-    if additional_center_pred is not None:
+    if not hide_mean:
         plt.plot(
-            [additional_center_pred[0], center_mean[0]],
-            [additional_center_pred[1], center_mean[1]],
+            [center_pred[0], center_mean[0]],
+            [center_pred[1], center_mean[1]],
             color="black",
             linestyle=":",
             linewidth=1
         )
+    if additional_center_pred is not None:
+        if not hide_mean:
+            plt.plot(
+                [additional_center_pred[0], center_mean[0]],
+                [additional_center_pred[1], center_mean[1]],
+                color="black",
+                linestyle=":",
+                linewidth=1
+            )
         plt.plot(
             [additional_center_pred[0], center_pred[0]],
             [additional_center_pred[1], center_pred[1]],
@@ -278,6 +290,56 @@ def visualize_circle_shape_and_center_prediction(points_2d, center_pred, radius,
         plt.close(fig)
 
 
+
+def visualize_ransac_inliers(points_2d, center_pred, radius, 
+                             inliers, 
+                             should_plot=True, save_path=None):
+    # color palette
+    CENTER_CIRCLE_COLOR = "#0d77d4"
+    INLIER_COLOR = "#28d67f"
+    OUTLIER_COLOR = "#d62828"
+
+    # extract the data
+    x = points_2d[:, 0]
+    y = points_2d[:, 1]
+
+    cx, cy = center_pred
+    t = np.linspace(0, 2*np.pi, 400)
+    x_c = cx + radius * np.cos(t)
+    y_c = cy + radius * np.sin(t)
+
+    inlier_mask = inliers
+    inlier_points = points_2d[inlier_mask]
+    outlier_points = points_2d[~inlier_mask]
+    
+    if should_plot or save_path is not None:
+        plt.style.use("seaborn-v0_8-whitegrid")
+
+        fig, ax = plt.subplots(figsize=(7,7))
+
+        # ax.scatter(points_2d[:, 0], points_2d[:, 1], s=5, alpha=0.3, label="Points", color=POINT_COLOR)
+
+        ax.plot(x_c, y_c, color=CENTER_CIRCLE_COLOR, linewidth=2.5, label=f"Predicted Circle")
+        ax.scatter(*center_pred[:2], color=CENTER_CIRCLE_COLOR, s=80, edgecolor="white", zorder=5, label=f"Predicted Center")
+
+        # plot inliers and outliers
+        ax.scatter(outlier_points[:, 0], outlier_points[:, 1], c=OUTLIER_COLOR, s=10, label='Outlier')
+        ax.scatter(inlier_points[:, 0],  inlier_points[:, 1],  c=INLIER_COLOR, s=10, label='Inlier')
+
+
+        ax.set_aspect("equal")
+        ax.legend()
+
+        plt.suptitle("RANSAC Investigation")
+        plt.title(f"Inlier: {inlier_points.shape[0]}, Outlier: {outlier_points.shape[0]}", fontsize=10, y=0.93)
+
+        if save_path is not None:
+            plt.savefig(save_path)
+
+        if should_plot:
+            plt.show()
+
+        plt.close(fig)
 
 
 
