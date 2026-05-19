@@ -281,7 +281,7 @@ def extract_center_point(points, method, use_2d_version, use_projection=False, a
     method: "least_square", "ransac"
     """
     if apply_downsampling:
-        points = barycentric_downsample_manhole(points, radius=0.03, min_neighbors=1)
+        points = barycentric_downsample_manhole(points, radius=0.05, min_neighbors=1)
 
     if use_2d_version:
         x, y = points

@@ -395,10 +395,10 @@ class FilterAndRelabelingTransform:
     - 1: manholes
     - 255: ignore -> special cases (not round manholes)
     """
-    def __init__(self):
-        pass
+    def __init__(self, manhole_label=104002):
+        self.manhole_label = manhole_label
 
-    def __call__(self, point_cloud, manhole_label=104002):
+    def __call__(self, point_cloud, ):
         if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
             raise ValueError(f"Can't apply FilterAndRelabelingTransform on '{type(point_cloud)}'")
 
@@ -410,7 +410,7 @@ class FilterAndRelabelingTransform:
         semantic_out = np.zeros(len(semantics), dtype=np.int32)
 
         # filter labels -> only instances with label 104002
-        mask = semantics == manhole_label
+        mask = semantics == self.manhole_label
         mask_indices = np.where(mask)[0]
         # manhole_points = positions[mask]
         
@@ -677,7 +677,7 @@ def get_basic_transform(num_points=-1):
 
 
 
-def get_preprocessing_transform(grid_size=0.01, do_voxelation=True):
+def get_preprocessing_transform(grid_size=0.01, do_voxelation=True, manhole_label=104002):
     transformations = [
         # ToFixPointsTransform(num_points=1000000, allow_padding=False, reduction_by_height=True),  # 7250451 -> 5000000
         # NaivMinHistoGroundKeepFilterTransform(),
@@ -686,7 +686,7 @@ def get_preprocessing_transform(grid_size=0.01, do_voxelation=True):
         # RoadExtractionTransform(mode="height")
         CSFGroundFilterTransform(invert_z=False),
         # SegmentationGroundKeepFilterTransform
-        FilterAndRelabelingTransform()
+        FilterAndRelabelingTransform(manhole_label=manhole_label)
     ]
 
     if do_voxelation:
@@ -893,6 +893,15 @@ class SUDROADDataset(Dataset):
         self.preprocessed = preprocessed
         self.return_train_format = return_train_format
 
+        self.train_ids = ['sud_splitted_chunk_19', 'sud_splitted_chunk_15', 'sud_splitted_chunk_3', 'sud_splitted_chunk_7', 'sud_splitted_chunk_11', 'sud_splitted_chunk_14', 'sud_splitted_chunk_10', 'sud_splitted_chunk_4', 'sud_splitted_chunk_9', 'sud_splitted_chunk_21', 'sud_splitted_chunk_6', 'sud_splitted_chunk_2', 'sud_splitted_chunk_18', 'sud_splitted_chunk_16', 'sud_splitted_chunk_22', 'sud_splitted_chunk_0', 'sud_splitted_chunk_23', 'sud_splitted_chunk_13', 'sud_splitted_chunk_24', 'sud_splitted_chunk_8']
+        self.val_ids = ['sud_splitted_chunk_12']
+        self.test_ids = ['sud_splitted_chunk_20', 'sud_splitted_chunk_17', 'sud_splitted_chunk_1', 'sud_splitted_chunk_5']
+
+        if preprocessed:
+            self.train_ids = ['preprocessed_'+x for x in self.train_ids]
+            self.val_ids = ['preprocessed_'+x for x in self.val_ids]
+            self.test_ids = ['preprocessed_'+x for x in self.test_ids]
+
         self.point_cloud_paths = []
         self.bev_paths = dict()
 
@@ -911,6 +920,13 @@ class SUDROADDataset(Dataset):
                     if preprocessed and not cur_file.startswith("preprocessed_"):
                         continue
                     elif not preprocessed and cur_file.startswith("preprocessed_"):
+                        continue
+
+                    if self.type == "train" and not any([cur_file.startswith(cur_id) for cur_id in self.train_ids]):
+                        continue
+                    elif self.type == "test" and not any([cur_file.startswith(cur_id) for cur_id in self.test_ids]):
+                        continue
+                    elif self.type == "val" and not any([cur_file.startswith(cur_id) for cur_id in self.val_ids]):
                         continue
 
                     self.point_cloud_paths.append(os.path.join(path, cur_file))
@@ -1289,6 +1305,10 @@ def preprocess_data(data_name, path, type="train", device="cpu",
                     bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5,
                     file_ending=".ply"):
     print("--- Data Preprocessing ---")
+
+    print("setting type to 'all'")
+    type = "all"
+
     data_loader = get_data_loader(data_name, path, type="load_unsplitted" if data_name=="sud"  else type, 
                                   transform=None if data_name=="sud"  else get_preprocessing_transform(grid_size=bev_resolution, do_voxelation=False),
                                   batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
@@ -1313,10 +1333,10 @@ def preprocess_data(data_name, path, type="train", device="cpu",
                 os.remove(cur_file_path)
 
         point_cloud = next(iter(data_loader))[0]
-        split_point_cloud_into_multiple(point_cloud, path,  init_tile_size=100.0, overlap=3.0)
+        split_point_cloud_into_multiple(point_cloud, path,  init_tile_size=80.0, overlap=3.0)
 
         # load new point clouds
-        data_loader = get_data_loader(data_name, path, type=type, transform=get_preprocessing_transform(grid_size=bev_resolution),
+        data_loader = get_data_loader(data_name, path, type="all", transform=get_preprocessing_transform(grid_size=bev_resolution, do_voxelation=False, manhole_label=3),
                                       batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
                                       return_train_format=False)
         

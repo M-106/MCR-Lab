@@ -18,11 +18,24 @@ from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
 # ---------
 def las_to_o3d(path):
     las = laspy.read(path)
+
+    # print("LAS READING Point Cloud")
+    # print("X:", las.x.min(), "bis", las.x.max())
+    # print("Y:", las.y.min(), "bis", las.y.max())
+    # print("Z:", las.z.min(), "bis", las.z.max())
+    # print("Scale:", las.header.scales)
+    # print("Offset:", las.header.offsets)
+
     points = np.vstack((las.x, las.y, las.z)).transpose()
+
+    # add local offset
+    # offset = points.min(axis=0)
+    offset = np.array([las.header.offsets])
+    points_local = points - offset
 
     # Tensor-based loading
     point_cloud = o3d.t.geometry.PointCloud()
-    point_cloud.point["positions"] = o3d.core.Tensor(points, dtype=o3d.core.Dtype.Float32)
+    point_cloud.point["positions"] = o3d.core.Tensor(points_local.astype(np.float32), dtype=o3d.core.Dtype.Float32)
     
     for label_idx in ["classification", "classes", "class", "labels", "label"]:
         if hasattr(las, label_idx):

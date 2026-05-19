@@ -186,9 +186,9 @@ def get_color_from_class(point_cloud):
         colors[labels == label] = color
 
     # Debug
-    # print("Class mapping:")
-    # for k, v in color_map.items():
-    #     print(f"  ID {k} → color {v}")
+    print("Class mapping:")
+    for k, v in color_map.items():
+        print(f"  ID {k} → color {v}")
 
     # # debugging only, find id via color
     # target = np.array([208, 231, 86]) / 255.0    # via color picker from visualization, only possible because of seed!
