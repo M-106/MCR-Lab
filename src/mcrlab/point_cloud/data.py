@@ -931,7 +931,7 @@ class SUDROADDataset(Dataset):
                     self.point_cloud_paths.append(os.path.join(path, cur_file))
 
         if preprocessed:
-            self.bev_gen = BEVDataset(path=self.point_cloud_paths, type=self.type, search_files=False, mode="linear", has_labels=False if self.type == "inference" else True)
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, has_labels=False if self.type == "inference" else True)
 
         print(f"Found {len(self.point_cloud_paths)} point clouds.")
 
@@ -1043,13 +1043,12 @@ class BEVDataset(Dataset):
     1 Sample = 1 Tile
     """
     def __init__(self, path=None, 
-                 file_paths=[], has_labels=False):
+                 file_paths=[], has_labels=False,
+                 image_training=False, preprocessor=None):
         """
         path is a list of point cloud file or a list of paths to search the bev images.
 
         It is designed to be used on before preprocessed data!
-
-        FIXME -> also make working on not preprocessed data and create BEV on the fly -> good idea?
 
         mode can be "linear" or "dataset"
             - in "linear" every tile will be exported one after another
@@ -1061,6 +1060,8 @@ class BEVDataset(Dataset):
         self.path = path
         self.file_paths = file_paths
         self.has_labels = has_labels
+        self.image_training = image_training
+        self.preprocessor = preprocessor
 
         # find pkl files
         all_bev_paths = []
@@ -1097,8 +1098,24 @@ class BEVDataset(Dataset):
 
         if self.has_labels:
             x = torch.from_numpy(tile[:-1]).float()
+            if self.image_training:
+                x = x[[0,2,3]]     # drop channel
+                if self.preprocessor is not None:
+                    # HF preprocessors expect numpy (H, W, C) or PIL
+                    x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
+                    processed = self.preprocessor(
+                        images=x_np,
+                        return_tensors="pt"
+                    )
+                    # FIXME, OneFromer need: task_inputs=["semantic"]?
+                    x = processed["pixel_values"].squeeze(0)  # (C, H, W)
+                else:
+                    x = (x - x.mean()) / (x.std() + 1e-6)
+                assert x.ndim == 3
+
             y = torch.from_numpy(tile[-1]).long()
             assert y.ndim == 2
+
             return {
                 "pixel_values": x,   # (C, H, W)
                 "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
@@ -1133,6 +1150,7 @@ class BEVDataset(Dataset):
             if self.has_labels:
                 x = torch.from_numpy(tile[:-1]).float()
                 y = torch.from_numpy(tile[-1]).long()
+                assert x.ndim == 3
                 assert y.ndim == 2
                 yield {
                     "pixel_values": x,   # (C, H, W)
@@ -1220,19 +1238,23 @@ def extract_tiles_metas(bev_gen, amount=5, as_numpy=True):
 
 def get_data_loader(data_name, path, type="train", transform=None,
                     batch_size=32, shuffle=True, num_workers=4,
-                    preprocessed=False, return_train_format=False):
+                    preprocessed=False, return_train_format=False,
+                    return_dataset=False):
     if data_name == "paris":
         data_loader = get_paris_data_loader(path, type=type, transform=transform,
                                             batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
-                                            preprocessed=preprocessed, return_train_format=return_train_format)
+                                            preprocessed=preprocessed, return_train_format=return_train_format,
+                                            return_dataset=return_dataset)
     elif data_name == "whu":
         data_loader = get_whu_data_loader(path, type=type, transform=transform,
                                           batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
-                                          preprocessed=preprocessed, return_train_format=return_train_format)
+                                          preprocessed=preprocessed, return_train_format=return_train_format,
+                                          return_dataset=return_dataset)
     elif data_name == "sud":
         data_loader = get_sud_data_loader(path, type=type, transform=transform,
                                           batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
-                                          preprocessed=preprocessed, return_train_format=return_train_format)
+                                          preprocessed=preprocessed, return_train_format=return_train_format,
+                                          return_dataset=return_dataset)
     else:
         raise ValueError(f"No Dataset with the name '{data_name}' founded. Try 'paris'.")
 
@@ -1242,9 +1264,13 @@ def get_data_loader(data_name, path, type="train", transform=None,
 
 def get_paris_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
-                          preprocessed=False, return_train_format=False):
+                          preprocessed=False, return_train_format=False,
+                          return_dataset=False):
     dataset = ParisLille3DDataset(path=path, type=type, transform=transform,
                                   preprocessed=preprocessed, return_train_format=return_train_format)
+
+    if return_dataset:
+        return dataset
 
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                       collate_fn=collate_point_clouds)
@@ -1253,9 +1279,13 @@ def get_paris_data_loader(path, type="train", transform=None,
 
 def get_whu_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
-                          preprocessed=False, return_train_format=False):
+                          preprocessed=False, return_train_format=False,
+                          return_dataset=False):
     dataset = WHUUrban3DDataset(path=path, type=type, transform=transform,
                                 preprocessed=preprocessed, return_train_format=return_train_format)
+
+    if return_dataset:
+        return dataset
 
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                       collate_fn=collate_point_clouds)
@@ -1264,9 +1294,13 @@ def get_whu_data_loader(path, type="train", transform=None,
 
 def get_sud_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
-                          preprocessed=False, return_train_format=False):
+                          preprocessed=False, return_train_format=False,
+                          return_dataset=False):
     dataset = SUDROADDataset(path=path, type=type, transform=transform,
                              preprocessed=preprocessed, return_train_format=return_train_format)
+
+    if return_dataset:
+        return dataset
 
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                       collate_fn=collate_point_clouds)

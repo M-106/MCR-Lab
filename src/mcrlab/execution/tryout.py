@@ -17,7 +17,8 @@ from dotenv import load_dotenv
 
 from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform, \
                                     preprocess_data, get_preprocessing_transform, \
-                                    bev_gen_wrapper, extract_tiles_metas
+                                    bev_gen_wrapper, extract_tiles_metas, \
+                                    BEVDataset
 from mcrlab.point_cloud.inspect import print_pc, visualize, visualize_intensity_in_2d, \
                                        analyze_point_distribution
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
@@ -415,7 +416,7 @@ def manhole_BEV_intensity_test(config):
 
                 ax[0].imshow(img_t[:, :, 1], cmap="viridis")
                 
-                shifted_img = img_t[:, :, 3] + abs(img_t[:, :, 3].min())
+                shifted_img = img_t[:, :, 2] + abs(img_t[:, :, 3].min())
                 final_img = shifted_img / shifted_img.max()
                 # # 1. set 1. and 99. percentile (for removing extreme outliers)
                 # p_low, p_high = np.percentile(img_t, (1, 5))
@@ -453,6 +454,159 @@ def manhole_BEV_intensity_test(config):
                 # break
     
         # break
+
+
+
+def BEV_investigation(config):
+    if config.data.name == "sud":
+        # label_value = (1, 255) if config.data.preprocessed else 3
+        label_value = 1 if config.data.preprocessed else 3
+    else:
+        # label_value = (1, 255) if config.data.preprocessed else 104002
+        label_value = 1 if config.data.preprocessed else 104002
+    
+    print("\n --- Manhole BEV Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type=config.data.type, 
+                                    transform=get_basic_transform(),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    path = f"./output/bev_channel_investigation_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
+    for batch in data_loader:
+        cur_pc += 1
+        point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
+        print_pc(point_cloud)
+
+        # get BEV images
+        print("Starting BEV projection...")
+        if point_cloud.bev_data is None:
+            raise ValueError("Preprocessed BEVs did not loaded.")
+            print("Starting BEV projection...")
+            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+            bev_gen = bev_gen_wrapper(tiles, metas)
+        else:
+            print("Loaded Bevs from file...")
+            bev_gen = point_cloud.get_bev()
+
+        for idx, bev_item in enumerate(bev_gen):
+            img = bev_item["pixel_values"].detach().cpu().numpy()
+            labels = bev_item["labels"].detach().cpu().numpy()
+            meta = bev_item["meta"] 
+
+            # extracting manholes? -> get all manhole points + clustering
+
+            # print(labels.shape)
+            if not isinstance(label_value, (tuple, list)):
+                label_value = [label_value]
+            if np.any(np.isin(labels, label_value)):
+                H, W = labels.shape
+                # colored_img = np.full((H, W, 3), 0.0, dtype=np.float32)
+                # colored_img[np.isin(labels, label_value)] = [1.0, 1.0, 0.0]
+
+                # fix img shape -> C, H, W -> H, W, C
+                img_t = np.transpose(img[:, :, :], (1, 2, 0))
+
+                fig, ax = plt.subplots(figsize=(20,12), ncols=3, nrows=2)
+
+                # Max Height
+                ax[0][0].imshow(img_t[:, :, 0], cmap="viridis")
+
+                # Delta Height
+                ax[0][1].imshow(img_t[:, :, 1], cmap="viridis")
+                
+                # Intensity
+                # shifted_img = img_t[:, :, 2] + abs(img_t[:, :, 3].min())
+                # final_img = shifted_img / shifted_img.max()
+                # # 1. set 1. and 99. percentile (for removing extreme outliers)
+                # p_low, p_high = np.percentile(img_t, (1, 5))
+                # # 2. clipping
+                # clipped_img = np.clip(img_t, p_low, p_high)
+                # # 3. normalize it
+                # normalized_img = (clipped_img - p_low) / (p_high - p_low)
+                # ax[1].imshow(final_img, cmap="viridis")
+                ax[1][0].imshow(img_t[:, :, 2], cmap="grey")
+                # (img_t - np.min(img_t))/(np.max(img_t) - np.min(img_t))
+
+                # Density
+                ax[1][1].imshow(img_t[:, :, 3], cmap="viridis")
+
+                # Labels
+                cmap = mcolors.ListedColormap(['black', 'yellow', 'blue'])
+                mapping = {0:0, 1:1, 255:2}
+
+                labels_mapped = np.vectorize(mapping.get)(labels)
+                labels_mapped = labels_mapped.reshape(H, W)
+                ax[0][2].imshow(labels_mapped, cmap=cmap, vmin=0, vmax=2)
+
+                ax[0][0].axis("off")
+                ax[0][1].axis("off")
+                ax[1][0].axis("off")
+                ax[1][1].axis("off")
+                ax[0][2].axis("off")
+                ax[1][2].axis("off")
+
+                ax[0][0].set_title("Max Height", fontsize=14, fontweight='bold')
+                ax[0][1].set_title("Delta Height", fontsize=14, fontweight='bold')
+                ax[1][0].set_title("Intensity", fontsize=14, fontweight='bold')
+                ax[1][1].set_title("Density", fontsize=14, fontweight='bold')
+                ax[0][2].set_title("Labels", fontsize=14, fontweight='bold')
+
+                # current_name = f"pc_{cur_pc}_bevimg_{idx}.png"
+                plot_name = f"pc_{meta['pc_id']}_x_{meta['origin_x']}_y_{meta['origin_y']}.png"
+                plt.savefig(os.path.join(path, plot_name))
+
+                # plt.show()
+
+                plt.close(fig)
+
+
+
+def bev_dataset_stat_investigation(config):
+    def compute_dataset_stats(dataset):
+        H = W = None
+        means, stds = [], []
+        for i in range(len(dataset)):
+            x = dataset[i]["pixel_values"]  # (C, H, W)
+            means.append(x.mean(dim=[1, 2]))
+            stds.append(x.std(dim=[1, 2]))
+            if H is None:
+                H = x.shape[1]
+            if W is None:
+                W = x.shape[2]
+        mean = torch.stack(means).mean(dim=0).tolist()
+        std  = torch.stack(stds).mean(dim=0).tolist()
+        print(f"mean={mean}, std={std}")
+        return mean, std, H, W
+    
+
+    train_dataset = get_data_loader(config.data.name, 
+                                   config.data.path, 
+                                   type="train", 
+                                   transform=get_basic_transform(),
+                                   batch_size=1, 
+                                   shuffle=False, 
+                                   num_workers=1,
+                                   preprocessed=True, 
+                                   return_train_format=True,
+                                   return_dataset=True)
+    all_train_paths = train_dataset.point_cloud_paths
+    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
+
+    mean, std, H, W = compute_dataset_stats(train_dataset)
+
+    result = f"{config.data.name} Stats:\n    - Mean: {mean:.4f}\n    - STD: {std:.4f}\n    - Height: {H}\n    - Width: {W}"
+
+    with open(f"./output/{config.data.name}_bev_data_stats.txt", "w") as file_:
+        file_.write(result)
 
 
 
@@ -523,17 +677,18 @@ def manhole_3d_and_2d_intensity_test(config):
                 color = np.repeat(color[:, np.newaxis], 3, axis=1).squeeze()
                 x = points[:, 0]
                 y = points[:, 1]
-                # ax[0].scatter(x, y, s=8, c=color, alpha=0.5, cmap="gray", edgecolors="none")
+                ax[0].scatter(x, y, s=5, c=color[:, 0], alpha=1.0, cmap="viridis", edgecolors="none")
                 # alpha=0.4, marker="o", linewidths=0
-                for size, alpha in [(40, 0.03), (20, 0.08), (8, 0.2)]:
-                    ax[0].scatter(
-                        x,
-                        y,
-                        s=size,
-                        c=color,
-                        alpha=alpha,
-                        edgecolors="none"
-                    )
+                # for size, alpha in [(40, 0.03), (20, 0.08), (8, 0.2)]:
+                #     ax[0].scatter(
+                #         x,
+                #         y,
+                #         s=size,
+                #         c=color[:, 0],
+                #         alpha=alpha,
+                #         edgecolors="none",
+                #         cmap="viridis"
+                #     )
 
                 # shifted_img = img_t[:, :, 3] + abs(img_t[:, :, 3].min())
                 # final_img = shifted_img / shifted_img.max()
@@ -543,17 +698,19 @@ def manhole_3d_and_2d_intensity_test(config):
                     np.arange(w),
                     np.arange(h)
                 )
-                color = img_t[:, :, 3]
-                # ax[1].scatter(x.ravel(), y.ravel(), s=8, c=color.ravel(), alpha=0.5, cmap="gray", edgecolors="none")
-                for size, alpha in [(40, 0.03), (20, 0.08), (8, 0.2)]:
-                    ax[1].scatter(
-                        x.ravel(),
-                        y.ravel(),
-                        s=size,
-                        c=color.ravel(),
-                        alpha=alpha,
-                        edgecolors="none"
-                    )
+                color = img_t[:, :, 2]
+                color = (color - np.min(color)) / (np.max(color) - np.min(color))
+                ax[1].scatter(x.ravel(), y.ravel(), s=5, c=color.ravel(), alpha=1.0, cmap="viridis", edgecolors="none")
+                # for size, alpha in [(40, 0.03), (20, 0.08), (8, 0.2)]:
+                #     ax[1].scatter(
+                #         x.ravel(),
+                #         y.ravel(),
+                #         s=size,
+                #         c=color.ravel(),
+                #         alpha=alpha,
+                #         edgecolors="none",
+                #         cmap="viridis"
+                #     )
 
                 ax[0].axis("off")
                 ax[1].axis("off")
@@ -566,8 +723,6 @@ def manhole_3d_and_2d_intensity_test(config):
 
                 ax[0].grid(alpha=0.3)
                 ax[1].grid(alpha=0.3)
-
-                plt.margins(0.1)
 
                 plt.savefig(os.path.join(path, plot_name))
 
@@ -1334,12 +1489,15 @@ def make_split(config, test_size=0.2, val_size=0.1):
         # label_value = (1, 255) if config.data.preprocessed else 104002
         label_value = 1 if config.data.preprocessed else 104002
 
+    if not config.data.preprocessed:
+        print("[Hint] Changed 'Preprocessed' to True.")
+
     print("Loading Data...")
     data_loader = get_data_loader(config.data.name, config.data.path, 
                                     type="all", 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=True, return_train_format=False)
 
     dataset = data_loader.dataset
     paths = dataset.point_cloud_paths
@@ -1357,10 +1515,17 @@ def make_split(config, test_size=0.2, val_size=0.1):
 
         cur_pc += 1
 
+        # extract pc id
+        _, file_name = os.path.split(path)
+        id_ = file_name.replace("preprocessed_patch_", "").split("_")[0]
+
+        if id_ in pc_with_manholes or id_ in pc_without_manholes:
+            continue
+
         if original_cluster_pcs is None:
-            pc_without_manholes.append(path)
+            pc_without_manholes.append(id_)
         else:
-            pc_with_manholes.append(path)
+            pc_with_manholes.append(id_)
 
     # making the split (but first only with pc with manholes to ensure enogh manhole sin every set)
     pc_with_manholes = np.array(pc_with_manholes)
@@ -1398,17 +1563,6 @@ def make_split(config, test_size=0.2, val_size=0.1):
     split_text += f"\n\nVal Samples:\n{val_set.tolist()}"
     split_text += f"\n\nTest Samples:\n{test_set.tolist()}"
 
-    def remove_pre_and_post_addings(string):
-        string = ".".join(string.split(".")[:-1])
-        string = "_".join(string.split("_")[1:])
-
-        return string
-
-    split_text += "\n\n--- Same as before but only the File-name and cleaned name ---"
-    split_text += f"\n\nTrain Samples:\n{[remove_pre_and_post_addings(os.path.split(x)[1]) for x in train_set.tolist()]}"
-    split_text += f"\n\nVal Samples:\n{[remove_pre_and_post_addings(os.path.split(x)[1]) for x in val_set.tolist()]}"
-    split_text += f"\n\nTest Samples:\n{[remove_pre_and_post_addings(os.path.split(x)[1]) for x in test_set.tolist()]}"
-
     with open(f"./output/{config.data.name}_data_split.txt", "w") as file_:
         file_.write(split_text)
 
@@ -1426,7 +1580,7 @@ def tryout(config):
     # torch_tensor_loading(config)
 
     # bev_segmentation_trying(config)
-    bev_preprocessed_loading_working_testing(config)  # still try this again!
+    # bev_preprocessed_loading_working_testing(config)  # still try this again!
 
     # train_data_testing(config)
     # train_testing(config)
@@ -1434,7 +1588,9 @@ def tryout(config):
     # manhole_intensity_test(config)
     # manhole_density_test(config)
     # manhole_BEV_intensity_test(config)
-    # manhole_3d_and_2d_intensity_test(config)
+    # BEV_investigation(config)
+    bev_dataset_stat_investigation(config)
+    # manhole_3d_and_2d_intensity_test(config)  
     # circular_manhole_classification_test(config)
     # center_robustnest_test(config)  # stresstest
     # ransac_inlier_test(config)

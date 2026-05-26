@@ -1,4 +1,4 @@
-mode: tryout    # train, test, inference, tryout, preprocessing
+mode: preprocessing    # train, test, inference, tryout, preprocessing
 
 train:
   batch_size: 32
@@ -21,12 +21,12 @@ preprocessing:
   file_ending: ".h5"  # ".h5", ".ply"
 
 model:
-  name: "sam2"
+  name: "segformer"
   check_point_path: None
 
 data:
-  name: "whu"  # paris, whu, sud
-  path: "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"
+  name: "sud"  # paris, whu, sud
+  path: "C:/Users/tippolito/Data/SUD-ROAD"
   # "C:/Users/tippolito/Data/SUD-ROAD"
   # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"  
   # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d",

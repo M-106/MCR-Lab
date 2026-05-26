@@ -2,10 +2,17 @@
 # > Imports <
 # -----------
 import os
+from functools import partial
+
 from tqdm import tqdm
-from transformers import Trainer as HFTrainer, \
-                         TrainingArguments as HFTrainingArguments, \
-                         SegformerForSemanticSegmentation
+from transformers import (Trainer as HFTrainer, 
+                         TrainingArguments as HFTrainingArguments, 
+                         SegformerForSemanticSegmentation, 
+                         Mask2FormerForUniversalSegmentation, 
+                         OneFormerForUniversalSegmentation,
+                         DeepLabV3ForSemanticSegmentation,
+                         SegformerImageProcessor,
+                         AutoImageProcessor)
                          #TrainerCallBack as HFTrainerCallBack
 
 import torch
@@ -14,9 +21,9 @@ from torch.utils.tensorboard import SummaryWriter
 
 from mcrlab.config.config import Config
 from mcrlab.log import get_logger, LoggerPrinter
-from mcrlab.point_cloud.data import get_data_loader, get_basic_transform
+from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDataset
 from mcrlab.model_utils import get_model, get_device, get_criterion
-from mcrlab.metrices import compute
+from mcrlab.metrices import compute_metrics
 
 
 
@@ -41,7 +48,7 @@ def get_optimizer(optimizer_name, model, lr):
 
 def get_scaler(name):
     if name:
-        return torch.cuda.amp.GradScaler()
+        return torch.amp.GradScaler()
     return None
 
 def get_scheduler(name, optimizer):
@@ -192,147 +199,311 @@ class Trainer:
 
 
 
-# -----------------------
-# > Main Train Pipeline <
-# -----------------------
-def train_pipeline(config):
-    # extract config settings
-    checkpoint_dir = os.path.join(config.train.checkpoint_dir, config.model.name)
-    batch_size = config.train.batch_size
-    learning_rate = config.train.learning_rate
-    use_amp = config.train.use_amp
-    scaler_name = config.train.scaler
-    criterion_name = config.train.criterion
-    optimizer_name = config.train.optimizer
-    best_model = config.train.checkpoint_best_model
-    val_steps = config.train.val_steps
-    lr_scheduler = config.train.lr_scheduler
+# # -----------------------
+# # > Main Train Pipeline <
+# # -----------------------
+# def train_pipeline(config):
+#     # extract config settings
+#     checkpoint_dir = os.path.join(config.train.checkpoint_dir, config.model.name)
+#     batch_size = config.train.batch_size
+#     learning_rate = config.train.learning_rate
+#     use_amp = config.train.use_amp
+#     scaler_name = config.train.scaler
+#     criterion_name = config.train.criterion
+#     optimizer_name = config.train.optimizer
+#     best_model = config.train.checkpoint_best_model
+#     val_steps = config.train.val_steps
+#     lr_scheduler = config.train.lr_scheduler
 
-    model_name = config.model.name
+#     model_name = config.model.name
 
-    # load model
-    model = get_model(config.model.name)
-    # model = MLP()
-    # model.load_state_dict(torch.load(""))
+#     # load model
+#     model = get_model(config.model.name)
+#     # model = MLP()
+#     # model.load_state_dict(torch.load(""))
 
-    # load data
-    data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    testdata=False, 
-                                    transform=get_basic_transform(num_points=-1), # get_basic_transform(num_points=-1),
-                                    batch_size=batch_size, shuffle=True, num_workers=1,
-                                    preprocessed=True,
-                                    return_train_format=True)
-    dataset = data_loader.dataset
+#     # load data
+#     data_loader = get_data_loader(config.data.name, config.data.path, 
+#                                     testdata=False, 
+#                                     transform=get_basic_transform(num_points=-1), # get_basic_transform(num_points=-1),
+#                                     batch_size=batch_size, shuffle=True, num_workers=1,
+#                                     preprocessed=True,
+#                                     return_train_format=True)
+#     dataset = data_loader.dataset
 
-    train_size = int(0.8*len(dataset))
-    val_size = len(dataset) - train_size
-    generator = torch.Generator().manual_seed(42)
+#     train_size = int(0.8*len(dataset))
+#     val_size = len(dataset) - train_size
+#     generator = torch.Generator().manual_seed(42)
 
-    train_dataset, val_dataset = random_split(dataset, 
-                                              [train_size, val_size], 
-                                              generator=generator)
+#     train_dataset, val_dataset = random_split(dataset, 
+#                                               [train_size, val_size], 
+#                                               generator=generator)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+#     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+#     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    # Experiment Tracking
-    writer = SummaryWriter()
+#     # Experiment Tracking
+#     writer = SummaryWriter()
 
-    optimizer = get_optimizer(optimizer_name, model, learning_rate)
+#     optimizer = get_optimizer(optimizer_name, model, learning_rate)
 
-    # start training
-    trainer = Trainer(
-        model=model,
-        name=model_name,
-        criterion=get_criterion(criterion_name),
-        optimizer=optimizer,
-        epochs=config.train.epochs,
-        data_loader=train_loader,
-        val_data_loader=val_loader,
-        val_steps=val_steps,
-        lr_scheduler=get_scheduler(lr_scheduler, optimizer),
-        device=get_device(config.device),
-        use_amp=use_amp,
-        scaler=get_scaler(scaler_name),
-        output_dir=checkpoint_dir,
-        checkpoint_best_model=best_model,
-        writer=writer
-    )
+#     # start training
+#     trainer = Trainer(
+#         model=model,
+#         name=model_name,
+#         criterion=get_criterion(criterion_name),
+#         optimizer=optimizer,
+#         epochs=config.train.epochs,
+#         data_loader=train_loader,
+#         val_data_loader=val_loader,
+#         val_steps=val_steps,
+#         lr_scheduler=get_scheduler(lr_scheduler, optimizer),
+#         device=get_device(config.device),
+#         use_amp=use_amp,
+#         scaler=get_scaler(scaler_name),
+#         output_dir=checkpoint_dir,
+#         checkpoint_best_model=best_model,
+#         writer=writer
+#     )
 
-    trainer.train()
+#     trainer.train()
 
-    writer.close()
+#     writer.close()
 
 
 
 # ------------------------------
 # > HuggingFace Train Pipeline <
 # ------------------------------
-def train_hf_pipeline(config):
-    # model = get_model(config.model.name)
-    # model = model.get_model()
+# FIXME: Checkpoint loading making more generell or all like with segformer??
+# def get_model_and_preprocessor(model_name, check_point_path=None):
+#     if model_name == "segformer":
+#         if check_point_path is not None:
+#             model = SegformerForSemanticSegmentation.from_pretrained(
+#                 check_point_path,  # just path to the folder!
+#                 num_labels=2,
+#                 ignore_mismatched_sizes=True
+#             )
+#             # or
+#             # model = SegformerForSemanticSegmentation.from_pretrained(model_name)
+#             # state_dict = torch.load("pytorch_model.bin", map_location="cpu")
+#             # model.load_state_dict(state_dict)
+#         else:
+#             model = SegformerForSemanticSegmentation.from_pretrained(
+#                 "nvidia/segformer-b5-finetuned-cityscapes-1024-1024",
+#                 num_labels=2,
+#                 ignore_mismatched_sizes=True
+#             )
 
-    model_name = config.model.name.lower()
-    if model_name == "segformer":
-        if config.model.check_point_path is not None:
-            model = SegformerForSemanticSegmentation.from_pretrained(
-                config.model.check_point_path  # just path to the folder!
-            )
-            # or
-            # model = SegformerForSemanticSegmentation.from_pretrained(model_name)
-            # state_dict = torch.load("pytorch_model.bin", map_location="cpu")
-            # model.load_state_dict(state_dict)
-        else:
-            model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b5-finetuned-cityscapes-1024-1024")
+#         model.config.ignore_index = 255  # or -1?
+#         model.config.num_labels = 2
+#         # model.config.id2label = {...}
+#         # model.config.label2id = {...}
 
-        model.config.ignore_index = 255  # or -1?
-        # model.config.num_labels = num_classes
-        # model.config.id2label = {...}
-        # model.config.label2id = {...}
+#         preprocessor = SegformerImageProcessor.from_pretrained(
+#             "nvidia/segformer-b5-finetuned-cityscapes-1024-1024",
+#             do_resize=True,
+#             size={"height": 512, "width": 512},   # match your tile size
+#             do_rescale=False,    # ← important: your data is already float
+#             do_normalize=True,
+#             image_mean=[0.485, 0.456, 0.406],     # ImageNet stats, or use
+#             image_std=[0.229, 0.224, 0.225],      # your own dataset stats
+#         )
+#     elif model_name == "mask2former":
+#         model = Mask2FormerForUniversalSegmentation.from_pretrained(
+#             "facebook/mask2former-swin-large-cityscapes-semantic",
+#             num_labels=2,
+#             ignore_mismatched_sizes=True
+#         )
+#         model.config.ignore_index = 255
+#         model.config.num_labels = 2
+
+#         preprocessor = AutoImageProcessor.from_pretrained(
+#             "facebook/mask2former-swin-large-cityscapes-semantic",
+#             do_resize=True,
+#             size={"shortest_edge": 512},
+#             do_rescale=False,    # ← same: already float tensor
+#             do_normalize=True,
+#             image_mean=[0.485, 0.456, 0.406],
+#             image_std=[0.229, 0.224, 0.225],
+#         )
+#     elif model_name == "oneformer":
+#         model = OneFormerForUniversalSegmentation.from_pretrained(
+#             "shi-labs/oneformer_cityscapes_swin-l_160k",
+#             num_labels=2,
+#             ignore_mismatched_sizes=True
+#         )
+#         model.config.ignore_index = 255
+#         model.config.num_labels = 2
+
+#         preprocessor = AutoImageProcessor.from_pretrained(
+#             "shi-labs/oneformer_cityscapes_swin-l_160k",
+#             do_resize=True,
+#             size={"shortest_edge": 512},
+#             do_rescale=False,
+#             do_normalize=True,
+#             image_mean=[0.485, 0.456, 0.406],
+#             image_std=[0.229, 0.224, 0.225],
+#         )
+#     elif model_name == "deeplabv3":
+#         model = DeepLabV3ForSemanticSegmentation.from_pretrained(
+#             "microsoft/deeplabv3-resnet-101",
+#             num_labels=2,
+#             ignore_mismatched_sizes=True
+#         )
+#         model.config.ignore_index = 255
+#         model.config.num_labels = 2
+    
+#         preprocessor = AutoImageProcessor.from_pretrained(
+#             "microsoft/deeplabv3-resnet-101",  # or resnet-50
+#             do_resize=True,
+#             size={"height": 512, "width": 512},
+#             do_rescale=False,      # already float32
+#             do_normalize=True,
+#             image_mean=[0.485, 0.456, 0.406],
+#             image_std=[0.229, 0.224, 0.225],
+#         )
+#     else:
+#         raise ValueError(f"Does not support model '{model_name}'")
+    
+#     return model, preprocessor
+# Model registry: name -> (model_class, default_checkpoint)
+MODEL_REGISTRY = {
+    "segformer":   (SegformerForSemanticSegmentation,        "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"),
+    "mask2former": (Mask2FormerForUniversalSegmentation,     "facebook/mask2former-swin-large-cityscapes-semantic"),
+    "oneformer":   (OneFormerForUniversalSegmentation,       "shi-labs/oneformer_cityscapes_swin-l_160k"),
+    "deeplabv3":   (DeepLabV3ForSemanticSegmentation,        "microsoft/deeplabv3-resnet-101"),
+}
+
+# Preprocessor size config per model
+PREPROCESSOR_SIZE = {
+    "segformer":   {"height": 512, "width": 512},
+    "mask2former": {"shortest_edge": 512},
+    "oneformer":   {"shortest_edge": 512},
+    "deeplabv3":   {"height": 512, "width": 512},
+}
+
+
+
+def get_model_and_preprocessor(model_name, check_point_path=None, num_labels=2,
+                                image_mean=[0.485, 0.456, 0.406],
+                                image_std=[0.229, 0.224, 0.225]):
+    if model_name not in MODEL_REGISTRY:
+        raise ValueError(f"Unsupported model '{model_name}'. Choose from: {list(MODEL_REGISTRY.keys())}")
+
+    # MODEL EXTRACTION
+    # ------------
+    # extract model class and checkpoitn/default loading
+    model_class, default_checkpoint = MODEL_REGISTRY[model_name]
+    # checkpoint = check_point_path or default_checkpoint
+    checkpoint = check_point_path if check_point_path is not None else default_checkpoint
+
+    # MODEL LOADING
+    # ------------
+    model = model_class.from_pretrained(
+        checkpoint,
+        num_labels=num_labels,
+        ignore_mismatched_sizes=True
+    )
+    model.config.ignore_index = 255
+    model.config.num_labels = num_labels
+
+    # PREPROCESSOR
+    # ------------
+    preprocessor_source = default_checkpoint if check_point_path else checkpoint
+    preprocessor = AutoImageProcessor.from_pretrained(
+        preprocessor_source,
+        do_resize=True,
+        size=PREPROCESSOR_SIZE[model_name],
+        do_rescale=False,
+        do_normalize=True,
+        image_mean=image_mean,
+        image_std=image_std,
+    )
+
+    return model, preprocessor
+
+
+def get_segmentation_prediction(outputs, model_name, preprocessor=None, target_sizes=None):
+    model_name = model_name.lower()
+
+    if model_name in ["segformer", "deeplabv3"]:
+        logits = outputs.logits
+        return logits.argmax(dim=1)
+
+    elif model_name in ["mask2former", "oneformer"]:
+        preds = preprocessor.post_process_semantic_segmentation(
+            outputs,
+            target_sizes=target_sizes
+        )
+
+        return torch.stack(preds)
     else:
-        raise ValueError(f"Does not support model '{model_name}'")
+        raise ValueError()
 
-    # load bev/meta files
-    # ...
-    # data format:
-    # class MyDataset(torch.utils.data.Dataset):
-    # def __getitem__(self, idx):
-    #     return {
-    #         "pixel_values": tensor,   # (C, H, W)
-    #         "labels": tensor          # (H, W)
-    #     }
 
-    # def __len__(self):
-    #     return N
-    # convert in right format
-    # needed format
-    # {
-    #     "pixel_values": tensor(C, H, W),
-    #     "labels": tensor(H, W)  # class ids per pixel
-    # }
 
+def train_hf_pipeline(config):
+    model_name = config.model.name.lower()
+    model, preprocessor = get_model_and_preprocessor(model_name, config.model.check_point_path)
+
+    # Load Data
+    train_dataset = get_data_loader(config.data.name, 
+                                   config.data.path, 
+                                   type="train", 
+                                   transform=get_basic_transform(),
+                                   batch_size=config.train.batch_size, 
+                                   shuffle=True, 
+                                   num_workers=4,
+                                   preprocessed=True, 
+                                   return_train_format=True,
+                                   return_dataset=True)
+    all_train_paths = train_dataset.point_cloud_paths
+    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=preprocessor)
+    
+    val_dataset = get_data_loader(config.data.name, 
+                                   config.data.path, 
+                                   type="val", 
+                                   transform=get_basic_transform(),
+                                   batch_size=config.train.batch_size, 
+                                   shuffle=False, 
+                                   num_workers=4,
+                                   preprocessed=True, 
+                                   return_train_format=True,
+                                   return_dataset=True)
+    all_val_paths = val_dataset.point_cloud_paths
+    val_dataset = BEVDataset(path=all_val_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=preprocessor)
+    # config.data.preprocessed
+
+    # Helper Functions
     def collate_fn(batch):
         pixel_values = torch.stack([x["pixel_values"] for x in batch])
         labels = torch.stack([x["labels"] for x in batch])
         return {"pixel_values": pixel_values, "labels": labels}
 
-    def compute_metrics(eval_pred):
-        logits, labels = eval_pred
-        preds = logits.argmax(axis=1)
+    def compute_metrics_fn(eval_pred, model_name, preprocessor):
+        outputs, labels = eval_pred
 
-        return compute(
-            predictions=preds,
-            references=labels,
-            num_labels=num_classes,
-            ignore_index=255,  # very important if used
+        preds = get_segmentation_prediction(
+            outputs,
+            model_name=model_name,
+            processor=preprocessor
         )
 
+        return compute_metrics(preds=preds, labels=labels)
+
+    # FIXME -> make many of the settings adjustable via config
     training_args = HFTrainingArguments(
         output_dir=f"./output/checkpoints/{config.model.name}",
         per_device_train_batch_size=4,
         per_device_eval_batch_size=4,
-        learning_rate=1e-5,
-        num_train_epochs=10,
+        learning_rate=6e-5,           # 6e-5     
+        lr_scheduler_type="cosine",   # cosine
+        warmup_ratio=0.1,             # 0.1
+        fp16=True,                    # faster training
+        gradient_accumulation_steps=4,
+        num_train_epochs=50,   
+        dataloader_num_workers=4,
         evaluation_strategy="steps",
         save_strategy="steps",
         save_steps=500,
@@ -349,7 +520,11 @@ def train_hf_pipeline(config):
         train_dataset=train_dataset,  # load bev/meta files and extract in right format -> use BEV Dataset
         eval_dataset=val_dataset,
         data_collator=collate_fn,
-        compute_metrics=compute_metrics
+        compute_metrics=partial(
+            compute_metrics_fn,
+            model_name=model_name,
+            preprocessor=preprocessor
+        )
     )
 
     trainer.train()
@@ -360,13 +535,15 @@ def train_hf_pipeline(config):
 # > Main Train Function <
 # -----------------------
 def train(config):
-    model_name = config.model.name
+    # model_name = config.model.name
 
-    if model_name.lower() in ["sam2", "sam3", "segformer", "dinomask2former"]:
-        train_hf_pipeline(config)
-    else:
-        raise RuntimeError("Only Huggingface Pipeline is available right now")
-        train_pipeline(config)
+    train_hf_pipeline(config)
+
+    # if model_name.lower() in ["sam2", "sam3", "segformer", "dinomask2former"]:
+    #     train_hf_pipeline(config)
+    # else:
+    #     raise RuntimeError("Only Huggingface Pipeline is available right now")
+    #     train_pipeline(config)
 
 
 

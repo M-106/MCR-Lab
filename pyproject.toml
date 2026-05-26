@@ -30,6 +30,7 @@ dependencies = [
     "scikit-image",
     "ultralytics",
     "h5py",
+    "evaluate",
     # "pywhu3d",
     # "torch-geometric",
     # "pytorch3d",

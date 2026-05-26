@@ -26,6 +26,10 @@ def las_to_o3d(path):
     # print("Scale:", las.header.scales)
     # print("Offset:", las.header.offsets)
 
+    # DEBUGGING
+    extra_attr = list(las.point_format.extra_dimension_names)
+    standard_attr = list(las.point_format.dimension_names)
+
     index_attr_name = None
     candidates = ["user_data", "point_source_id", "cluster", "id", "index", "subcloud"]
     for cur_candidate in candidates:
