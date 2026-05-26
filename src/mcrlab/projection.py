@@ -21,6 +21,7 @@ from sklearn.preprocessing import StandardScaler
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, torch_tensor_to_numpy, torch_tensor_type_to_numpy_type
 from mcrlab.image.io import save_single_bev_tile_as_pickle, save_bev_tiles_as_images
+from mcrlab.point_cloud.io import save_point_cloud
 
 
 
@@ -63,6 +64,8 @@ def _numba_aggregate(px, py, z, intensity, height, width, labels=None, num_class
         1. Maximum height (Z) of points falling into that pixel
         2. Minimum height (Z) of points falling into that pixel
         3. Mean intensity of points falling into that pixel
+        4. Density
+        5. Class/label
 
     The function is optimized using Numba, which compiles Python loops into
     fast machine code, providing significant speedup over pure Python/Numpy
@@ -108,9 +111,9 @@ def _numba_aggregate(px, py, z, intensity, height, width, labels=None, num_class
         np.ndarray: 3xHxW BEV grid with max height, min height, and mean intensity
     """
     if labels is None:  
-        bev = np.zeros((3, height, width), dtype=np.float32)
-    else:
         bev = np.zeros((4, height, width), dtype=np.float32)
+    else:
+        bev = np.zeros((5, height, width), dtype=np.float32)
     # print("Checkpoint 1", bev.nbytes / 1024**2, "MB")
     counts = np.zeros((height, width), dtype=np.int32)
     # print("Checkpoint 2", counts.nbytes / 1024**2, "MB")
@@ -141,8 +144,8 @@ def _numba_aggregate(px, py, z, intensity, height, width, labels=None, num_class
         # Swap x and y when indexing BEV
         # x => width / columns
         # y => height / rows
-        bev[0, y, x] = max(bev[0, y, x], z[i])
-        bev[1, y, x] = min(bev[1, y, x], z[i])
+        bev[0, y, x] = max(bev[0, y, x], z[i])  # max z
+        bev[1, y, x] = min(bev[1, y, x], z[i])  # min z
         bev[2, y, x] += intensity[i]
         counts[y, x] += 1
 
@@ -155,31 +158,42 @@ def _numba_aggregate(px, py, z, intensity, height, width, labels=None, num_class
     for cur_y in range(height):        # row
         for cur_x in range(width):     # column
             if counts[cur_y, cur_x] > 0:
+                # finalize delta z -> height difference
+                delta_z = bev[0, cur_y, cur_x] - bev[1, cur_y, cur_x]
+                bev[1, cur_y, cur_x] = delta_z
+
                 # finalize mean intensity
                 bev[2, cur_y, cur_x] /= counts[cur_y, cur_x]
 
+                # create density (point amounts)
+                bev[3, cur_y, cur_x] = np.log1p(counts[cur_y, cur_x])
+                # fix: bev[3, cur_y, cur_x] = np.log(1.0 + counts[cur_y, cur_x])
+
                 # majority class
                 if labels is not None:
-                    best_class = 0
-                    best_count = 0
+                    best_class = 255
+                    best_count = -1
                     for c in range(num_classes):
                         if class_counts[cur_y, cur_x, c] > best_count:
                             best_count = class_counts[cur_y, cur_x, c]
                             best_class = c
-                    bev[3, cur_y, cur_x] = best_class
+                    bev[4, cur_y, cur_x] = best_class
             else:
                 bev[1, cur_y, cur_x] = 0.0
                 bev[2, cur_y, cur_x] = 0.0
+                bev[3, cur_y, cur_x] = 0.0
                 if labels is not None:
-                    bev[3, cur_y, cur_x] = -1  # empty pixel
+                    bev[4, cur_y, cur_x] = 255  # empty pixel = ignore index
     
     return bev
 
 
 
-def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
+def bev_projection(point_cloud, pc_id,
+                   tile_size=10.0, resolution=0.5, overlap=0.0,
                    include_class=False,
                    direct_single_saving=True, single_saving_path=None,
+                   save_3d_patches=False,
                    sample_path=None):
     """
     Projects a 3D point cloud into Bird's Eye View (BEV) tiles using Numba for fast per-pixel aggregation.
@@ -189,8 +203,10 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
     features are computed:
 
         1. Maximum height (Z coordinate) of points in the pixel
-        2. Minimum height (Z coordinate) of points in the pixel
-        3. Mean intensity of points in the pixel
+        2. Delta Z (Chang of height)
+        3. Density (How many points)
+        4. Mean intensity of points in the pixel
+        5. Class Labels (optional)
 
     The BEV projection is done efficiently using Numba-accelerated loops for pixel aggregation,
     which provides significant speedup compared to standard Python or NumPy operations.
@@ -285,6 +301,8 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
     if not direct_single_saving:
         tiles = []
         meta = []
+    else:
+        patch_info = []
 
     tile_id = 0
 
@@ -294,6 +312,12 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
     #    then the stepsize must be smaller
     stride = tile_size - overlap
 
+    grid_x_min = float(np.floor(x.min() / stride) * stride)
+    grid_x_max = float(np.ceil(x.max() / stride) * stride)
+
+    grid_y_min = float(np.floor(y.min() / stride) * stride)
+    grid_y_max = float(np.ceil(y.max() / stride) * stride)
+
     if sample_path:
         max_sample_amount = 5
         sample_tiles = []
@@ -302,18 +326,26 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
         ny = int(np.ceil((y_max - y_min) / stride))
         max_steps = nx * ny
         start_step = np.random.randint(0, max(0, max_steps - max_sample_amount)+1)
-    
+
     # iterate over tiles
     cur_step = -1
-    for cur_x in np.arange(x_min, x_max, stride):
-        for cur_y in np.arange(y_min, y_max, stride):
+    for cur_x in np.arange(grid_x_min, grid_x_max, stride):
+        for cur_y in np.arange(grid_y_min, grid_y_max, stride):
             cur_step += 1
 
+            is_last_x = (cur_x + stride >= grid_x_max)
+            is_last_y = (cur_y + stride >= grid_y_max)
+            
+            # include points on the border in last grids/tiles
+            x_upper_bound = cur_x + tile_size
+            y_upper_bound = cur_y + tile_size
+            
             # select points inside this tile
             mask = (
-                (x >= cur_x) & (x < cur_x + tile_size) &
-                (y >= cur_y) & (y < cur_y + tile_size)
+                (x >= cur_x) & (x <= x_upper_bound if is_last_x else x < x_upper_bound) &
+                (y >= cur_y) & (y <= y_upper_bound if is_last_y else y < y_upper_bound)
             )
+
             idxs = np.where(mask)[0]
             if len(idxs) == 0:
                 continue
@@ -327,18 +359,24 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
                 labels_tile = None
             
             # pixel coordinates
-            points_x = ((points_tile[:, 0] - cur_x) / resolution).astype(np.int32)
-            points_y = ((points_tile[:, 1] - cur_y) / resolution).astype(np.int32)
-            
+            # points_x = ((points_tile[:, 0] - cur_x) / resolution).astype(np.int32)
+            # points_y = ((points_tile[:, 1] - cur_y) / resolution).astype(np.int32)
+            points_x = np.floor((points_tile[:, 0] - cur_x) / resolution).astype(np.int32)
+            points_y = np.floor((points_tile[:, 1] - cur_y) / resolution).astype(np.int32)
+
             height = int(tile_size / resolution)
             width = int(tile_size / resolution)
 
-            # for remapping
-            pixel_to_points = [[[] for _ in range(height)] for _ in range(width)]
-            for local_idx in range(len(points_x)):
-                x_ = points_x[local_idx]
-                y_ = points_y[local_idx]
-                pixel_to_points[y_][x_].append(local_idx)
+            # clipping against out of bounds and such values
+            points_x = np.clip(points_x, 0, width - 1)
+            points_y = np.clip(points_y, 0, height - 1)
+
+            # # for remapping
+            # pixel_to_points = [[[] for _ in range(width)] for _ in range(height)]
+            # for local_idx in range(len(points_x)):
+            #     x_ = points_x[local_idx]
+            #     y_ = points_y[local_idx]
+            #     pixel_to_points[y_][x_].append(local_idx)
 
             # process = psutil.Process(os.getpid())
             # mem_mb = process.memory_info().rss / 1024**2
@@ -351,14 +389,19 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
             # IMPORTANT -> normalizing looses the real world absolute values
             # FIXME maybe remove normalizing
             # FIXME maybe add also other informations -> max intrensity for metal?
-            bev[0] /= z.max()
-            bev[2] /= intensities.max()
+            # bev[0] /= z.max()
+            # bev[2] /= intensities.max()
 
             # class/label back mapping
             if include_class:
                 inverse_class_map = {new_: origin for origin, new_ in class_map.items()}
                 inverse_array = np.array([inverse_class_map[i] for i in range(len(inverse_class_map))])
-                bev[3] = inverse_array[bev[3].astype(np.int32)]
+
+                mapped = bev[4].astype(np.int32)
+                valid_mask = mapped != 255
+
+                bev[4][:] = 255
+                bev[4][valid_mask] = inverse_array[mapped[valid_mask]]
                 # here we use the class channel as indexing for the indexing array
                 # position in this indexing array = new_mapping
                 # value = original value
@@ -366,11 +409,14 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
 
 
             cur_meta = {
-                    "tile_id": tile_id,
-                    "cur_x": cur_x,
-                    "cur_y": cur_y,
-                    "global_indices": idxs,
-                    "pixel_to_points": pixel_to_points,
+                    # "tile_id": tile_id,
+                    "origin_x": cur_x,  # origin x -> start x
+                    "origin_y": cur_y,  # origin y
+                    # "global_indices": idxs,
+                    # "pixel_to_points": pixel_to_points,
+                    "resolution": resolution,
+                    "tile_size": tile_size,
+                    "pc_id": pc_id,
                     # "tile_points_local": points_tile  # can causes memory error during saving
                 }
             
@@ -384,310 +430,615 @@ def bev_projection(point_cloud, tile_size=10.0, resolution=0.5, overlap=0.0,
             if direct_single_saving:
                 save_single_bev_tile_as_pickle(tile=bev, 
                                                meta=cur_meta, 
-                                               tile_id=tile_id, 
+                                               pc_id=pc_id, 
                                                path=single_saving_path)
+                patch_info.append((pc_id, cur_x, cur_y, tile_size))
             else:
                 tiles.append(bev)
                 meta.append(cur_meta)
+
+            # save also 3D Point Cloud
+            if save_3d_patches:
+                # idxs are the globalen indices, which we already calculated
+                pc_patch = point_cloud.select_by_index(idxs) 
+                
+                pc_patch_name = f"preprocessed_patch_{pc_id}_{cur_x}_{cur_y}.h5"
+                save_point_cloud(path=os.path.join(single_saving_path, pc_patch_name), 
+                                 point_cloud=pc_patch)
             
             tile_id += 1
     
     if direct_single_saving:
-        return None
+        return patch_info
     else:
         return tiles, meta
 
 
 
-# def bev_projection_numba_and_open3d(point_cloud, tile_size=10.0, resolution=0.5, include_class=False, camera_height=30.0):
-#     """
-#     Open3D-based BEV projection using rendering.Camera (orthographic),
-#     producing identical outputs to the numba version but with
-#     camera-consistent geometry.
-
-#     NOT TESTED
-#     """
-#     # extract points and intensity
-#     if hasattr(point_cloud, "get_as_o3d"):
-#         point_cloud = point_cloud.get_as_o3d()
-    
-#     points  = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
-#     intensities = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
-
-#     if include_class:
-#         labels = point_cloud.point[get_class_attribute(point_cloud)].numpy().astype(np.int32)
-
-#         # unique_classes = np.unique(labels)
-#         # class_map = {c: i for i, c in enumerate(unique_classes)}
-
-#         # labels_remapped = np.array([class_map[c] for c in labels], dtype=np.int32)
-#         # num_classes = len(unique_classes)
-#         num_classes = int(labels.max()) + 1
-#     else:
-#         labels = None
-#         num_classes = 0
-    
-#     x, y, z = points[:, 0], points[:, 1], points[:, 2]
-#     x_min, x_max = x.min(), x.max()
-#     y_min, y_max = y.min(), y.max()
-    
-#     tiles = []
-#     meta = []
-#     tile_id = 0
-    
-#     # iterate over tiles
-#     for cur_x in np.arange(x_min, x_max, tile_size):
-#         for cur_y in np.arange(y_min, y_max, tile_size):
-#             # select points inside this tile
-#             mask = (
-#                 (x >= cur_x) & (x < cur_x + tile_size) &
-#                 (y >= cur_y) & (y < cur_y + tile_size)
-#             )
-#             idxs = np.where(mask)[0]
-#             if len(idxs) == 0:
-#                 continue
-            
-#             points_tile = points[idxs]
-#             intensities_tile = intensities[idxs]
-
-#             if labels is not None:
-#                 labels_tile = labels[idxs]
-#             else:
-#                 labels_tile = None
-            
-#             # setup cam
-#             cam = o3d.visualization.rendering.Camera()
-#             cam.set_projection(
-#                 o3d.visualization.rendering.Camera.Projection.Ortho,
-#                 left=cur_x,
-#                 right=cur_x + tile_size,
-#                 bottom=cur_y,
-#                 top=cur_y + tile_size,
-#                 near=0.0,
-#                 far=camera_height * 2.0
-#             )
-#             cam.look_at(
-#                 center=[
-#                     cur_x + tile_size / 2.0,
-#                     cur_y + tile_size / 2.0,
-#                     0.0
-#                 ],
-#                 eye=[
-#                     cur_x + tile_size / 2.0,
-#                     cur_y + tile_size / 2.0,
-#                     camera_height
-#                 ],
-#                 up=[0, 1, 0]
-#             )
-
-#             P = cam.get_projection_matrix()
-#             V = cam.get_view_matrix()
-#             PV = P @ V
-
-#             # forward projection
-#             N = points_tile.shape[0]
-#             points_h = np.hstack(points_tile, np.ones((N, 1)))
-#             clip = (PV @ points_h.T).T
-#             ndc = clip[:, :3] / clip[:, 3:4]
-
-#             H = W = int(tile_size / resolution)
-            
-#             px = ((ndc[:, 0] + 1) * 0.5 * W).astype(np.int32)
-#             py = ((1 - (ndc[:, 1] + 1) * 0.5) * H).astype(np.int32)
-
-#             valid = (px >= 0) & (px < W) & (py >= 0) & (py < H)
-
-#             px = px[valid]
-#             py = py[valid]
-
-#             z_tile = points_tile[valid, 2]
-#             intens_tile = intens_tile[valid]
-
-#             if labels_tile is not None:
-#                 labels_tile = labels_tile[valid]
-
-#             # pixel to points (local indices)
-#             #  -> for remapping
-#             pixel_to_points = [[[] for _ in range(W)] for _ in range(H)]
-#             for i in range(len(px)):
-#                 pixel_to_points[py[i]][px[i]].append(i)
-
-#             # aggregate using Numba
-#             bev = _numba_aggregate(px, py, z_tile, intensities_tile, H, W, labels_tile, num_classes)
-            
-#             # normalize
-#             bev[0] /= z.max()
-#             bev[2] /= intensities.max()
-            
-#             tiles.append(bev)
-#             meta.append({
-#                 "tile_id": tile_id,
-#                 "cur_x": cur_x,
-#                 "cur_y": cur_y,
-#                 "global_indices": idxs,
-#                 "pixel_to_points": pixel_to_points,
-#                 "tile_points_local": points_tile[valid]
-#             })
-            
-#             tile_id += 1
-    
-#     return tiles, meta
-
-
-
-# back-projection / bev_projection_mapping
-def bev_back_projection(point_cloud, meta, tile_id, pixel_x, pixel_y, try_use_saved_local_points=False):
+def bev_pixel_to_3d(
+        patch_points,
+        pixel_x,
+        pixel_y,
+        origin_x,    # in meta
+        origin_y,    # in meta
+        resolution,  # in meta
+        search_radius
+):
     """
-    Maps a BEV pixel back to its corresponding 3D points in the original point cloud.
-
-    This function uses the metadata generated during the BEV projection to retrieve 
-    all 3D points that contributed to a specific pixel in a given tile.
-
-    How it works:
-    - Each BEV pixel corresponds to a small area in the XY-plane.
-    - During projection, points falling into the same pixel were grouped together.
-    - The metadata stores this mapping (pixel → point indices).
-
-    Given a tile ID and a pixel coordinate:
-    - The pixel is converted into a flattened pixel index.
-    - The function looks up which group of points belongs to that pixel.
-    - It retrieves the corresponding indices of the original point cloud.
-    - Finally, it returns the actual 3D points for that pixel.
-
-    If no points exist for the given pixel, the function returns None.
+    Converts a BEV pixel coordinate into 3D world coordinate.
     """
-    if isinstance(meta, dict):
-        tile = meta
-    else:
-        tile = meta[tile_id]
+    if isinstance(patch_points, o3d.t.geometry.PointCloud):
+        patch_points = patch_points.point[get_coordinate_attribute(patch_points)].cpu().numpy()
+    elif isinstance(patch_points, PointCloudTensor):
+        patch_points = patch_points.to_numpy(as_copy=True).coordinates
+
+    # pixel center to world xy
+    world_x = origin_x + (pixel_x + 0.5) * resolution
+    world_y = origin_y + (pixel_y + 0.5) * resolution
+
+    if search_radius is None:
+        search_radius = resolution * 1.5
+
+    # search nearby points for z
+    mask = (
+        (patch_points[:,0] >= world_x - search_radius) &
+        (patch_points[:,0] <= world_x + search_radius) &
+        (patch_points[:,1] >= world_y - search_radius) &
+        (patch_points[:,1] <= world_y + search_radius)
+    )
+    nearby_points = patch_points[mask]
+
+    # no nearby points
+    if len(nearby_points) == 0:
+        return np.array([world_x, world_y, np.nan])  # or 0?
     
-    local_indices = tile["pixel_to_points"][pixel_y][pixel_x]
+    # robust z estimation
+    world_z = np.median(nearby_points[:,2])
 
-    if len(local_indices) == 0:
-        return {
-                "points": np.empty((0, 3)),
-                "global_indices": np.array([], dtype=np.int64),
-                }
-
-    
-    global_indices = tile["global_indices"][local_indices]
-
-    if try_use_saved_local_points and "tile_points_local" in meta.keys():
-        local_points = tile["tile_points_local"]
-    else:
-        # problem with this path:
-        #    the point cloud must be processed exactly the same way,
-        #    else differences will occur.
-        if isinstance(point_cloud, PointCloudTensor):
-            points = torch_tensor_to_numpy(point_cloud.coordinates, 
-                                        dtype=torch_tensor_type_to_numpy_type(point_cloud.coordinates))
-        elif isinstance(point_cloud, o3d.t.geometry.PointCloud):
-            points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
-        else:
-            raise TypeError(f"Unsupported point cloud type, got type '{type(point_cloud)}'")
-
-        local_points = points[global_indices]
-    
-    # apply indices to get points
-    return {
-        "points": local_points,
-        "global_indices": global_indices
-    }
+    return np.array([world_x, world_y, world_z])
 
 
 
-def bev_back_projection_testing(point_cloud, bev_gen, bev_amount=None):    # bev_images, metas):
-        if isinstance(point_cloud, PointCloudTensor):
-            point_cloud = point_cloud.get_as_o3d()
+def bev_pixel_to_world_area(pixel_x, pixel_y,
+                            origin_x, origin_y,
+                            resolution):
+    """
+    Convert BEV pixel into world-space bounds.
+    """
 
-        # TEST START
-        print("Starting BEV test...")
-        points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
-        intensities = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
-        labels = point_cloud.point[get_class_attribute(point_cloud)].numpy().astype(np.int32)
+    x_min = origin_x + pixel_x * resolution
+    x_max = x_min + resolution
+
+    y_min = origin_y + pixel_y * resolution
+    y_max = y_min + resolution
+
+    return x_min, x_max, y_min, y_max
+
+
+
+# @numba.njit(parallel=True)
+def bev_projection_testing(patch_gen, bev_amount=None, atol=1e-4):
+    """
+    Validates BEV channels using geometric reprojection.
+
+    Checks:
+        - max height
+        - delta z
+        - mean intensity
+        - density
+        - majority class
+    """
+
+    print("Starting geometric BEV validation...")
+
+    # init all needed vars
+    total_pixels = 0
+    total_non_empty_pixels = 0
+    total_empty_pixels = 0
+
+    correct_max_height = 0
+    correct_delta_z = 0
+    correct_intensity = 0
+    correct_density = 0
+    correct_class = 0
+    # correct_empty_pixels = 0
+
+    max_height_error = 0.0
+    delta_z_error = 0.0
+    intensity_error = 0.0
+    density_error = 0.0
+
+    for tile_id, patch_points in tqdm(enumerate(patch_gen),
+                                      total=len(patch_gen),
+                                      desc="BEV Validation"):
+        if isinstance(patch_points, (list, tuple)):
+            patch_points = patch_points[0]
+
+        if not isinstance(patch_points, PointCloudTensor):
+            raise TypeError(f"Expected patch points to be 'PointCloudTensor' but got '{type(patch_points)}'")
+        
+        # LOAD BEV
+        
+        # if point_cloud.bev_data is None:
+        #     print("Starting BEV projection...")
+        #     tiles, metas = bev_projection(patch_points, tile_size=35.0, resolution=0.05, overlap=0.0,
+        #                                   include_class=False, direct_single_saving=False)
+        #     # bev_gen = bev_gen_wrapper(tiles, metas)
+        # else:
+        # bev_gen = patch_points.get_bev()
+        # tiles, metas = extract_tiles_metas(bev_gen, amount=5, as_numpy=True)
+        bev_gen = patch_points.get_bev()
+        bev_dict = next(bev_gen)
+
+        # bev = torch.cat(
+        #     (
+        #         bev_dict["pixel_values"],
+        #         bev_dict["labels"].unsqueeze(0)
+        #     ),
+        #     dim=0
+        # ).cpu().detach().numpy()
+
+        bev = bev_dict["pixel_values"]
+
+        if isinstance(bev, torch.Tensor):
+            bev = bev.detach().cpu().numpy()
+
+        if "labels" in bev_dict and bev_dict["labels"] is not None:
+            labels_bev = bev_dict["labels"]
+            if isinstance(labels_bev, torch.Tensor):
+                labels_bev = labels_bev.detach().cpu().numpy()
+
+            bev = np.concatenate([bev, labels_bev[None]], axis=0)
+
+        meta = bev_dict["meta"]
+
+        # LOAD PATCH POINT CLOUD
+
+        if isinstance(patch_points, PointCloudTensor):
+            patch_points = patch_points.get_as_o3d()
+
+        points = patch_points.point[
+            get_coordinate_attribute(patch_points)
+        ].numpy()
+
+        intensities = patch_points.point[
+            get_intensity_attribute(patch_points)
+        ].numpy().ravel().astype(np.float32)
+
+        labels = patch_points.point[get_class_attribute(patch_points)].numpy()
+        labels = np.asarray(labels).reshape(-1).astype(np.int32)
+
         num_classes = int(labels.max()) + 1
 
-        total_pixels = 0
-        non_empty_pixels = 0
-        correct_intensities = 0
-        intensity_difference = 0
-        total_classes = 0
-        correct_class = 0
-        total_empty_pixels = 0
-        empty_pixels_correct = 0
+        # META
 
-        for tile_id, bev_dict in tqdm(enumerate(bev_gen), total=bev_amount, desc="Tile Testing"):
-            bev = torch.cat((bev_dict["pixel_values"], 
-                             bev_dict["labels"].unsqueeze(0)),
-                             dim=0
-                            ).cpu().detach().numpy()
-            meta = bev_dict["meta"]
+        origin_x = meta["origin_x"]
+        origin_y = meta["origin_y"]
+        resolution = meta["resolution"]
+
+        height, width = bev.shape[1], bev.shape[2]
+
+        # global normalization references
+        max_intensity_global = intensities.max()
+
+        # PIXEL LOOP
+
+        # px = ((points[:, 0] - origin_x) / resolution).astype(np.int32)
+        px = np.floor(
+                (points[:, 0] - origin_x) / resolution
+            ).astype(np.int32)
+        # py = ((points[:, 1] - origin_y) / resolution).astype(np.int32)
+        py = np.floor(
+                (points[:, 1] - origin_y) / resolution
+            ).astype(np.int32)
+
+        valid = (
+            (px >= 0) & (px < width) &
+            (py >= 0) & (py < height)
+        )
+
+        px = px[valid]
+        py = py[valid]
+
+        z = points[:, 2][valid]
+        intensities_valid = intensities[valid]
+        labels_valid = labels[valid]
+
+        pixel_idx = py * width + px
+
+        # grouping
+        order = np.argsort(pixel_idx)
+        pixel_idx = pixel_idx[order]
+        z = z[order]
+        intensities_valid = intensities_valid[order]
+        labels_valid = labels_valid[order]
+
+        unique_pixels, start_idx, counts = np.unique(
+            pixel_idx,
+            return_index=True,
+            return_counts=True
+        )
+
+        # empty pixels
+        # occupied = np.zeros(height * width, dtype=np.bool_)
+        # occupied[unique_pixels] = True
+        # empty_pixels = (~occupied).sum()
+
+        gt_occupied = np.zeros(height * width, dtype=np.bool_)
+        gt_occupied[unique_pixels] = True
+
+        gt_empty = ~gt_occupied
+        # pred_empty = ~occupied
+
+        # correct_empty_pixels += np.sum(pred_empty & gt_empty)
+        cur_empty_pixels = np.sum(gt_empty)
+
+        total_non_empty_pixels += ((height * width - cur_empty_pixels))
+        # total_empty_pixels += cur_empty_pixels
+
+        total_pixels += height * width
+
+        # compute other values (intensities, ..)
+        for pix, start, count in zip(unique_pixels, start_idx, counts):
+            indices = slice(start, start+count)
+
+            pixel_z = z[indices]
+            pixel_intensity = intensities_valid[indices]
+            pixel_labels = labels_valid[indices]
+
+            gt_max_height = pixel_z.max()
+            gt_delta_z = pixel_z.max() - pixel_z.min()
+            gt_mean_intensity = pixel_intensity.mean()
+            # FIXME
+            # gt_mean_intensity = pixel_intensity.mean() / pixel_intensity.max()
+            # gt_mean_intensity = (pixel_intensity.mean() - pixel_intensity.min()) / (pixel_intensity.max() - pixel_intensity.min())
+            gt_density = np.log1p(count)
+
+            gt_class = np.bincount(pixel_labels).argmax()
+            # counts = np.zeros(num_classes, dtype=np.int32)
+
+            # for l in pixel_labels:
+            #     counts[l] += 1
+
+            py = pix // width
+            px = pix % width
+
+        # for py in range(height):
+        #     for px in range(width):
+
+        #         total_pixels += 1
+
+        #         # world bounds of pixel
+        #         x_min, x_max, y_min, y_max = \
+        #             bev_pixel_to_world_area(
+        #                 px, py,
+        #                 origin_x,
+        #                 origin_y,
+        #                 resolution
+        #             )
+
+        #         # select points inside pixel
+        #         is_last_px = (px == width - 1)
+        #         is_last_py = (py == height - 1)
+
+        #         mask = (
+        #             (points[:, 0] >= x_min) &
+        #             (points[:, 0] <= x_max if is_last_px else points[:, 0] < x_max) &
+        #             (points[:, 1] >= y_min) &
+        #             (points[:, 1] <= y_max if is_last_py else points[:, 1] < y_max)
+        #         )
+
+        #         pixel_points = points[mask]
+
+        #         # EMPTY PIXEL
+
+        #         if len(pixel_points) == 0:
+        #             empty_pixels += 1
+
+        #             bev_empty = (
+        #                 bev[0, py, px] == 0 and
+        #                 bev[1, py, px] == 0 and
+        #                 bev[2, py, px] == 0 and
+        #                 bev[3, py, px] == 0 and
+        #                 bev[4, py, px] == 255
+        #             )
+
+        #             if bev_empty:
+        #                 correct_empty_pixels += 1
+
+        #             continue
+
+        #         non_empty_pixels += 1
+
+        #         pixel_z = pixel_points[:, 2]
+        #         pixel_intensity = intensities[mask]
+        #         pixel_labels = labels[mask]
+
+        #         # RECOMPUTE GT VALUES
+
+        #         gt_max_height = pixel_z.max()
+
+        #         gt_delta_z = pixel_z.max() - pixel_z.min()
+
+        #         gt_mean_intensity = pixel_intensity.mean()
+        #         # gt_mean_intensity /= max_intensity_global
+
+        #         gt_density = np.log1p(len(pixel_points))
+
+        #         bincount = np.bincount(
+        #             pixel_labels,
+        #             minlength=num_classes
+        #         )
+
+        #         gt_class = np.argmax(bincount)
+
+            # BEV VALUES
+
+            bev_max_height = bev[0, py, px]
+            bev_delta_z = bev[1, py, px]
+            bev_intensity = bev[2, py, px]
+            bev_density = bev[3, py, px]
+            bev_class = int(bev[4, py, px])
+
+            # ERROR METRICS
+
+            max_height_error += abs(
+                bev_max_height - gt_max_height
+            )
+
+            delta_z_error += abs(
+                bev_delta_z - gt_delta_z
+            )
+
+            intensity_error += abs(
+                bev_intensity - gt_mean_intensity
+            )
+
+            density_error += abs(
+                bev_density - gt_density
+            )
+
+            # ACCURACY
+
+            # if np.isclose(
+            #     bev_max_height,
+            #     gt_max_height,
+            #     atol=atol
+            # ):
+            #     correct_max_height += 1
+            if abs(bev_max_height - gt_max_height) <= atol:
+                correct_max_height += 1
+
+            # if np.isclose(
+            #     bev_delta_z,
+            #     gt_delta_z,
+            #     atol=atol
+            # ):
+            #     correct_delta_z += 1
+            if abs(bev_delta_z - gt_delta_z) <= atol:
+                correct_delta_z += 1
+
+            # if np.isclose(
+            #     bev_intensity,
+            #     gt_mean_intensity,
+            #     atol=atol
+            # ):
+            #     correct_intensity += 1
             
-            height, width = bev.shape[1], bev.shape[2]
+            if abs(bev_intensity - gt_mean_intensity) <= atol:
+                correct_intensity += 1
 
-            for cur_x in range(width):
-                for cur_y in range(height):
-                    total_pixels += 1
+            # if np.isclose(
+            #     bev_density,
+            #     gt_density,
+            #     atol=atol
+            # ):
+            #     correct_density += 1
+            if abs(bev_density - gt_density) <= atol:
+                correct_density += 1
 
-                    remapping = bev_back_projection(point_cloud, meta, tile_id, 
-                                                    pixel_x=cur_x, pixel_y=cur_y, 
-                                                    try_use_saved_local_points=False)
-                    points_idx = remapping["global_indices"]
+            if bev_class == gt_class:
+                correct_class += 1
 
-                    # empty pixel
-                    if len(points_idx) == 0:
-                        total_empty_pixels += 1
-                        # if bev[3, cur_x, cur_y] == -1:
-                        if bev[3, cur_y, cur_x] == -1:
-                            empty_pixels_correct += 1
-                        continue
+    coverage = total_non_empty_pixels / total_pixels
+    coverage_percent = coverage * 100
 
-                    non_empty_pixels += 1
+    # FINAL REPORT
 
-                    points_idx = np.array(points_idx).astype(np.int32)
+    print("\n===== BEV VALIDATION RESULTS =====")
 
-                    # intensity
-                    y_mean_intensity = intensities[points_idx].mean()
-                    y_mean_intensity /= intensities.max()  # apply same normalization
-                    # bev_intensity = bev[2, cur_x, cur_y]
-                    bev_intensity = bev[2, cur_y, cur_x]
+    print(f"Total pixels: {total_pixels}")
+    print(f"Non-empty pixels: {total_non_empty_pixels}")
+    print(f"Pixel Value Coverage: {coverage_percent:.2f} %")
+    # print(f"Empty pixels: {empty_pixels}")
+    # print(f"Correct Empty pixels: {(correct_empty_pixels/empty_pixels)*100:.2f}% ({correct_empty_pixels})")
 
-                    # print(f"Intensity Ground Truth: {y_mean_intensity}, predicted: {bev_intensity}")
+    print("\n--- Max Height ---")
+    print(f"Accuracy: {(correct_max_height/total_non_empty_pixels)*100:.2f}%")
+    print(f"Absolute Error Sum: {max_height_error:.6f}")
 
-                    # same order? -> first closest sort or bad?
+    print("\n--- Delta Z ---")
+    print(f"Accuracy: {(correct_delta_z/total_non_empty_pixels)*100:.2f}%")
+    print(f"Absolute Error Sum: {delta_z_error:.6f}")
 
-                    intensity_difference += np.sum(np.abs(bev_intensity - y_mean_intensity))
-                    if np.isclose(y_mean_intensity, bev_intensity, atol=1e-4):
-                        correct_intensities += 1
+    print("\n--- Intensity ---")
+    print(f"Accuracy: {(correct_intensity/total_non_empty_pixels)*100:.2f}%")
+    print(f"Absolute Error Sum: {intensity_error:.6f}")
 
-                    # classes
-                    pixel_labels = labels[points_idx].ravel()
-                    # print(f"Pixel label aount {pixel_labels.shape[0]} -> {pixel_labels}")
-                    total_classes += pixel_labels.shape[0]
+    print("\n--- Density ---")
+    print(f"Accuracy: {(correct_density/total_non_empty_pixels)*100:.2f}%")
+    print(f"Absolute Error Sum: {density_error:.6f}")
 
-                    # print(f"Pixel Labels Shape: {pixel_labels.shape} -> {pixel_labels}")
-                    # print(f"  -> Num Classes: {num_classes}")
-                    bincount = np.bincount(pixel_labels, minlength=num_classes)
-                    y_class = np.argmax(bincount)
-
-                    # bev_class = int(bev[3, cur_x, cur_y])
-                    bev_class = int(bev[3, cur_y, cur_x])
-
-                    if bev_class == y_class:
-                        correct_class += 1
-
-        print("\n===== BEV TEST RESULTS =====")
-        print(f"Total pixels checked: {total_pixels}")
-        print(f"Correct intensities: {correct_intensities} ({(correct_intensities/non_empty_pixels)*100:.2f}%)")
-        print(f"    -> absolute error sum: {intensity_difference}")
-        print(f"Correct classes: {correct_class} ({(correct_class/non_empty_pixels)*100:.2f}%)")
-        print(f"Correct empty pixels: {empty_pixels_correct} ({(empty_pixels_correct/total_empty_pixels)*100:.2f}%)") 
+    print("\n--- Class ---")
+    print(f"Accuracy: {(correct_class/total_non_empty_pixels)*100:.2f}%")
 
 
 
+# # back-projection / bev_projection_mapping
+# def bev_back_projection(point_cloud, meta, tile_id, pixel_x, pixel_y, try_use_saved_local_points=False):
+#     """
+#     Maps a BEV pixel back to its corresponding 3D points in the original point cloud.
+
+#     This function uses the metadata generated during the BEV projection to retrieve 
+#     all 3D points that contributed to a specific pixel in a given tile.
+
+#     How it works:
+#     - Each BEV pixel corresponds to a small area in the XY-plane.
+#     - During projection, points falling into the same pixel were grouped together.
+#     - The metadata stores this mapping (pixel → point indices).
+
+#     Given a tile ID and a pixel coordinate:
+#     - The pixel is converted into a flattened pixel index.
+#     - The function looks up which group of points belongs to that pixel.
+#     - It retrieves the corresponding indices of the original point cloud.
+#     - Finally, it returns the actual 3D points for that pixel.
+
+#     If no points exist for the given pixel, the function returns None.
+#     """
+#     if isinstance(meta, dict):
+#         tile = meta
+#     else:
+#         tile = meta[tile_id]
+    
+#     # local_indices = tile["pixel_to_points"][pixel_y][pixel_x]
+#     local_indices = np.array(tile["pixel_to_points"][pixel_y][pixel_x], dtype=np.int64)
+
+#     if len(local_indices) == 0:
+#         return {
+#                 "points": np.empty((0, 3)),
+#                 "global_indices": np.array([], dtype=np.int64),
+#                 }
+
+    
+#     # global_indices = np.arange(len(tile["global_indices"]))
+#     # if np.max(local_indices, initial=0) >= len(global_indices):
+#     #     raise ValueError("Local index is actually global index — mapping corrupted")
+#     # global_indices = global_indices[local_indices]
+
+#     if try_use_saved_local_points and "tile_points_local" in meta.keys():
+#         local_points = tile["tile_points_local"]
+#     else:
+#         # problem with this path:
+#         #    the point cloud must be processed exactly the same way,
+#         #    else differences will occur.
+#         if isinstance(point_cloud, PointCloudTensor):
+#             points = torch_tensor_to_numpy(point_cloud.coordinates, 
+#                                         dtype=torch_tensor_type_to_numpy_type(point_cloud.coordinates))
+#         elif isinstance(point_cloud, o3d.t.geometry.PointCloud):
+#             points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
+#         else:
+#             raise TypeError(f"Unsupported point cloud type, got type '{type(point_cloud)}'")
+
+#         local_points = points[local_indices]
+    
+#     # apply indices to get points
+#     return {
+#         "points": local_points,
+#         "global_indices": local_indices
+#     }
 
 
 
+# def bev_back_projection_testing(point_cloud, bev_gen, bev_amount=None):    # bev_images, metas):
+#         if isinstance(point_cloud, PointCloudTensor):
+#             point_cloud = point_cloud.get_as_o3d()
+
+#         # TEST START
+#         print("Starting BEV test...")
+#         points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
+#         intensities = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
+#         labels = point_cloud.point[get_class_attribute(point_cloud)].numpy().astype(np.int32)
+#         num_classes = int(labels.max()) + 1
+
+#         total_pixels = 0
+#         non_empty_pixels = 0
+#         correct_intensities = 0
+#         intensity_difference = 0
+#         total_classes = 0
+#         correct_class = 0
+#         total_empty_pixels = 0
+#         empty_pixels_correct = 0
+
+#         for tile_id, bev_dict in tqdm(enumerate(bev_gen), total=bev_amount, desc="Tile Testing"):
+#             bev = torch.cat((bev_dict["pixel_values"], 
+#                              bev_dict["labels"].unsqueeze(0)),
+#                              dim=0
+#                             ).cpu().detach().numpy()
+#             meta = bev_dict["meta"]
+            
+#             height, width = bev.shape[1], bev.shape[2]
+
+#             for cur_x in range(width):
+#                 for cur_y in range(height):
+#                     total_pixels += 1
+
+#                     remapping = bev_back_projection(point_cloud, meta, tile_id, 
+#                                                     pixel_x=cur_x, pixel_y=cur_y, 
+#                                                     try_use_saved_local_points=False)
+#                     points_idx = remapping["global_indices"]
+
+#                     # empty pixel
+#                     if len(points_idx) == 0:
+#                         total_empty_pixels += 1
+#                         # if bev[3, cur_x, cur_y] == -1:
+#                         if bev[4, cur_y, cur_x] == -1:
+#                             empty_pixels_correct += 1
+#                         continue
+
+#                     non_empty_pixels += 1
+
+#                     points_idx = np.array(points_idx).astype(np.int32)
+
+#                     # intensity
+#                     y_mean_intensity = intensities[points_idx].mean()
+#                     y_mean_intensity /= intensities.max()  # apply same normalization
+#                     # bev_intensity = bev[2, cur_x, cur_y]
+#                     bev_intensity = bev[2, cur_y, cur_x]
+#                     # bev_intensity /= bev_intensity.max()
+
+#                     # print(f"Intensity Ground Truth: {y_mean_intensity}, predicted: {bev_intensity}")
+
+#                     # same order? -> first closest sort or bad?
+
+#                     intensity_difference += np.sum(np.abs(bev_intensity - y_mean_intensity))
+#                     if np.isclose(y_mean_intensity, bev_intensity, atol=1e-4):
+#                         correct_intensities += 1
+
+#                     # classes
+#                     pixel_labels = labels[points_idx].ravel()
+#                     # print(f"Pixel label aount {pixel_labels.shape[0]} -> {pixel_labels}")
+#                     total_classes += pixel_labels.shape[0]
+
+#                     # print(f"Pixel Labels Shape: {pixel_labels.shape} -> {pixel_labels}")
+#                     # print(f"  -> Num Classes: {num_classes}")
+#                     bincount = np.bincount(pixel_labels, minlength=num_classes)
+#                     y_class = np.argmax(bincount)
+
+#                     # bev_class = int(bev[3, cur_x, cur_y])
+#                     bev_class = int(bev[4, cur_y, cur_x])
+
+#                     if bev_class == y_class:
+#                         correct_class += 1
+
+#         print("\n===== BEV TEST RESULTS =====")
+#         print(f"Total pixels checked: {total_pixels}")
+#         print(f"Correct intensities: {correct_intensities} ({(correct_intensities/non_empty_pixels)*100:.2f}%)")
+#         print(f"    -> absolute error sum: {intensity_difference}")
+#         print(f"Correct classes: {correct_class} ({(correct_class/non_empty_pixels)*100:.2f}%)")
+#         print(f"Correct empty pixels: {empty_pixels_correct} ({(empty_pixels_correct/total_empty_pixels)*100:.2f}%)") 
+
+
+
+
+
+# radius = resolution * 2
+
+# mask = (
+#     (patch[:,0] >= world_x - radius) &
+#     (patch[:,0] <= world_x + radius) &
+#     (patch[:,1] >= world_y - radius) &
+#     (patch[:,1] <= world_y + radius)
+# )
 
 
 

@@ -21,7 +21,7 @@ from mcrlab.classic.utils import fit_plane, plane_basis, project_to_plane, \
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute, get_instance_attribute, \
                                      barycentric_downsample_manhole
 from mcrlab.point_cloud.data import CSFGroundFilterTransform, bev_gen_wrapper
-from mcrlab.projection import bev_projection, bev_back_projection
+from mcrlab.projection import bev_projection, bev_pixel_to_3d
 
 from mcrlab.classic.least_squares import fit_circle_least_squares, fit_circle_least_squares_3D
 from mcrlab.point_cloud.shape_check import circle_shape_check
@@ -639,22 +639,16 @@ def classic_manhole_prediction_pipeline(point_cloud, type, plot_path):
             # get candidate in 3D
             cluster_3d = []
             for point in cluster:
-                # print("Point Shape", point.shape)
-                x = point[0]
-                y = point[1]
-                remapping = bev_back_projection(point_cloud, meta, tile_id, 
-                                                pixel_x=x, pixel_y=y, 
-                                                try_use_saved_local_points=False)
-                point_idx = remapping["global_indices"]
+                point_3d = bev_pixel_to_3d(
+                                patch_points=point_cloud,
+                                pixel_x=point[0], 
+                                pixel_y=point[1],
+                                origin_x=meta["origin_x"], 
+                                origin_y=meta["origin_y"],
+                                resolution=meta["resolution"],  # in meta
+                                search_radius=None
+                        )
 
-                # empty pixel
-                if len(point_idx) == 0:
-                    continue
-
-                point_idx = np.array(point_idx).astype(np.int32)
-
-                # access looks like:
-                point_3d = points[point_idx]
                 cluster_3d.append(point_3d)
 
             # find center

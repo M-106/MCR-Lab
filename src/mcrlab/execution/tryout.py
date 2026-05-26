@@ -5,6 +5,7 @@ import shutil
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import torch
 import open3d as o3d
 
@@ -20,7 +21,7 @@ from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_ba
 from mcrlab.point_cloud.inspect import print_pc, visualize, visualize_intensity_in_2d, \
                                        analyze_point_distribution
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
-from mcrlab.projection import bev_projection, bev_back_projection, bev_back_projection_testing
+from mcrlab.projection import bev_projection, bev_projection_testing
 from mcrlab.image.utils import normalize_img_per_channel
 from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
@@ -75,69 +76,69 @@ def torch_tensor_loading(config):
 
 
 
-def bev_trying(config):
-    # PyTorch Dataset try out
-    data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type=config.data.type, 
-                                    transform=get_basic_transform(num_points=-1),
-                                    batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+# def bev_trying(config):
+#     # PyTorch Dataset try out
+#     data_loader = get_data_loader(config.data.name, config.data.path, 
+#                                     type=config.data.type, 
+#                                     transform=get_basic_transform(num_points=-1),
+#                                     batch_size=1, shuffle=False, num_workers=1,
+#                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
-    for batch in data_loader:
-        point_cloud = batch[0]
-        print_pc(point_cloud)
+#     for batch in data_loader:
+#         point_cloud = batch[0]
+#         print_pc(point_cloud)
 
-        if point_cloud.bev_data is None:
-            print("Starting BEV projection...")
-            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05, overlap=0.0,
-                                          include_class=False, direct_single_saving=False)  #  tile_size=100.0/50.0, resolution=0.2/0.1
-            # bev_gen = bev_gen_wrapper(tiles, metas)
-        else:
-            bev_gen = point_cloud.get_bev()
-            tiles, metas = extract_tiles_metas(bev_gen, amount=5, as_numpy=True)
+#         if point_cloud.bev_data is None:
+#             print("Starting BEV projection...")
+#             tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05, overlap=0.0,
+#                                           include_class=False, direct_single_saving=False)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+#             # bev_gen = bev_gen_wrapper(tiles, metas)
+#         else:
+#             bev_gen = point_cloud.get_bev()
+#             tiles, metas = extract_tiles_metas(bev_gen, amount=5, as_numpy=True)
 
-        print("Tile 1 Shape:", tiles[0].shape)
+#         print("Tile 1 Shape:", tiles[0].shape)
 
-        tile_1_img = np.transpose(tiles[0], (1, 2, 0))
-        tile_1_img = normalize_img_per_channel(tile_1_img, skip_already_normalized_channels=True)
+#         tile_1_img = np.transpose(tiles[0], (1, 2, 0))
+#         tile_1_img = normalize_img_per_channel(tile_1_img, skip_already_normalized_channels=True)
 
-        tile_1_intensity_channel = tile_1_img[:, :, 2]
-        print("Intensity Channel:\n  Min:", tile_1_intensity_channel.min())
-        print("  Max:", tile_1_intensity_channel.max())
-        print("  Std:", tile_1_intensity_channel.std())
-        plt.imshow(tile_1_intensity_channel, cmap="nipy_spectral")  #"gnuplot2", "nipy_spectral", "gist_rainbow", "rainbow"
-        plt.show()
+#         tile_1_intensity_channel = tile_1_img[:, :, 2]
+#         print("Intensity Channel:\n  Min:", tile_1_intensity_channel.min())
+#         print("  Max:", tile_1_intensity_channel.max())
+#         print("  Std:", tile_1_intensity_channel.std())
+#         plt.imshow(tile_1_intensity_channel, cmap="nipy_spectral")  #"gnuplot2", "nipy_spectral", "gist_rainbow", "rainbow"
+#         plt.show()
 
-        # plt.imshow(tile_1_img[:, :, 2])
-        # plt.show()
-        # plt.imshow(tile_1_img[:, :, 1])
-        # plt.show()
-        save_bev_tiles_as_images(tiles, folder="./test_bev_images")
+#         # plt.imshow(tile_1_img[:, :, 2])
+#         # plt.show()
+#         # plt.imshow(tile_1_img[:, :, 1])
+#         # plt.show()
+#         save_bev_tiles_as_images(tiles, folder="./test_bev_images")
 
-        break_ = False
-        for cur_x in np.arange(0, tile_1_img.shape[0], dtype=int):
-            for cur_y in np.arange(0, tile_1_img.shape[1], dtype=int):
-                if tile_1_img[cur_y][cur_x][1] != 0:
-                    remapping = bev_back_projection(point_cloud, metas, tile_id=0, pixel_x=cur_x, pixel_y=cur_y)
-                    points = remapping["points"]
-                    print(points)
-                    print(type(points))
-                    break_ = True
-                    break
-            if break_:
-                break
+#         break_ = False
+#         for cur_x in np.arange(0, tile_1_img.shape[0], dtype=int):
+#             for cur_y in np.arange(0, tile_1_img.shape[1], dtype=int):
+#                 if tile_1_img[cur_y][cur_x][1] != 0:
+#                     remapping = bev_back_projection(point_cloud, metas, tile_id=0, pixel_x=cur_x, pixel_y=cur_y)
+#                     points = remapping["points"]
+#                     print(points)
+#                     print(type(points))
+#                     break_ = True
+#                     break
+#             if break_:
+#                 break
 
-        # show back propagated point -> hard to see ...
-        tile_1_img[:, :, 1] = 0
-        tile_1_img[cur_y, cur_x, 1] = 255
-        plt.imshow(tile_1_img[:, :, 1])
-        plt.show()
-        point_cloud.coordinates = torch.cat((point_cloud.coordinates, torch.tensor([[points[0][0], points[0][1], points[0][2]]])), dim=0)
-        point_cloud.colors = torch.zeros((point_cloud.coordinates.shape[0], 3), dtype=torch.uint8)
-        point_cloud.colors[point_cloud.coordinates.shape[0]-1] = torch.Tensor([0, 255, 0])
-        visualize(point_cloud, color_mode=None)
+#         # show back propagated point -> hard to see ...
+#         tile_1_img[:, :, 1] = 0
+#         tile_1_img[cur_y, cur_x, 1] = 255
+#         plt.imshow(tile_1_img[:, :, 1])
+#         plt.show()
+#         point_cloud.coordinates = torch.cat((point_cloud.coordinates, torch.tensor([[points[0][0], points[0][1], points[0][2]]])), dim=0)
+#         point_cloud.colors = torch.zeros((point_cloud.coordinates.shape[0], 3), dtype=torch.uint8)
+#         point_cloud.colors[point_cloud.coordinates.shape[0]-1] = torch.Tensor([0, 255, 0])
+#         visualize(point_cloud, color_mode=None)
 
-        break
+#         break
 
 
 
@@ -202,40 +203,40 @@ def bev_segmentation_trying(config):
 
 
 
-def bev_working_testing(config):
-    # LOAD POINT CLOUD
-    data_loader = get_data_loader(config.data.name, config.data.path, 
-                                    type=config.data.type, 
-                                    transform=None,  # get_basic_transform(num_points=-1), 
-                                    batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+# def bev_working_testing(config):
+#     # LOAD POINT CLOUD
+#     data_loader = get_data_loader(config.data.name, config.data.path, 
+#                                     type=config.data.type, 
+#                                     transform=None,  # get_basic_transform(num_points=-1), 
+#                                     batch_size=1, shuffle=False, num_workers=1,
+#                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
-    for batch in data_loader:
-        point_cloud = batch[0]
+#     for batch in data_loader:
+#         point_cloud = batch[0]
 
-        # point_cloud = point_cloud.get_as_o3d()
-        if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
-            raise TypeError(f"Point Cloud should be get as Open3D Tensor, but got '{type(point_cloud)}'")
-        print_pc(point_cloud)
+#         # point_cloud = point_cloud.get_as_o3d()
+#         if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
+#             raise TypeError(f"Point Cloud should be get as Open3D Tensor, but got '{type(point_cloud)}'")
+#         print_pc(point_cloud)
 
-        print("Starting BEV projection...")
-        # tiles, meta = bev_projection_numba_and_open3d(point_cloud, tile_size=35.0, resolution=0.05, include_class=True)
-        tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05, overlap=0.0,
-                                          include_class=True, direct_single_saving=False)  #  tile_size=100.0/50.0, resolution=0.2/0.1
-        bev_gen = bev_gen_wrapper(tiles, metas)
+#         print("Starting BEV projection...")
+#         # tiles, meta = bev_projection_numba_and_open3d(point_cloud, tile_size=35.0, resolution=0.05, include_class=True)
+#         tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05, overlap=0.0,
+#                                           include_class=True, direct_single_saving=False)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+#         bev_gen = bev_gen_wrapper(tiles, metas)
         
-        # if point_cloud.bevs is None:
-        #     print("Starting BEV projection...")
-        #     tiles, meta = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
-        # else:
-        #     print("Loaded Bevs from file...")
-        #     tiles = point_cloud.bevs
-        #     meta = point_cloud.meta
+#         # if point_cloud.bevs is None:
+#         #     print("Starting BEV projection...")
+#         #     tiles, meta = bev_projection_numba(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+#         # else:
+#         #     print("Loaded Bevs from file...")
+#         #     tiles = point_cloud.bevs
+#         #     meta = point_cloud.meta
 
-        bev_back_projection_testing(point_cloud, bev_gen, bev_amount=len(tiles))
+#         bev_back_projection_testing(point_cloud, bev_gen, bev_amount=len(tiles))
 
-        # do not end after one testset?
-        break
+#         # do not end after one testset?
+#         break
 
 
 
@@ -250,25 +251,27 @@ def bev_preprocessed_loading_working_testing(config):
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
-    for batch in data_loader:
-        point_cloud = batch[0]
+    bev_projection_testing(patch_gen=data_loader, bev_amount=None, atol=1e-4)
 
-        assert isinstance(point_cloud, PointCloudTensor)
-        print_pc(point_cloud)
+    # for batch in data_loader:
+    #     point_cloud = batch[0]
 
-        print("Starting BEV projection...")
-        if point_cloud.bev_data is None:
-            raise ValueError("Preprocessed BEVs did not loaded.")
-            print("Starting BEV projection...")
-            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
-        else:
-            print("Loaded Bevs from file...")
-            bev_gen = point_cloud.get_bev()
+    #     assert isinstance(point_cloud, PointCloudTensor)
+    #     print_pc(point_cloud)
 
-        bev_back_projection_testing(point_cloud, bev_gen, bev_amount=point_cloud.bev_amount)
+    #     print("Starting BEV projection...")
+    #     if point_cloud.bev_data is None:
+    #         raise ValueError("Preprocessed BEVs did not loaded.")
+    #         print("Starting BEV projection...")
+    #         tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+    #     else:
+    #         print("Loaded Bevs from file...")
+    #         bev_gen = point_cloud.get_bev()
 
-        # do not end after one testset?
-        break
+    #     bev_back_projection_testing(point_cloud, bev_gen, bev_amount=point_cloud.bev_amount)
+
+    #     # do not end after one testset?
+    #     break
 
 
 
@@ -402,16 +405,17 @@ def manhole_BEV_intensity_test(config):
                 label_value = [label_value]
             if np.any(np.isin(labels, label_value)):
                 H, W = labels.shape
-                colored_img = np.full((H, W, 3), 0.0, dtype=np.float32)
-                colored_img[np.isin(labels, label_value)] = [1.0, 1.0, 0.0]
+                # colored_img = np.full((H, W, 3), 0.0, dtype=np.float32)
+                # colored_img[np.isin(labels, label_value)] = [1.0, 1.0, 0.0]
 
                 # fix img shape -> C, H, W -> H, W, C
-                img_t = np.transpose(img[:3, :, :], (1, 2, 0))
+                img_t = np.transpose(img[:4, :, :], (1, 2, 0))
 
                 fig, ax = plt.subplots(figsize=(15,7), ncols=3, nrows=1)
 
-                ax[0].imshow(img_t, cmap="viridis")
-                shifted_img = img_t + abs(img_t.min())
+                ax[0].imshow(img_t[:, :, 1], cmap="viridis")
+                
+                shifted_img = img_t[:, :, 3] + abs(img_t[:, :, 3].min())
                 final_img = shifted_img / shifted_img.max()
                 # # 1. set 1. and 99. percentile (for removing extreme outliers)
                 # p_low, p_high = np.percentile(img_t, (1, 5))
@@ -419,17 +423,26 @@ def manhole_BEV_intensity_test(config):
                 # clipped_img = np.clip(img_t, p_low, p_high)
                 # # 3. normalize it
                 # normalized_img = (clipped_img - p_low) / (p_high - p_low)
-                ax[1].imshow(final_img, cmap="viridis")
+                # ax[1].imshow(final_img, cmap="viridis")
+                ax[1].imshow(final_img, cmap="grey")
                 # (img_t - np.min(img_t))/(np.max(img_t) - np.min(img_t))
-                ax[2].imshow(colored_img)
+
+                cmap = mcolors.ListedColormap(['black', 'yellow', 'blue'])
+                mapping = {0:0, 1:1, 255:2}
+
+                labels_mapped = np.vectorize(mapping.get)(labels)
+                labels_mapped = labels_mapped.reshape(H, W)
+                ax[2].imshow(labels_mapped, cmap=cmap, vmin=0, vmax=2)
+                # ax[2].imshow(colored_img)
 
                 ax[0].axis("off")
                 ax[1].axis("off")
                 ax[2].axis("off")
 
-                ax[0].set_title("BEV Image", fontsize=14, fontweight='bold')
-                ax[1].set_title("Normalized BEV Image", fontsize=14, fontweight='bold')
-                ax[2].set_title("Manhole MArked BEV Image", fontsize=14, fontweight='bold')
+                ax[0].set_title("Height", fontsize=14, fontweight='bold')
+                # ax[0].set_title("Labeling", fontsize=14, fontweight='bold')
+                ax[1].set_title("Intensity", fontsize=14, fontweight='bold')
+                ax[2].set_title("Manhole Marked BEV Image", fontsize=14, fontweight='bold')
 
                 current_name = f"pc_{cur_pc}_bevimg_{idx}.png"
                 plt.savefig(os.path.join(path, current_name))
@@ -440,6 +453,125 @@ def manhole_BEV_intensity_test(config):
                 # break
     
         # break
+
+
+
+def manhole_3d_and_2d_intensity_test(config):
+    if config.data.name == "sud":
+        # label_value = (1, 255) if config.data.preprocessed else 3
+        label_value = 1 if config.data.preprocessed else 3
+    else:
+        # label_value = (1, 255) if config.data.preprocessed else 104002
+        label_value = 1 if config.data.preprocessed else 104002
+    
+    print("\n --- Intensity 3D and 2D Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type=config.data.type, 
+                                    transform=get_basic_transform(),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    path = f"./output/intensity_3d_2d_investigation_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    cur_pc = 0
+    for batch in data_loader:
+        cur_pc += 1
+        point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
+        print_pc(point_cloud)
+
+        # get BEV images
+        print("Starting BEV projection...")
+        if point_cloud.bev_data is None:
+            raise ValueError("Preprocessed BEVs did not loaded.")
+            print("Starting BEV projection...")
+            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+            bev_gen = bev_gen_wrapper(tiles, metas)
+        else:
+            print("Loaded Bevs from file...")
+            bev_gen = point_cloud.get_bev()
+
+        for idx, bev_item in enumerate(bev_gen):
+            img = bev_item["pixel_values"].detach().cpu().numpy()
+            labels = bev_item["labels"].detach().cpu().numpy()
+            meta = bev_item["meta"] 
+
+            # extracting manholes? -> get all manhole points + clustering
+
+            # print(labels.shape)
+            if not isinstance(label_value, (tuple, list)):
+                label_value = [label_value]
+            if np.any(np.isin(labels, label_value)):
+                H, W = labels.shape
+                
+                plot_name = f"pc_{meta['pc_id']}_x_{meta['origin_x']}_y_{meta['origin_y']}.png"
+
+                # fix img shape -> C, H, W -> H, W, C
+                img_t = np.transpose(img[:4, :, :], (1, 2, 0))
+
+                fig, ax = plt.subplots(figsize=(15,7), ncols=2, nrows=1)
+
+                pc_numpy = point_cloud.to_numpy(as_copy=True)
+                points = pc_numpy.coordinates
+                color = pc_numpy.intensities
+                color = (color - np.min(color)) / (np.max(color) - np.min(color))
+                color = np.repeat(color[:, np.newaxis], 3, axis=1).squeeze()
+                x = points[:, 0]
+                y = points[:, 1]
+                # ax[0].scatter(x, y, s=8, c=color, alpha=0.5, cmap="gray", edgecolors="none")
+                # alpha=0.4, marker="o", linewidths=0
+                for size, alpha in [(40, 0.03), (20, 0.08), (8, 0.2)]:
+                    ax[0].scatter(
+                        x,
+                        y,
+                        s=size,
+                        c=color,
+                        alpha=alpha,
+                        edgecolors="none"
+                    )
+
+                # shifted_img = img_t[:, :, 3] + abs(img_t[:, :, 3].min())
+                # final_img = shifted_img / shifted_img.max()
+                # ax[1].imshow(final_img, cmap="gray")
+                h, w = img_t.shape[:2]
+                x, y = np.meshgrid(
+                    np.arange(w),
+                    np.arange(h)
+                )
+                color = img_t[:, :, 3]
+                # ax[1].scatter(x.ravel(), y.ravel(), s=8, c=color.ravel(), alpha=0.5, cmap="gray", edgecolors="none")
+                for size, alpha in [(40, 0.03), (20, 0.08), (8, 0.2)]:
+                    ax[1].scatter(
+                        x.ravel(),
+                        y.ravel(),
+                        s=size,
+                        c=color.ravel(),
+                        alpha=alpha,
+                        edgecolors="none"
+                    )
+
+                ax[0].axis("off")
+                ax[1].axis("off")
+
+                ax[0].set_title("3D Intensity", fontsize=14, fontweight='bold')
+                ax[1].set_title("2D Intensity", fontsize=14, fontweight='bold')
+
+                ax[0].set_aspect("equal")
+                ax[1].set_aspect("equal")
+
+                ax[0].grid(alpha=0.3)
+                ax[1].grid(alpha=0.3)
+
+                plt.margins(0.1)
+
+                plt.savefig(os.path.join(path, plot_name))
+
+                plt.close(fig)
 
 
 
@@ -1266,10 +1398,16 @@ def make_split(config, test_size=0.2, val_size=0.1):
     split_text += f"\n\nVal Samples:\n{val_set.tolist()}"
     split_text += f"\n\nTest Samples:\n{test_set.tolist()}"
 
-    split_text += "\n\n--- Same as before but only the File-name ---"
-    split_text += f"\n\nTrain Samples:\n{[os.path.split(x)[1] for x in train_set.tolist()]}"
-    split_text += f"\n\nVal Samples:\n{[os.path.split(x)[1] for x in val_set.tolist()]}"
-    split_text += f"\n\nTest Samples:\n{[os.path.split(x)[1] for x in test_set.tolist()]}"
+    def remove_pre_and_post_addings(string):
+        string = ".".join(string.split(".")[:-1])
+        string = "_".join(string.split("_")[1:])
+
+        return string
+
+    split_text += "\n\n--- Same as before but only the File-name and cleaned name ---"
+    split_text += f"\n\nTrain Samples:\n{[remove_pre_and_post_addings(os.path.split(x)[1]) for x in train_set.tolist()]}"
+    split_text += f"\n\nVal Samples:\n{[remove_pre_and_post_addings(os.path.split(x)[1]) for x in val_set.tolist()]}"
+    split_text += f"\n\nTest Samples:\n{[remove_pre_and_post_addings(os.path.split(x)[1]) for x in test_set.tolist()]}"
 
     with open(f"./output/{config.data.name}_data_split.txt", "w") as file_:
         file_.write(split_text)
@@ -1287,10 +1425,8 @@ def tryout(config):
     # simple_viusalize_point_cloud(config)
     # torch_tensor_loading(config)
 
-    # bev_trying(config)
     # bev_segmentation_trying(config)
-    # bev_working_testing(config)
-    # bev_preprocessed_loading_working_testing(config)  # still try this again!
+    bev_preprocessed_loading_working_testing(config)  # still try this again!
 
     # train_data_testing(config)
     # train_testing(config)
@@ -1298,6 +1434,7 @@ def tryout(config):
     # manhole_intensity_test(config)
     # manhole_density_test(config)
     # manhole_BEV_intensity_test(config)
+    # manhole_3d_and_2d_intensity_test(config)
     # circular_manhole_classification_test(config)
     # center_robustnest_test(config)  # stresstest
     # ransac_inlier_test(config)
@@ -1305,7 +1442,7 @@ def tryout(config):
     # point_amount_check(config)
     # squares_circle_shape_test(config)
 
-    center_prediction_use_labels_as_candidates_test(config)
+    # center_prediction_use_labels_as_candidates_test(config)
     # classic_2D_pipeline_test(config)
 
     # Not done

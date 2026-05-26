@@ -26,40 +26,84 @@ def las_to_o3d(path):
     # print("Scale:", las.header.scales)
     # print("Offset:", las.header.offsets)
 
+    index_attr_name = None
+    candidates = ["user_data", "point_source_id", "cluster", "id", "index", "subcloud"]
+    for cur_candidate in candidates:
+        if hasattr(las, cur_candidate):
+            index_attr_name = cur_candidate
+            break
+
+    if index_attr_name is None:
+        extra_attr = list(las.point_format.extra_dimension_names)
+        standard_attr = list(las.point_format.dimension_names)
+        raise ValueError(
+            "No Index for LAS file found.\n"
+            f"Available Standard Attributes: {standard_attr} \n"
+            f"Extra-Attribute (Extra Bytes): {extra_attr}"
+        )
+
     points = np.vstack((las.x, las.y, las.z)).transpose()
 
     # add local offset
-    # offset = points.min(axis=0)
     offset = np.array([las.header.offsets])
     points_local = points - offset
 
-    # Tensor-based loading
-    point_cloud = o3d.t.geometry.PointCloud()
-    point_cloud.point["positions"] = o3d.core.Tensor(points_local.astype(np.float32), dtype=o3d.core.Dtype.Float32)
+    # extract sub-point cloud indices
+    subcloud_indices = np.array(getattr(las, index_attr_name), dtype=np.int32)
+    unique_indices = np.unique(subcloud_indices)
+
+    # # Tensor-based loading
+    # point_cloud = o3d.t.geometry.PointCloud()
+    # point_cloud.point["positions"] = o3d.core.Tensor(points_local.astype(np.float32), dtype=o3d.core.Dtype.Float32)
     
+    labels = None
     for label_idx in ["classification", "classes", "class", "labels", "label"]:
         if hasattr(las, label_idx):
             labels = np.array(getattr(las, label_idx), dtype=np.int32)
-            point_cloud.point["labels"] = o3d.core.Tensor(labels, dtype=o3d.core.Dtype.Int32)
             break
     
+    colors = None
     if hasattr(las, "red"):
         colors = np.vstack((las.red, las.green, las.blue)).T / 65535.0
-        point_cloud.point["colors"] = o3d.core.Tensor(colors, dtype=o3d.core.Dtype.Float32)
 
+    intensities = None
     for intensity_idx in ["intensity", "intensities", "reflectance", "reflection", "reflections"]:
         if hasattr(las, intensity_idx):
             intensities = np.array(getattr(las, intensity_idx), dtype=np.float32)
-            point_cloud.point["intensity"] = o3d.core.Tensor(intensities, dtype=o3d.core.Dtype.Float32)
             break
 
+    normals = None
     for normal_idx in ["normals", "normal"]:
         if hasattr(las, normal_idx):
             normals = np.array(getattr(las, normal_idx), dtype=np.float32)
-            point_cloud.point["normals"] = o3d.core.Tensor(normals, dtype=o3d.core.Dtype.Float32)
             break
 
-    return point_cloud
+    # collect every sub-point cloud
+    subclouds_dict = dict()
+
+    for cur_idx in unique_indices:
+        mask = (subcloud_indices == cur_idx)
+
+        sub_point_cloud = o3d.t.geometry.PointCloud()
+
+        sub_points = points_local[mask]
+        sub_point_cloud.point["positions"] = o3d.core.Tensor(sub_points.astype(np.float32), dtype=o3d.core.Dtype.Float32)
+
+        if labels is not None:
+            sub_point_cloud.point["labels"] = o3d.core.Tensor(labels[mask], dtype=o3d.core.Dtype.Int32)
+
+        if colors is not None:
+            sub_point_cloud.point["colors"] = o3d.core.Tensor(colors[mask], dtype=o3d.core.Dtype.Float32)
+
+        if intensities is not None:
+            sub_point_cloud.point["intensity"] = o3d.core.Tensor(intensities[mask], dtype=o3d.core.Dtype.Float32)
+
+        if normals is not None:
+            sub_point_cloud.point["normals"] = o3d.core.Tensor(normals[mask], dtype=o3d.core.Dtype.Float32)
+
+        subclouds_dict[cur_idx] = sub_point_cloud
+
+    return subclouds_dict
 
 
 

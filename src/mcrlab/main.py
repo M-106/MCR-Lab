@@ -48,7 +48,7 @@ def main():
         preprocess_data(config.data.name, config.data.path, 
                         type=config.data.type,  # maybe also define over config!
                         device="cpu",
-                        bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5,  # bev_tile_size=35.0, bev_resolution=0.05)
+                        bev_tile_size=5.0, bev_resolution=0.01, bev_overlap=0.5,  # bev_tile_size=35.0, bev_resolution=0.05)
                         file_ending=config.preprocessing.file_ending)
         
     elif config.mode == "tryout":

@@ -84,8 +84,9 @@ def load_point_cloud(path):
             semantics = file_["semantics"][:]
             number_returns = file_["number_returns"][:]
 
-        if intensities.max() <= 1.0:
-            intensities *= 255
+        # FIXME
+        # if intensities.max() <= 1.0:
+        #     intensities *= 255
 
         # create open3d version
         point_cloud = o3d.t.geometry.PointCloud()
@@ -158,7 +159,7 @@ def save_point_cloud(path, point_cloud):
             # if "number_returns" in point_cloud.point:
             #     nr = point_cloud.point["number_returns"].cpu().numpy().reshape(-1)
             #     file_.create_dataset("number_returns", data=nr)
-            file_.create_dataset("number_returns", data=np.full(coords.shape[0], -1, dtype=np.int8))
+            file_.create_dataset("number_returns", data=np.full(coords.shape[0], -1, dtype=np.int16))
     else:
         _, file_ = os.path.split(path)
         raise ValueError(f"Can't save '{file_}' as point-cloud.") 

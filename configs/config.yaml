@@ -25,8 +25,8 @@ model:
   check_point_path: None
 
 data:
-  name: "sud"  # paris, whu, sud
-  path: "C:/Users/tippolito/Data/SUD-ROAD"
+  name: "whu"  # paris, whu, sud
+  path: "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"
   # "C:/Users/tippolito/Data/SUD-ROAD"
   # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"  
   # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d",

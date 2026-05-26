@@ -27,8 +27,7 @@ from mcrlab.point_cloud.io import load_point_cloud, save_point_cloud
 from mcrlab.point_cloud.semantic_kitti_utils import load_semantic_kitti_as_o3d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
 from mcrlab.projection import bev_projection
-from mcrlab.image.io import save_bev_tiles_as_pickle, load_bev_tiles_as_pickle, \
-                            load_single_bev_tile_as_pickle
+from mcrlab.image.io import load_single_bev_tile_as_pickle
 from mcrlab.image.utils import normalize_img_per_channel
 from mcrlab.point_cloud.shape_check import circle_shape_check
 
@@ -803,9 +802,9 @@ class WHUUrban3DDataset(Dataset):
         self.test_ids = ['0940', '2447', '6037', '2321', '8028', '5627', '2521']
 
         if preprocessed:
-            self.train_ids = ['preprocessed_'+x for x in self.train_ids]
-            self.val_ids = ['preprocessed_'+x for x in self.val_ids]
-            self.test_ids = ['preprocessed_'+x for x in self.test_ids]
+            self.train_ids = ['preprocessed_patch_'+x for x in self.train_ids]
+            self.val_ids = ['preprocessed_patch_'+x for x in self.val_ids]
+            self.test_ids = ['preprocessed_patch_'+x for x in self.test_ids]
 
         self.point_cloud_paths = []
         self.bev_paths = dict()
@@ -814,9 +813,9 @@ class WHUUrban3DDataset(Dataset):
         for cur_file in os.listdir(path):
             # if any([cur_file.endswith(ending) for ending in [".las", ".laz", ".ply"]]):
             if cur_file.endswith((".h5", ".ply")):
-                if preprocessed and not cur_file.startswith("preprocessed_"):
+                if preprocessed and not cur_file.startswith("preprocessed_patch"):
                     continue
-                elif not preprocessed and cur_file.startswith("preprocessed_"):
+                elif not preprocessed and cur_file.startswith("preprocessed_patch"):
                     continue
 
                 if self.type == "train" and not any([cur_file.startswith(cur_id) for cur_id in self.train_ids]):
@@ -829,7 +828,7 @@ class WHUUrban3DDataset(Dataset):
                 self.point_cloud_paths.append(os.path.join(path, cur_file))
 
         if preprocessed:
-            self.bev_gen = BEVDataset(path=self.point_cloud_paths, type=self.type, search_files=False, mode="linear", has_labels=False if self.type == "inference" else True)
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, has_labels=False if self.type == "inference" else True)
 
         print(f"Found {len(self.point_cloud_paths)} point clouds.")
 
@@ -898,9 +897,9 @@ class SUDROADDataset(Dataset):
         self.test_ids = ['sud_splitted_chunk_20', 'sud_splitted_chunk_17', 'sud_splitted_chunk_1', 'sud_splitted_chunk_5']
 
         if preprocessed:
-            self.train_ids = ['preprocessed_'+x for x in self.train_ids]
-            self.val_ids = ['preprocessed_'+x for x in self.val_ids]
-            self.test_ids = ['preprocessed_'+x for x in self.test_ids]
+            self.train_ids = ['preprocessed_patch_'+x for x in self.train_ids]
+            self.val_ids = ['preprocessed_patch_'+x for x in self.val_ids]
+            self.test_ids = ['preprocessed_patch_'+x for x in self.test_ids]
 
         self.point_cloud_paths = []
         self.bev_paths = dict()
@@ -917,9 +916,9 @@ class SUDROADDataset(Dataset):
                     if cur_file == "SUD_road.las":
                         continue
 
-                    if preprocessed and not cur_file.startswith("preprocessed_"):
+                    if preprocessed and not cur_file.startswith("preprocessed_patch"):
                         continue
-                    elif not preprocessed and cur_file.startswith("preprocessed_"):
+                    elif not preprocessed and cur_file.startswith("preprocessed_patch"):
                         continue
 
                     if self.type == "train" and not any([cur_file.startswith(cur_id) for cur_id in self.train_ids]):
@@ -941,6 +940,9 @@ class SUDROADDataset(Dataset):
 
     def __getitem__(self, idx):
         point_cloud = load_point_cloud(self.point_cloud_paths[idx])
+
+        if self.type == "load_unsplitted":
+            return point_cloud
 
         if self.transform:
             point_cloud = self.transform(point_cloud)
@@ -1040,7 +1042,8 @@ class BEVDataset(Dataset):
 
     1 Sample = 1 Tile
     """
-    def __init__(self, path=None, type="train", search_files=False, mode="linear", file_paths=[], has_labels=False):
+    def __init__(self, path=None, 
+                 file_paths=[], has_labels=False):
         """
         path is a list of point cloud file or a list of paths to search the bev images.
 
@@ -1056,104 +1059,66 @@ class BEVDataset(Dataset):
             path = [path]
 
         self.path = path
-        self.type = type
-        self.mode = mode
         self.file_paths = file_paths
         self.has_labels = has_labels
 
-        self.train_ids = ['8018', '4938', '0414', '2002', '0444', '1046', '5642', '4333', '4629', '0424', '2421', '0947', '0434', '2022', '2719', '2810', '8048', '2423', '2522', '8008', '0502', '6017', '3918', '2422', '2322', '3405', '2323', '8038']
-        self.val_ids = ['0404', '6027', '3648']
-        self.test_ids = ['0940', '2447', '6037', '2321', '8028', '5627', '2521']
-
-        self.train_ids = ['preprocessed_bev_'+x for x in self.train_ids]
-        self.val_ids = ['preprocessed_bev_'+x for x in self.val_ids]
-        self.test_ids = ['preprocessed_bev_'+x for x in self.test_ids]
-
         # find pkl files
         all_bev_paths = []
-        # search all files
-        if search_files:
-            for cur_path in self.path:
-                for cur_file in os.listdir(cur_path):
-                    if cur_file.endswith(".pkl") and cur_file.startswith("preprocessed_bev_"):
-                        cur_file_path = os.path.join(cur_path, cur_file)
-                        all_bev_paths.append(cur_file_path)            
-        else:
+                  
+        if self.path is not None:
             for cur_path in self.path:
                 root, filename = os.path.split(cur_path)
 
                 filename = ".".join(filename.split(".")[:-1]) + ".pkl"
-                bev_file_name = filename.replace("preprocessed_", "preprocessed_bev_") 
-                
-                if self.type == "train" and not any([bev_file_name.startswith(cur_id) for cur_id in self.train_ids]):
-                    continue
-                elif self.type == "test" and not any([bev_file_name.startswith(cur_id) for cur_id in self.test_ids]):
-                    continue
-                elif self.type == "val" and not any([bev_file_name.startswith(cur_id) for cur_id in self.val_ids]):
-                    continue
-
+                bev_file_name = filename.replace("preprocessed_patch", "preprocessed_patch_bev") 
                 all_bev_paths.append(os.path.join(root, bev_file_name))
-                
-        # merge the found files
-        #    -> the files only contain the file-paths
-        self.bev_paths = dict()
-        self.bev_tile_mapping = []  # every tile (one image) gets file, id in file info
-        self.idx_to_fileid = dict()
-        cur_pc_idx = 0
 
-        for cur_path in all_bev_paths:
-            cur_root, cur_file = os.path.split(cur_path)
+        self.file_paths = all_bev_paths
 
-            with open(cur_path, "rb") as file_:
-                all_paths = pickle.load(file_)
-            self.bev_paths[cur_file] = all_paths
-            
-            for file_idx in all_paths:
-                self.bev_tile_mapping.append((cur_pc_idx, file_idx))
-                self.idx_to_fileid[(cur_pc_idx, file_idx)] = cur_file
-            cur_pc_idx += 1
+        if file_paths is not None:
+            self.file_paths += file_paths
 
-        # print(f"BEV Available: {self.bev_tile_mapping.keys()}")
 
-        print(f"Found {len(self.bev_tile_mapping)} bev images (orthogonal images) in {len(self.bev_paths)} files.")
+        # get unique grid naming (for accessing tiles/patches via identifier = pcid_xstart_ystart)
+        self.file_paths_dict = dict()
+        for cur_file_path in self.file_paths:
+            cur_file_root, cur_file_name = os.path.split(cur_file_path)
+
+            pc_id, x_start, y_start = self.extract_grid_identifier(cur_file_name)  # cur_file_name.replace("preprocessed_patch_bev_", "").split("_")[:3]
+
+            self.file_paths_dict[f"{pc_id}_{x_start}_{y_start}"] = cur_file_path
+
+        print(f"Found {len(self.file_paths)} bev images (orthogonal images).")
 
     def __getitem__(self, idx):
-        if self.mode == "linear":
-            file_idx, tile_id = self.bev_tile_mapping[idx]
-            file_name = self.idx_to_fileid[(file_idx, tile_id)]
-            bevs, meta = load_single_bev_tile_as_pickle(self.bev_paths[file_name])
-            bev = bevs[tile_id]
+        cur_file_path = self.file_paths[idx]
 
-            x = torch.from_numpy(bev[:-1]).float()
-            y = torch.from_numpy(bev[-1]).long()
+        tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
+
+        if self.has_labels:
+            x = torch.from_numpy(tile[:-1]).float()
+            y = torch.from_numpy(tile[-1]).long()
             assert y.ndim == 2
-
             return {
                 "pixel_values": x,   # (C, H, W)
                 "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
                 "meta": meta
             }
         else:
-            cur_tile_ids = []
-            for file_idx, tile_id in self.bev_tile_mapping:
-                if file_idx == idx:
-                    cur_tile_ids.append(tile_id)
-                else:
-                    break
+            x = torch.from_numpy(tile).float()
+            return {
+                "pixel_values": x,   # (C, H, W)
+                "labels": None,
+                "meta": meta
+            }
+        
+    def get_patch_via_identifier(self, pc_id, x_start, y_start, return_generator=False):
+        file_path = self.file_paths_dict[f"{pc_id}_{x_start}_{y_start}"]
 
-            return self.generator(cur_tile_ids)
-        
-    def get_via_bev_filename(self, file_name, extract_from_full_ply_path=False):
-        if extract_from_full_ply_path:
-            bev_file_name = self.extract_bev_path_from_full_path(file_name)
+        if return_generator:
+            return self.generator(file_paths=[file_path])
         else:
-            bev_file_name = file_name
-        # bev_file_name = file_name.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
-        
-        # print(f"File_name: {bev_file_name}")
-        # print(f"Available keys: {self.bev_paths.keys()}")
-        
-        return self.generator(self.bev_paths[bev_file_name])
+            return file_path
 
     def generator(self, file_paths=None):
         if file_paths is None:
@@ -1185,12 +1150,19 @@ class BEVDataset(Dataset):
     def extract_bev_path_from_full_path(self, path):
         _, bev_file_name = os.path.split(path)
         bev_file_name = ".".join(bev_file_name.split(".")[:-1]) + ".pkl"
-        bev_file_name = bev_file_name.replace("preprocessed_", "preprocessed_bev_")
+        bev_file_name = bev_file_name.replace("preprocessed_patch", "preprocessed_patch_bev_")
         return bev_file_name
 
     def __len__(self):
-        return len(self.bev_tile_mapping)
+        return len(self.file_paths)
     
+    def extract_grid_identifier(self, input_string):
+        _, input_string = os.path.split(input_string)
+        input_string = ".".join(input_string.split(".")[:-1])
+        input_string = input_string.replace("preprocessed_patch_bev_", "").replace("preprocessed_patch_", "")
+        pc_id, x_start, y_start = input_string.split("_")[:3]
+        return pc_id, x_start, y_start
+
 def bev_gen_wrapper(tiles, metas, has_labels=False):
     for idx in range(len(tiles)):
         tile = tiles[idx]
@@ -1310,9 +1282,9 @@ def preprocess_data(data_name, path, type="train", device="cpu",
     type = "all"
 
     data_loader = get_data_loader(data_name, path, type="load_unsplitted" if data_name=="sud"  else type, 
-                                  transform=None if data_name=="sud"  else get_preprocessing_transform(grid_size=bev_resolution, do_voxelation=False),
-                                  batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
-                                  return_train_format=False)
+                                    transform=None if data_name=="sud"  else get_preprocessing_transform(grid_size=bev_resolution, do_voxelation=False),
+                                    batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
+                                    return_train_format=False)
     
     # to_device = ToDevice(device)
     dataset = data_loader.dataset
@@ -1324,6 +1296,8 @@ def preprocess_data(data_name, path, type="train", device="cpu",
         if os.path.isdir(dir_path) and dir.startswith(f"{data_name}_"):
             shutil.rmtree(dir_path)
 
+    # the sud dataset first have to get saved into 
+    # multiple subclouds, without preprocessing
     if data_name == "sud":
         print("Splitting Dataset into subdatasets...")
         # first cleaning
@@ -1333,16 +1307,18 @@ def preprocess_data(data_name, path, type="train", device="cpu",
                 os.remove(cur_file_path)
 
         point_cloud = next(iter(data_loader))[0]
-        split_point_cloud_into_multiple(point_cloud, path,  init_tile_size=80.0, overlap=3.0)
+        # split_point_cloud_into_multiple(point_cloud, path,  init_tile_size=50.0, overlap=3.0)
+        for cur_idx, sub_cloud in point_cloud.items():
+            save_point_cloud(path=os.path.join(path, f"{cur_idx}.h5"), 
+                             point_cloud=sub_cloud)
 
-        # load new point clouds
-        data_loader = get_data_loader(data_name, path, type="all", transform=get_preprocessing_transform(grid_size=bev_resolution, do_voxelation=False, manhole_label=3),
+        # load new splitted point clouds and apply preprocessing
+        data_loader = get_data_loader(data_name, path, type="all", transform=get_preprocessing_transform(grid_size=bev_resolution, do_voxelation=False, manhole_label=3 if data_name=="sud"  else 104002),
                                       batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
                                       return_train_format=False)
-        
+
         # to_device = ToDevice(device)
         dataset = data_loader.dataset
-
 
     print("Start Preprocessing your dataset...")
 
@@ -1363,7 +1339,8 @@ def preprocess_data(data_name, path, type="train", device="cpu",
             os.makedirs(cur_root_path, exist_ok=True)
             preprocessed_path_cleaned = True
 
-        new_file_path = os.path.join(cur_root_path, "preprocessed_"+cur_file_name +file_ending)
+        pc_id = cur_file_name
+        new_file_path = os.path.join(cur_root_path, "preprocessed_complete_"+cur_file_name +file_ending)
 
         if not isinstance(batch, list):  # Dataset
             raise TypeError(f"Batch is not a list, else it is '{type(batch)}'.")
@@ -1378,18 +1355,44 @@ def preprocess_data(data_name, path, type="train", device="cpu",
 
         # print(f"Semantic Label Shape: {batch[0].point[get_class_attribute(batch[0])].shape}")
 
-        save_point_cloud(path=new_file_path, point_cloud=batch[0])
+        # # create preprocessed pc -> just to work on it, don't get directly used later on!!
+        # save_point_cloud(path=new_file_path, point_cloud=batch[0])
 
         # save BEVs
-        print("Generating BEV images...")
-        bev_file_path = os.path.join(cur_root_path, "preprocessed_bev_"+cur_file_name +".pkl")  # ".pkl"
-        bev_projection(batch[0], tile_size=bev_tile_size, resolution=bev_resolution, overlap=bev_overlap,
-                       include_class=True,
-                       direct_single_saving=True, single_saving_path=bev_file_path,
-                       sample_path=os.path.join(sample_root_path, f"{data_name}_{idx}"))
+        print("Generating BEV images and 3D Point Cloud Patches...")
+        patch_info = bev_projection(batch[0], pc_id=pc_id,
+                                    tile_size=bev_tile_size, resolution=bev_resolution, overlap=bev_overlap,
+                                    include_class=True,
+                                    direct_single_saving=True, single_saving_path=cur_root_path,
+                                    save_3d_patches=True,
+                                    sample_path=os.path.join(sample_root_path, f"{data_name}_{idx}"))
         # save_bev_tiles_as_pickle(tiles, meta, bev_file_path)
         # save_bev_tiles_as_pt(tiles, meta, bev_file_path)
-        print(f"Saving BEVs to '{bev_file_path}'\n  Found: {os.path.isfile(bev_file_path)}")
+        print(f"Saving BEVs to '{cur_root_path}'")
+
+        # # create 3D Patches
+        # print(f"Saving 3D Point Cloud as Patches to '{cur_root_path}'")
+        # pc = batch[0]
+        # for cur_pc_id, cur_x_start, cur_y_start, cur_tile_size in patch_info:
+        #     # get positions for bounding box
+        #     positions = pc.point[get_coordinate_attribute(pc)]
+            
+        #     # create bounding box data
+        #     x_min, x_max = cur_x_start, cur_x_start + cur_tile_size
+        #     y_min, y_max = cur_y_start, cur_y_start + cur_tile_size
+            
+        #     # create mask for the patch
+        #     mask_x = (positions[:, 0] >= x_min) & (positions[:, 0] < x_max)
+        #     mask_y = (positions[:, 1] >= y_min) & (positions[:, 1] < y_max)
+        #     mask = mask_x & mask_y
+        #     indices = mask.nonzero()[0]
+            
+        #     # filter/slice the pc via the created mask
+        #     pc_patch = pc.select_by_index(indices)
+
+        #     pc_patch_name = f"preprocessed_patch_{cur_pc_id}_{cur_x_start}_{cur_y_start}.h5"
+        #     save_point_cloud(path=os.path.join(cur_root_path, pc_patch_name), 
+        #                      point_cloud=pc_patch)
 
         # del tiles, meta, batch
         del batch

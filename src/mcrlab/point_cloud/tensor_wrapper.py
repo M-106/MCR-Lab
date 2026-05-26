@@ -1,6 +1,7 @@
 # -----------
 # > Imports <
 # -----------
+import os
 from itertools import tee
 
 import numpy as np
@@ -128,7 +129,7 @@ class PointCloudTensor(object):
                  intensities=None, normals=None, 
                  labels=None, instances=None, 
                  is_torch_tensor=False,
-                 bev_data=None, bev_file_name=None):
+                 bev_data=None):
         self.coordinates = coordinates
         self.colors = colors
         self.intensities = intensities
@@ -136,26 +137,28 @@ class PointCloudTensor(object):
         self.labels = labels
         self.instances = instances
 
-        self.set_bev(bev_data, bev_file_name)
+        self.set_bev(bev_data, None)
 
         # can only be numpy or torch.Tensor
         self.is_torch_tensor = is_torch_tensor
 
     def get_bev(self):
-        if self.bev_file_name is not None and self.bev_data is not None:
-            bev_gen = self.bev_data.get_via_bev_filename(self.bev_file_name, extract_from_full_ply_path=True)
-        return bev_gen
+        if self.patch_file_path is not None and self.bev_data is not None:
+            pc_id, x_start, y_start = self.bev_data.extract_grid_identifier(self.patch_file_path)
+            bev_gen = self.bev_data.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True)
+            
+            return bev_gen    # self.bev_data.generator(file_paths=None)
     
-    def set_bev(self, bev_data, bev_file_name):
+    def set_bev(self, bev_data, patch_file_path=None):
         self.bev_data = bev_data    # BEV dataset
+        self.patch_file_path = patch_file_path
 
-        # if isinstance(bev_file_name, str):
-        #     bev_file_name = [bev_file_name]
-
-        if bev_file_name is not None and self.bev_data is not None:
+        if self.patch_file_path is not None and self.bev_data is not None:
             # self.bev_data.file_paths = bev_file_name
 
-            bev_gen = self.bev_data.get_via_bev_filename(bev_file_name, extract_from_full_ply_path=True)
+            pc_id, x_start, y_start = self.bev_data.extract_grid_identifier(patch_file_path)
+            bev_gen = self.bev_data.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True)
+            
             self.bev_amount = 0
             for cur_bev in bev_gen:
                 self.bev_amount += 1
@@ -175,15 +178,6 @@ class PointCloudTensor(object):
             self.bev_labels_type = None
             self.bev_labels_dtype = None
             self.bev_labels_shape = None
-        self.bev_file_name = bev_file_name
-
-        # self.bev_gen = self.bev_data.get_via_bev_filename(file_name, extract_from_full_ply_path=False)
-        # generator which return:
-        # {
-        # "tile": torch C, H, W
-        # "class": torch H, W
-        # "meta": dict
-        # }
 
     def to_torch(self, as_copy=False):
         coordinates_ = ensure_2_dims(numpy_to_torch_tensor(self.coordinates, dtype=numpy_tensor_type_to_torch_type(self.coordinates)))
@@ -328,7 +322,7 @@ class PointCloudTensor(object):
         o3d_pc.point["positions"] = o3d.core.Tensor(tensor_pc.coordinates, dtype=o3d.core.float32)
 
         if tensor_pc.intensities is not None:
-            o3d_pc.point["intensity"] = o3d.core.Tensor(tensor_pc.intensities, dtype=o3d.core.uint8)
+            o3d_pc.point["intensity"] = o3d.core.Tensor(tensor_pc.intensities, dtype=o3d.core.uint16)
 
         if tensor_pc.colors is not None:
             o3d_pc.point["colors"] = o3d.core.Tensor(tensor_pc.colors, dtype=o3d.core.float32)

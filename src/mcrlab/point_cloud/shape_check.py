@@ -34,19 +34,19 @@ def circle_shape_check(points, save_path=None, should_plot=False, threshold=0.6)
     # -> https://en.wikipedia.org/wiki/Isoperimetric_inequality
     circularity = (4 * np.pi * area) / (perimeter ** 2 + 1e-8)
 
-    # 4. PCA shape check
-    cov = np.cov(points_2d.T)
-    # eigvals, _ = np.linalg.eigh(cov)
-    eigvals = np.linalg.eigvalsh(cov)
-    eigvals = np.sort(eigvals)
-    # anisotropy = 1 - (eigvals[0] / eigvals[1])
-    pca_score = eigvals[0] / (eigvals[1] + 1e-8)
+    # # 4. PCA shape check
+    # cov = np.cov(points_2d.T)
+    # # eigvals, _ = np.linalg.eigh(cov)
+    # eigvals = np.linalg.eigvalsh(cov)
+    # eigvals = np.sort(eigvals)
+    # # anisotropy = 1 - (eigvals[0] / eigvals[1])
+    # pca_score = eigvals[0] / (eigvals[1] + 1e-8)
 
-    # 5. Radial Variance
-    center = points_2d.mean(axis=0)
-    center_norm = np.linalg.norm(points_2d - center, axis=1)
+    # # 5. Radial Variance
+    # center = points_2d.mean(axis=0)
+    # center_norm = np.linalg.norm(points_2d - center, axis=1)
 
-    radial_var = np.std(center_norm) / (np.mean(center_norm) + 1e-8)
+    # radial_var = np.std(center_norm) / (np.mean(center_norm) + 1e-8)
 
     # 6. Least Square Fit Shape Check
     center_3D, normal, r, mean_distance_error, loss = fit_circle_least_squares_3D(points)
@@ -54,11 +54,11 @@ def circle_shape_check(points, save_path=None, should_plot=False, threshold=0.6)
     # 7. Voting
     vote_circle = 0
     vote_circle += circularity > 0.85
-    vote_circle += pca_score > 0.5
-    vote_circle += radial_var < 0.25
+    # vote_circle += pca_score > 0.5
+    # vote_circle += radial_var < 0.25
     vote_circle += mean_distance_error < 0.1
 
-    score = vote_circle / 4.0
+    score = vote_circle / 2.0
 
     is_circle_ = score >= threshold
     
@@ -91,9 +91,27 @@ def circle_shape_check(points, save_path=None, should_plot=False, threshold=0.6)
         ax.legend()
 
         if is_circle_:
-            ax.set_title("Shape Check (✅ Is a Circle)")
+            ax.set_title("Shape Check (Is a Circle)")
         else:
-            ax.set_title("Shape Check (❌ Is not a Circle)")
+            ax.set_title("Shape Check (Is NOT a Circle)")
+
+        stats_text = (
+            f"circularity: {circularity:.3f} ({circularity > 0.85})\n"
+            # f"pca_score: {pca_score:.3f} ({pca_score > 0.5})\n"
+            # f"radial_var: {radial_var:.3f} ({radial_var < 0.25})\n"
+            f"least_squares_error: {mean_distance_error:.3f} ({mean_distance_error < 0.1})\n"
+            f"score: {score:.3f} ({score >= threshold})"
+        )
+
+        ax.text(
+            0.05, 0.95,           # X, Y coordinates (5% from left, 95% from bottom)
+            stats_text, 
+            transform=ax.transAxes,
+            fontsize=10, 
+            fontfamily='monospace',  # Keeps things aligned nicely like code
+            verticalalignment='top', 
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8, edgecolor='gray')
+        )
 
         if save_path is not None:
             plt.savefig(save_path)
@@ -106,8 +124,8 @@ def circle_shape_check(points, save_path=None, should_plot=False, threshold=0.6)
 
     return is_circle_, {
         "circularity": circularity,
-        "pca_score": pca_score,
-        "radial_var": radial_var,
+        # "pca_score": pca_score,
+        # "radial_var": radial_var,
         "least_squares_error": mean_distance_error,
         "score": score
     }
