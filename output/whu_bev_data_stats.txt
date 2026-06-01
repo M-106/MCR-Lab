@@ -1,0 +1,5 @@
+whu Stats:
+    - Mean: [nan, nan, nan]
+    - STD: [nan, nan, nan]
+    - Height: 500
+    - Width: 500

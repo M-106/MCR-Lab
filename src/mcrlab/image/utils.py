@@ -29,6 +29,52 @@ def normalize_img(img: np.ndarray):
     return img_result
 
 
+
+def normalize_bev(bev):
+    bev = bev.astype(np.float32)
+
+    # C, H, W -> H, W, C
+    # FIXME prüfen ob ok so!
+    # Channel order prüfen
+    transposed = False
+    if bev.shape[0] <= 5:
+        transposed = True
+        bev = np.transpose(bev, [1, 2, 0])
+
+    for cur_channel_idx in range(bev.shape[-1]):
+        channel = bev[:, :, cur_channel_idx]
+
+        # valid = channel[channel > 0]
+
+        # if valid.size == 0:
+        #     continue
+
+        # max height = 0
+        # delta height = 1
+        # intensity = 2
+        # density = 3
+        if cur_channel_idx == 2:
+            # percentile normalization 
+            #  -> outlier min-max normalization
+            p2, p98 = np.percentile(channel, [2, 98])
+            denom = p98 - p2
+            if denom > 1e-6:
+                channel = np.clip((channel-p2) / denom, 0.0, 1.0)
+        else:
+            # min-max normalization
+            vmin, vmax = channel.min(), channel.max()
+            if vmax - vmin > 1e-6:
+                channel = np.clip((channel - vmin) / (vmax - vmin), 0.0, 1.0)
+            
+        bev[:, :, cur_channel_idx] = channel
+
+    if transposed:
+        bev = np.transpose(bev, [2, 0, 1])
+
+    return bev
+
+
+
 def normalize_img_per_channel(img: np.ndarray, skip_already_normalized_channels=True):
     img = img.astype(np.float32)
     img_norm = np.zeros_like(img)

@@ -517,7 +517,7 @@ def bev_pixel_to_world_area(pixel_x, pixel_y,
 
 
 # @numba.njit(parallel=True)
-def bev_projection_testing(patch_gen, bev_amount=None, atol=1e-4):
+def bev_projection_testing(patch_gen, atol=1e-4, dataset_name=None, save_path=None):
     """
     Validates BEV channels using geometric reprojection.
 
@@ -569,14 +569,6 @@ def bev_projection_testing(patch_gen, bev_amount=None, atol=1e-4):
         # tiles, metas = extract_tiles_metas(bev_gen, amount=5, as_numpy=True)
         bev_gen = patch_points.get_bev()
         bev_dict = next(bev_gen)
-
-        # bev = torch.cat(
-        #     (
-        #         bev_dict["pixel_values"],
-        #         bev_dict["labels"].unsqueeze(0)
-        #     ),
-        #     dim=0
-        # ).cpu().detach().numpy()
 
         bev = bev_dict["pixel_values"]
 
@@ -703,75 +695,6 @@ def bev_projection_testing(patch_gen, bev_amount=None, atol=1e-4):
             py = pix // width
             px = pix % width
 
-        # for py in range(height):
-        #     for px in range(width):
-
-        #         total_pixels += 1
-
-        #         # world bounds of pixel
-        #         x_min, x_max, y_min, y_max = \
-        #             bev_pixel_to_world_area(
-        #                 px, py,
-        #                 origin_x,
-        #                 origin_y,
-        #                 resolution
-        #             )
-
-        #         # select points inside pixel
-        #         is_last_px = (px == width - 1)
-        #         is_last_py = (py == height - 1)
-
-        #         mask = (
-        #             (points[:, 0] >= x_min) &
-        #             (points[:, 0] <= x_max if is_last_px else points[:, 0] < x_max) &
-        #             (points[:, 1] >= y_min) &
-        #             (points[:, 1] <= y_max if is_last_py else points[:, 1] < y_max)
-        #         )
-
-        #         pixel_points = points[mask]
-
-        #         # EMPTY PIXEL
-
-        #         if len(pixel_points) == 0:
-        #             empty_pixels += 1
-
-        #             bev_empty = (
-        #                 bev[0, py, px] == 0 and
-        #                 bev[1, py, px] == 0 and
-        #                 bev[2, py, px] == 0 and
-        #                 bev[3, py, px] == 0 and
-        #                 bev[4, py, px] == 255
-        #             )
-
-        #             if bev_empty:
-        #                 correct_empty_pixels += 1
-
-        #             continue
-
-        #         non_empty_pixels += 1
-
-        #         pixel_z = pixel_points[:, 2]
-        #         pixel_intensity = intensities[mask]
-        #         pixel_labels = labels[mask]
-
-        #         # RECOMPUTE GT VALUES
-
-        #         gt_max_height = pixel_z.max()
-
-        #         gt_delta_z = pixel_z.max() - pixel_z.min()
-
-        #         gt_mean_intensity = pixel_intensity.mean()
-        #         # gt_mean_intensity /= max_intensity_global
-
-        #         gt_density = np.log1p(len(pixel_points))
-
-        #         bincount = np.bincount(
-        #             pixel_labels,
-        #             minlength=num_classes
-        #         )
-
-        #         gt_class = np.argmax(bincount)
-
             # BEV VALUES
 
             bev_max_height = bev[0, py, px]
@@ -845,200 +768,45 @@ def bev_projection_testing(patch_gen, bev_amount=None, atol=1e-4):
 
     # FINAL REPORT
 
-    print("\n===== BEV VALIDATION RESULTS =====")
+    final_report = "\n\n===== BEV VALIDATION RESULTS ====="
 
-    print(f"Total pixels: {total_pixels}")
-    print(f"Non-empty pixels: {total_non_empty_pixels}")
-    print(f"Pixel Value Coverage: {coverage_percent:.2f} %")
-    # print(f"Empty pixels: {empty_pixels}")
-    # print(f"Correct Empty pixels: {(correct_empty_pixels/empty_pixels)*100:.2f}% ({correct_empty_pixels})")
+    if dataset_name is not None:
+        final_report += f"\n\nTested Dataset: {dataset_name}"
 
-    print("\n--- Max Height ---")
-    print(f"Accuracy: {(correct_max_height/total_non_empty_pixels)*100:.2f}%")
-    print(f"Absolute Error Sum: {max_height_error:.6f}")
+    final_report += f"\n\nTotal pixels: {total_pixels}"
+    final_report += f"\nNon-empty pixels: {total_non_empty_pixels}"
+    final_report += f"\nPixel Value Coverage: {coverage_percent:.2f} %"
 
-    print("\n--- Delta Z ---")
-    print(f"Accuracy: {(correct_delta_z/total_non_empty_pixels)*100:.2f}%")
-    print(f"Absolute Error Sum: {delta_z_error:.6f}")
+    final_report += "\n\n--- Max Height ---"
+    final_report += f"\nAccuracy: {(correct_max_height/total_non_empty_pixels)*100:.2f}%"
+    final_report += f"\nAbsolute Error Sum: {max_height_error:.6f}"
 
-    print("\n--- Intensity ---")
-    print(f"Accuracy: {(correct_intensity/total_non_empty_pixels)*100:.2f}%")
-    print(f"Absolute Error Sum: {intensity_error:.6f}")
+    final_report += "\n\n--- Delta Z ---"
+    final_report += f"\nAccuracy: {(correct_delta_z/total_non_empty_pixels)*100:.2f}%"
+    final_report += f"\nAbsolute Error Sum: {delta_z_error:.6f}"
 
-    print("\n--- Density ---")
-    print(f"Accuracy: {(correct_density/total_non_empty_pixels)*100:.2f}%")
-    print(f"Absolute Error Sum: {density_error:.6f}")
+    final_report += "\n\n--- Intensity ---"
+    final_report += f"\nAccuracy: {(correct_intensity/total_non_empty_pixels)*100:.2f}%"
+    final_report += f"\nAbsolute Error Sum: {intensity_error:.6f}"
 
-    print("\n--- Class ---")
-    print(f"Accuracy: {(correct_class/total_non_empty_pixels)*100:.2f}%")
+    final_report += "\n\n--- Density ---"
+    final_report += f"\nAccuracy: {(correct_density/total_non_empty_pixels)*100:.2f}%"
+    final_report += f"\nAbsolute Error Sum: {density_error:.6f}"
 
+    final_report += "\n\n--- Class ---"
+    final_report += f"\nAccuracy: {(correct_class/total_non_empty_pixels)*100:.2f}%\n\n\n"
 
+    print(final_report)
 
-# # back-projection / bev_projection_mapping
-# def bev_back_projection(point_cloud, meta, tile_id, pixel_x, pixel_y, try_use_saved_local_points=False):
-#     """
-#     Maps a BEV pixel back to its corresponding 3D points in the original point cloud.
+    if save_path is not None:
+        with open(save_path, "w") as file_:
+            file_.write(final_report)
 
-#     This function uses the metadata generated during the BEV projection to retrieve 
-#     all 3D points that contributed to a specific pixel in a given tile.
-
-#     How it works:
-#     - Each BEV pixel corresponds to a small area in the XY-plane.
-#     - During projection, points falling into the same pixel were grouped together.
-#     - The metadata stores this mapping (pixel → point indices).
-
-#     Given a tile ID and a pixel coordinate:
-#     - The pixel is converted into a flattened pixel index.
-#     - The function looks up which group of points belongs to that pixel.
-#     - It retrieves the corresponding indices of the original point cloud.
-#     - Finally, it returns the actual 3D points for that pixel.
-
-#     If no points exist for the given pixel, the function returns None.
-#     """
-#     if isinstance(meta, dict):
-#         tile = meta
-#     else:
-#         tile = meta[tile_id]
-    
-#     # local_indices = tile["pixel_to_points"][pixel_y][pixel_x]
-#     local_indices = np.array(tile["pixel_to_points"][pixel_y][pixel_x], dtype=np.int64)
-
-#     if len(local_indices) == 0:
-#         return {
-#                 "points": np.empty((0, 3)),
-#                 "global_indices": np.array([], dtype=np.int64),
-#                 }
+        print(f"\nSaved the report at: {save_path}")
 
     
-#     # global_indices = np.arange(len(tile["global_indices"]))
-#     # if np.max(local_indices, initial=0) >= len(global_indices):
-#     #     raise ValueError("Local index is actually global index — mapping corrupted")
-#     # global_indices = global_indices[local_indices]
-
-#     if try_use_saved_local_points and "tile_points_local" in meta.keys():
-#         local_points = tile["tile_points_local"]
-#     else:
-#         # problem with this path:
-#         #    the point cloud must be processed exactly the same way,
-#         #    else differences will occur.
-#         if isinstance(point_cloud, PointCloudTensor):
-#             points = torch_tensor_to_numpy(point_cloud.coordinates, 
-#                                         dtype=torch_tensor_type_to_numpy_type(point_cloud.coordinates))
-#         elif isinstance(point_cloud, o3d.t.geometry.PointCloud):
-#             points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
-#         else:
-#             raise TypeError(f"Unsupported point cloud type, got type '{type(point_cloud)}'")
-
-#         local_points = points[local_indices]
-    
-#     # apply indices to get points
-#     return {
-#         "points": local_points,
-#         "global_indices": local_indices
-#     }
 
 
-
-# def bev_back_projection_testing(point_cloud, bev_gen, bev_amount=None):    # bev_images, metas):
-#         if isinstance(point_cloud, PointCloudTensor):
-#             point_cloud = point_cloud.get_as_o3d()
-
-#         # TEST START
-#         print("Starting BEV test...")
-#         points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
-#         intensities = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
-#         labels = point_cloud.point[get_class_attribute(point_cloud)].numpy().astype(np.int32)
-#         num_classes = int(labels.max()) + 1
-
-#         total_pixels = 0
-#         non_empty_pixels = 0
-#         correct_intensities = 0
-#         intensity_difference = 0
-#         total_classes = 0
-#         correct_class = 0
-#         total_empty_pixels = 0
-#         empty_pixels_correct = 0
-
-#         for tile_id, bev_dict in tqdm(enumerate(bev_gen), total=bev_amount, desc="Tile Testing"):
-#             bev = torch.cat((bev_dict["pixel_values"], 
-#                              bev_dict["labels"].unsqueeze(0)),
-#                              dim=0
-#                             ).cpu().detach().numpy()
-#             meta = bev_dict["meta"]
-            
-#             height, width = bev.shape[1], bev.shape[2]
-
-#             for cur_x in range(width):
-#                 for cur_y in range(height):
-#                     total_pixels += 1
-
-#                     remapping = bev_back_projection(point_cloud, meta, tile_id, 
-#                                                     pixel_x=cur_x, pixel_y=cur_y, 
-#                                                     try_use_saved_local_points=False)
-#                     points_idx = remapping["global_indices"]
-
-#                     # empty pixel
-#                     if len(points_idx) == 0:
-#                         total_empty_pixels += 1
-#                         # if bev[3, cur_x, cur_y] == -1:
-#                         if bev[4, cur_y, cur_x] == -1:
-#                             empty_pixels_correct += 1
-#                         continue
-
-#                     non_empty_pixels += 1
-
-#                     points_idx = np.array(points_idx).astype(np.int32)
-
-#                     # intensity
-#                     y_mean_intensity = intensities[points_idx].mean()
-#                     y_mean_intensity /= intensities.max()  # apply same normalization
-#                     # bev_intensity = bev[2, cur_x, cur_y]
-#                     bev_intensity = bev[2, cur_y, cur_x]
-#                     # bev_intensity /= bev_intensity.max()
-
-#                     # print(f"Intensity Ground Truth: {y_mean_intensity}, predicted: {bev_intensity}")
-
-#                     # same order? -> first closest sort or bad?
-
-#                     intensity_difference += np.sum(np.abs(bev_intensity - y_mean_intensity))
-#                     if np.isclose(y_mean_intensity, bev_intensity, atol=1e-4):
-#                         correct_intensities += 1
-
-#                     # classes
-#                     pixel_labels = labels[points_idx].ravel()
-#                     # print(f"Pixel label aount {pixel_labels.shape[0]} -> {pixel_labels}")
-#                     total_classes += pixel_labels.shape[0]
-
-#                     # print(f"Pixel Labels Shape: {pixel_labels.shape} -> {pixel_labels}")
-#                     # print(f"  -> Num Classes: {num_classes}")
-#                     bincount = np.bincount(pixel_labels, minlength=num_classes)
-#                     y_class = np.argmax(bincount)
-
-#                     # bev_class = int(bev[3, cur_x, cur_y])
-#                     bev_class = int(bev[4, cur_y, cur_x])
-
-#                     if bev_class == y_class:
-#                         correct_class += 1
-
-#         print("\n===== BEV TEST RESULTS =====")
-#         print(f"Total pixels checked: {total_pixels}")
-#         print(f"Correct intensities: {correct_intensities} ({(correct_intensities/non_empty_pixels)*100:.2f}%)")
-#         print(f"    -> absolute error sum: {intensity_difference}")
-#         print(f"Correct classes: {correct_class} ({(correct_class/non_empty_pixels)*100:.2f}%)")
-#         print(f"Correct empty pixels: {empty_pixels_correct} ({(empty_pixels_correct/total_empty_pixels)*100:.2f}%)") 
-
-
-
-
-
-# radius = resolution * 2
-
-# mask = (
-#     (patch[:,0] >= world_x - radius) &
-#     (patch[:,0] <= world_x + radius) &
-#     (patch[:,1] >= world_y - radius) &
-#     (patch[:,1] <= world_y + radius)
-# )
 
 
 

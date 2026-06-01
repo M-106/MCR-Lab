@@ -208,12 +208,25 @@ __marimo__/
 
 
 # Project Special
+
+
 /data
 
 cloth_nodes.txt
 
 /bev_samples
 /test_bev_images
-/output
+/output/*
 
 .env
+
+
+# Keep
+!output/sud_data_split.txt
+!output/whu_data_split.txt
+!output/sud_bev_data_stats.txt
+!output/whu_bev_data_stats.txt
+
+
+
+

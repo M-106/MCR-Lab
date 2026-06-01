@@ -67,6 +67,12 @@ class PreprocessingConfig(BaseModel):
     file_ending: str
 
 
+class EvalExtractionConfig(BaseModel):
+    names: list
+    data_paths: list
+    preprocessed: bool
+    type: str
+    save_path: str
 
 class Config(BaseModel):
     mode: str
@@ -74,6 +80,7 @@ class Config(BaseModel):
     test: TestConfig
     # inference: InferenceConfig
     preprocessing: PreprocessingConfig
+    eval_extraction: EvalExtractionConfig
     model: ModelConfig
     data: DataConfig
     device: Union[str, None]

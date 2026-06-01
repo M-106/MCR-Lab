@@ -1,0 +1,28 @@
+Found 13/38 (34.21%) Point Clouds with manhole labels (but uses all point clouds for split).
+
+Split complete:
+    Train=28 (73.68%)
+    Val=3 (7.89%)
+    Test=7 (18.42%)
+
+--- File-Paths ---
+
+Train Samples:
+['C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_8018.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_4938.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_0414.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2002.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_0444.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_1046.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_5642.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_4333.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_4629.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_0424.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2421.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_0947.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_0434.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2022.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2719.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2810.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_8048.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2423.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2522.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_8008.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_0502.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_6017.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_3918.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2422.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2322.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_3405.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2323.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_8038.h5']
+
+Val Samples:
+['C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_0404.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_6027.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_3648.h5']
+
+Test Samples:
+['C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_0940.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2447.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_6037.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2321.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_8028.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_5627.h5', 'C:/Users/tippolito/Data/whu3d-dataset-wo-test-label\\mls\\h5\\preprocessed\\preprocessed_2521.h5']
+
+--- Same as before but only the File-name ---
+
+Train Samples:
+['preprocessed_8018.h5', 'preprocessed_4938.h5', 'preprocessed_0414.h5', 'preprocessed_2002.h5', 'preprocessed_0444.h5', 'preprocessed_1046.h5', 'preprocessed_5642.h5', 'preprocessed_4333.h5', 'preprocessed_4629.h5', 'preprocessed_0424.h5', 'preprocessed_2421.h5', 'preprocessed_0947.h5', 'preprocessed_0434.h5', 'preprocessed_2022.h5', 'preprocessed_2719.h5', 'preprocessed_2810.h5', 'preprocessed_8048.h5', 'preprocessed_2423.h5', 'preprocessed_2522.h5', 'preprocessed_8008.h5', 'preprocessed_0502.h5', 'preprocessed_6017.h5', 'preprocessed_3918.h5', 'preprocessed_2422.h5', 'preprocessed_2322.h5', 'preprocessed_3405.h5', 'preprocessed_2323.h5', 'preprocessed_8038.h5']
+
+Val Samples:
+['preprocessed_0404.h5', 'preprocessed_6027.h5', 'preprocessed_3648.h5']
+
+Test Samples:
+['preprocessed_0940.h5', 'preprocessed_2447.h5', 'preprocessed_6037.h5', 'preprocessed_2321.h5', 'preprocessed_8028.h5', 'preprocessed_5627.h5', 'preprocessed_2521.h5']

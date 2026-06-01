@@ -10,7 +10,7 @@ from transformers import (Trainer as HFTrainer,
                          SegformerForSemanticSegmentation, 
                          Mask2FormerForUniversalSegmentation, 
                          OneFormerForUniversalSegmentation,
-                         DeepLabV3ForSemanticSegmentation,
+                         # DeepLabV3ForSemanticSegmentation,
                          SegformerImageProcessor,
                          AutoImageProcessor)
                          #TrainerCallBack as HFTrainerCallBack
@@ -372,20 +372,21 @@ MODEL_REGISTRY = {
     "segformer":   (SegformerForSemanticSegmentation,        "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"),
     "mask2former": (Mask2FormerForUniversalSegmentation,     "facebook/mask2former-swin-large-cityscapes-semantic"),
     "oneformer":   (OneFormerForUniversalSegmentation,       "shi-labs/oneformer_cityscapes_swin-l_160k"),
-    "deeplabv3":   (DeepLabV3ForSemanticSegmentation,        "microsoft/deeplabv3-resnet-101"),
+    # "deeplabv3":   (DeepLabV3ForSemanticSegmentation,        "microsoft/deeplabv3-resnet-101"),
+    # -> model = deeplabv3_resnet50(weights=DeepLabV3_ResNet50_Weights.DEFAULT)
 }
 
-# Preprocessor size config per model
-PREPROCESSOR_SIZE = {
+# processor size config per model
+PROCESSOR_SIZE = {
     "segformer":   {"height": 512, "width": 512},
     "mask2former": {"shortest_edge": 512},
     "oneformer":   {"shortest_edge": 512},
-    "deeplabv3":   {"height": 512, "width": 512},
+    # "deeplabv3":   {"height": 512, "width": 512},
 }
 
 
 
-def get_model_and_preprocessor(model_name, check_point_path=None, num_labels=2,
+def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
                                 image_mean=[0.485, 0.456, 0.406],
                                 image_std=[0.229, 0.224, 0.225]):
     if model_name not in MODEL_REGISTRY:
@@ -408,23 +409,23 @@ def get_model_and_preprocessor(model_name, check_point_path=None, num_labels=2,
     model.config.ignore_index = 255
     model.config.num_labels = num_labels
 
-    # PREPROCESSOR
+    # PROCESSOR
     # ------------
-    preprocessor_source = default_checkpoint if check_point_path else checkpoint
-    preprocessor = AutoImageProcessor.from_pretrained(
-        preprocessor_source,
+    processor_source = default_checkpoint if check_point_path else checkpoint
+    processor = AutoImageProcessor.from_pretrained(
+        processor_source,
         do_resize=True,
-        size=PREPROCESSOR_SIZE[model_name],
+        size=PROCESSOR_SIZE[model_name],
         do_rescale=False,
         do_normalize=True,
         image_mean=image_mean,
         image_std=image_std,
     )
 
-    return model, preprocessor
+    return model, processor
 
 
-def get_segmentation_prediction(outputs, model_name, preprocessor=None, target_sizes=None):
+def get_segmentation_prediction(outputs, model_name, processor=None, target_sizes=None):
     model_name = model_name.lower()
 
     if model_name in ["segformer", "deeplabv3"]:
@@ -432,7 +433,7 @@ def get_segmentation_prediction(outputs, model_name, preprocessor=None, target_s
         return logits.argmax(dim=1)
 
     elif model_name in ["mask2former", "oneformer"]:
-        preds = preprocessor.post_process_semantic_segmentation(
+        preds = processor.post_process_semantic_segmentation(
             outputs,
             target_sizes=target_sizes
         )
@@ -445,7 +446,10 @@ def get_segmentation_prediction(outputs, model_name, preprocessor=None, target_s
 
 def train_hf_pipeline(config):
     model_name = config.model.name.lower()
-    model, preprocessor = get_model_and_preprocessor(model_name, config.model.check_point_path)
+    checkpoint_path = config.model.check_point_path
+    if checkpoint_path == "None":
+        checkpoint_path = None
+    model, processor = get_model_and_processor(model_name, checkpoint_path)
 
     # Load Data
     train_dataset = get_data_loader(config.data.name, 
@@ -459,7 +463,12 @@ def train_hf_pipeline(config):
                                    return_train_format=True,
                                    return_dataset=True)
     all_train_paths = train_dataset.point_cloud_paths
-    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=preprocessor)
+    train_dataset = BEVDataset(path=all_train_paths, 
+                               file_paths=[], 
+                               has_labels=True, 
+                               image_training=True, 
+                               preprocessor=processor,
+                               augment=True)
     
     val_dataset = get_data_loader(config.data.name, 
                                    config.data.path, 
@@ -472,7 +481,12 @@ def train_hf_pipeline(config):
                                    return_train_format=True,
                                    return_dataset=True)
     all_val_paths = val_dataset.point_cloud_paths
-    val_dataset = BEVDataset(path=all_val_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=preprocessor)
+    val_dataset = BEVDataset(path=all_val_paths, 
+                             file_paths=[], 
+                             has_labels=True, 
+                             image_training=True, 
+                             preprocessor=processor,
+                             augment=False)
     # config.data.preprocessed
 
     # Helper Functions
@@ -481,13 +495,24 @@ def train_hf_pipeline(config):
         labels = torch.stack([x["labels"] for x in batch])
         return {"pixel_values": pixel_values, "labels": labels}
 
-    def compute_metrics_fn(eval_pred, model_name, preprocessor):
-        outputs, labels = eval_pred
+    def compute_metrics_fn(eval_pred, model_name, processor):
+        if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
+            outputs = eval_pred.predictions
+            labels = eval_pred.label_ids
+
+            target_sizes = [label.shape[-2:] for label in labels]
+        else:
+            outputs, labels = eval_pred
+
+            target_sizes = None
+
+
 
         preds = get_segmentation_prediction(
             outputs,
             model_name=model_name,
-            processor=preprocessor
+            processor=processor,
+            target_sizes=target_sizes
         )
 
         return compute_metrics(preds=preds, labels=labels)
@@ -500,7 +525,7 @@ def train_hf_pipeline(config):
         learning_rate=6e-5,           # 6e-5     
         lr_scheduler_type="cosine",   # cosine
         warmup_ratio=0.1,             # 0.1
-        fp16=True,                    # faster training
+        fp16=False,                    # faster training
         gradient_accumulation_steps=4,
         num_train_epochs=50,   
         dataloader_num_workers=4,
@@ -514,20 +539,35 @@ def train_hf_pipeline(config):
         report_to=["tensorboard", "mlflow"]  # "none"
     )
 
+    # for debugging
+    # training_args = HFTrainingArguments(
+    #     output_dir="./tmp_test",
+    #     max_steps=1,
+    #     logging_steps=1,
+    #     per_device_train_batch_size=1,
+    #     per_device_eval_batch_size=1,
+    #     remove_unused_columns=False,
+    #     report_to="none",
+    #     use_cpu=True
+    # )
+
     trainer = HFTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,  # load bev/meta files and extract in right format -> use BEV Dataset
         eval_dataset=val_dataset,
+        # train_dataset=train_dataset.select(range(2)) if hasattr(train_dataset, 'select') else train_dataset,
+        # eval_dataset=val_dataset.select(range(2)) if hasattr(val_dataset, 'select') else val_dataset,
         data_collator=collate_fn,
         compute_metrics=partial(
             compute_metrics_fn,
             model_name=model_name,
-            preprocessor=preprocessor
+            processor=processor
         )
     )
 
     trainer.train()
+    print("Success! The pipeline works.")
 
 
 

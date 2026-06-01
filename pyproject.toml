@@ -19,7 +19,7 @@ dependencies = [
     "laspy",
     "pydantic",  # config
     "pyyaml",
-    "transformers",
+    "transformers[torch]",
     "huggingface_hub",
     "torch",    # afterwards in install your torch version
     "torchvision", 
@@ -31,6 +31,7 @@ dependencies = [
     "ultralytics",
     "h5py",
     "evaluate",
+    "albumentations"
     # "pywhu3d",
     # "torch-geometric",
     # "pytorch3d",

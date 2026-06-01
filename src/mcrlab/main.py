@@ -54,6 +54,10 @@ def main():
     elif config.mode == "tryout":
         from mcrlab.execution.tryout import tryout
         tryout(config)
+    
+    elif config.mode == "eval_extraction":
+        from mcrlab.execution.eval_extraction import ground_truth_extraction
+        ground_truth_extraction(config)
         
     else:
         raise ValueError(f"'{config.mode}' is not an available mode for mcrlab.")

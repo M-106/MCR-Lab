@@ -16,6 +16,8 @@ from sklearn.cluster import DBSCAN
 import open3d as o3d
 import CSF  # package: cloth-simulation-filter
 
+import albumentations as A
+
 from tqdm import tqdm
 
 from mcrlab.point_cloud.utils import filter_ground_with_height, filter_ground_with_RANSAC, \
@@ -28,7 +30,7 @@ from mcrlab.point_cloud.semantic_kitti_utils import load_semantic_kitti_as_o3d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
 from mcrlab.projection import bev_projection
 from mcrlab.image.io import load_single_bev_tile_as_pickle
-from mcrlab.image.utils import normalize_img_per_channel
+from mcrlab.image.utils import normalize_img_per_channel, normalize_bev
 from mcrlab.point_cloud.shape_check import circle_shape_check
 
 
@@ -892,9 +894,9 @@ class SUDROADDataset(Dataset):
         self.preprocessed = preprocessed
         self.return_train_format = return_train_format
 
-        self.train_ids = ['sud_splitted_chunk_19', 'sud_splitted_chunk_15', 'sud_splitted_chunk_3', 'sud_splitted_chunk_7', 'sud_splitted_chunk_11', 'sud_splitted_chunk_14', 'sud_splitted_chunk_10', 'sud_splitted_chunk_4', 'sud_splitted_chunk_9', 'sud_splitted_chunk_21', 'sud_splitted_chunk_6', 'sud_splitted_chunk_2', 'sud_splitted_chunk_18', 'sud_splitted_chunk_16', 'sud_splitted_chunk_22', 'sud_splitted_chunk_0', 'sud_splitted_chunk_23', 'sud_splitted_chunk_13', 'sud_splitted_chunk_24', 'sud_splitted_chunk_8']
-        self.val_ids = ['sud_splitted_chunk_12']
-        self.test_ids = ['sud_splitted_chunk_20', 'sud_splitted_chunk_17', 'sud_splitted_chunk_1', 'sud_splitted_chunk_5']
+        self.train_ids = ['8', '10', '1', '11', '3', '4', '6', '5', '7']
+        self.val_ids = ['0']
+        self.test_ids = ['2', '9']
 
         if preprocessed:
             self.train_ids = ['preprocessed_patch_'+x for x in self.train_ids]
@@ -1030,6 +1032,26 @@ class SemanticKittiDataset(Dataset):
         return point_cloud
 
 
+
+def get_bev_augmentations():
+    return A.Compose([
+        # 1. Rotations (90, 180, 270) are "lossless" for grid data
+        A.RandomRotate90(p=0.5),
+        
+        # 2. Horizontal and Vertical Flips
+        A.HorizontalFlip(p=0.5),
+        A.VerticalFlip(p=0.5),
+        
+        # 3. Fine-grained rotation for circular manhole variety
+        A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.05, rotate_limit=45, p=0.5),
+        
+        # 4. Optional: Randomly change brightness of intensity/height channels
+        A.RandomBrightnessContrast(p=0.2),
+        
+        # 5. Optional: Add a bit of noise
+        A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
+    ])
+
 class BEVDataset(Dataset):
     """
     Dataset for loading BEV image datasets. 
@@ -1044,7 +1066,8 @@ class BEVDataset(Dataset):
     """
     def __init__(self, path=None, 
                  file_paths=[], has_labels=False,
-                 image_training=False, preprocessor=None):
+                 image_training=False, preprocessor=None,
+                 augment=False):
         """
         path is a list of point cloud file or a list of paths to search the bev images.
 
@@ -1062,6 +1085,8 @@ class BEVDataset(Dataset):
         self.has_labels = has_labels
         self.image_training = image_training
         self.preprocessor = preprocessor
+        self.augment = augment
+        self.aug_pipeline = get_bev_augmentations() if augment else None
 
         # find pkl files
         all_bev_paths = []
@@ -1097,7 +1122,17 @@ class BEVDataset(Dataset):
         tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
 
         if self.has_labels:
-            x = torch.from_numpy(tile[:-1]).float()
+
+            x_np = tile[:-1].transpose(1, 2, 0)
+            y_np = tile[-1]
+
+            if self.augment:
+                augmented = self.aug_pipeline(image=x_np, mask=y_np)
+                x_np = augmented['image']
+                y_np = augmented['mask']
+
+            x = normalize_bev(x_np.transpose(2, 0, 1))
+            x = torch.from_numpy(x).float()
             if self.image_training:
                 x = x[[0,2,3]]     # drop channel
                 if self.preprocessor is not None:
@@ -1113,7 +1148,7 @@ class BEVDataset(Dataset):
                     x = (x - x.mean()) / (x.std() + 1e-6)
                 assert x.ndim == 3
 
-            y = torch.from_numpy(tile[-1]).long()
+            y = torch.from_numpy(y_np).long()
             assert y.ndim == 2
 
             return {
@@ -1122,7 +1157,8 @@ class BEVDataset(Dataset):
                 "meta": meta
             }
         else:
-            x = torch.from_numpy(tile).float()
+            x = normalize_bev(tile)
+            x = torch.from_numpy(x).float()
             return {
                 "pixel_values": x,   # (C, H, W)
                 "labels": None,

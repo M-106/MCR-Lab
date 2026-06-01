@@ -31,7 +31,7 @@ def las_to_o3d(path):
     standard_attr = list(las.point_format.dimension_names)
 
     index_attr_name = None
-    candidates = ["user_data", "point_source_id", "cluster", "id", "index", "subcloud"]
+    candidates = ["point_source_id", "user_data", "cluster", "id", "index", "subcloud"]
     for cur_candidate in candidates:
         if hasattr(las, cur_candidate):
             index_attr_name = cur_candidate

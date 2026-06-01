@@ -252,7 +252,7 @@ def bev_preprocessed_loading_working_testing(config):
                                     batch_size=1, shuffle=False, num_workers=1,
                                     preprocessed=config.data.preprocessed, return_train_format=False)
 
-    bev_projection_testing(patch_gen=data_loader, bev_amount=None, atol=1e-4)
+    bev_projection_testing(patch_gen=data_loader, atol=1e-4, dataset_name=config.data.name, save_path=f"./output/bev_projection_test_{config.data.name}.txt")
 
     # for batch in data_loader:
     #     point_cloud = batch[0]
@@ -570,6 +570,98 @@ def BEV_investigation(config):
 
 
 
+def BEV_Density_investigation(config):
+    if config.data.name == "sud":
+        # label_value = (1, 255) if config.data.preprocessed else 3
+        label_value = 1 if config.data.preprocessed else 3
+    else:
+        # label_value = (1, 255) if config.data.preprocessed else 104002
+        label_value = 1 if config.data.preprocessed else 104002
+    
+    print("\n --- BEV Density Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type=config.data.type, 
+                                    transform=get_basic_transform(),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    path = f"./output/bev_density_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    total_max = []
+    total_mean = []
+    cur_pc = 0
+    for batch in data_loader:
+        cur_pc += 1
+        point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
+        print_pc(point_cloud)
+
+        # get BEV images
+        print("Starting BEV projection...")
+        if point_cloud.bev_data is None:
+            raise ValueError("Preprocessed BEVs did not loaded.")
+            print("Starting BEV projection...")
+            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+            bev_gen = bev_gen_wrapper(tiles, metas)
+        else:
+            print("Loaded Bevs from file...")
+            bev_gen = point_cloud.get_bev()
+
+        for idx, bev_item in enumerate(bev_gen):
+            img = bev_item["pixel_values"].detach().cpu().numpy()
+            labels = bev_item["labels"].detach().cpu().numpy()
+            meta = bev_item["meta"] 
+
+            # print(labels.shape)
+            if not isinstance(label_value, (tuple, list)):
+                label_value = [label_value]
+
+            if np.any(np.isin(labels, label_value)):
+                H, W = labels.shape
+
+                # fix img shape -> C, H, W -> H, W, C
+                img_t = np.transpose(img[:, :, :], (1, 2, 0))
+                channel = img_t[:, :, 3]
+
+                # hist, bins = np.histogram(channel, bins=256, range=(0, 255))
+                total_mean.append(np.mean(channel))
+                total_max.append(np.max(channel))
+
+                fig, ax = plt.subplots(figsize=(20,12), ncols=1, nrows=1)
+
+                ax.hist(channel.ravel(), bins=256, range=(0, 255))
+                ax.set_title("Histogram of Density (Point Amount)")
+                ax.set_xlabel("Pixel Value")
+                ax.set_ylabel("Frequency")
+
+                # current_name = f"pc_{cur_pc}_bevimg_{idx}.png"
+                plot_name = f"pc_{meta['pc_id']}_x_{meta['origin_x']}_y_{meta['origin_y']}.png"
+                plt.savefig(os.path.join(path, plot_name))
+
+                plt.close(fig)
+        
+    total_max = np.array(total_max)
+    total_mean = np.array(total_mean)
+
+    print(f"Max Density:")
+    print(f"    - Mean: {total_max.mean()}")
+    print(f"    - Max: {total_max.max()}")
+    print(f"    - Min: {total_max.min()}")
+    print(f"    - Std: {total_max.std()}")
+
+    print(f"\nMean Density:")
+    print(f"    - Mean: {total_mean.mean()}")
+    print(f"    - Max: {total_mean.max()}")
+    print(f"    - Min: {total_mean.min()}")
+    print(f"    - Std: {total_mean.std()}")
+
+
+
 def bev_dataset_stat_investigation(config):
     def compute_dataset_stats(dataset):
         H = W = None
@@ -584,9 +676,11 @@ def bev_dataset_stat_investigation(config):
                 W = x.shape[2]
         mean = torch.stack(means).mean(dim=0).tolist()
         std  = torch.stack(stds).mean(dim=0).tolist()
-        print(f"mean={mean}, std={std}")
+        
         return mean, std, H, W
     
+    if config.data.type != "train":
+        print("[HINT] Changed Type of train because data stats are needed most likely from train data.")
 
     train_dataset = get_data_loader(config.data.name, 
                                    config.data.path, 
@@ -603,10 +697,14 @@ def bev_dataset_stat_investigation(config):
 
     mean, std, H, W = compute_dataset_stats(train_dataset)
 
-    result = f"{config.data.name} Stats:\n    - Mean: {mean:.4f}\n    - STD: {std:.4f}\n    - Height: {H}\n    - Width: {W}"
+    result = f"{config.data.name} Stats:\n    - Mean: {mean}\n    - STD: {std}\n    - Height: {H}\n    - Width: {W}"
 
-    with open(f"./output/{config.data.name}_bev_data_stats.txt", "w") as file_:
+    save_path = f"./output/{config.data.name}_bev_data_stats.txt"
+    with open(save_path, "w") as file_:
         file_.write(result)
+
+    print(result)
+    print(f"\n[INFO] Saved to '{save_path}'")
 
 
 
@@ -1580,7 +1678,7 @@ def tryout(config):
     # torch_tensor_loading(config)
 
     # bev_segmentation_trying(config)
-    # bev_preprocessed_loading_working_testing(config)  # still try this again!
+    # bev_preprocessed_loading_working_testing(config)
 
     # train_data_testing(config)
     # train_testing(config)
@@ -1589,7 +1687,8 @@ def tryout(config):
     # manhole_density_test(config)
     # manhole_BEV_intensity_test(config)
     # BEV_investigation(config)
-    bev_dataset_stat_investigation(config)
+    BEV_Density_investigation(config)
+    # bev_dataset_stat_investigation(config)
     # manhole_3d_and_2d_intensity_test(config)  
     # circular_manhole_classification_test(config)
     # center_robustnest_test(config)  # stresstest
