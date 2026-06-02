@@ -19,11 +19,113 @@ import torch
 from torch.utils.data import random_split, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+# for plotting
+import numpy as np
+import matplotlib.pyplot as plt
+from transformers import TrainerCallback, TrainerState, TrainerControl
+
 from mcrlab.config.config import Config
 from mcrlab.log import get_logger, LoggerPrinter
 from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDataset
 from mcrlab.model_utils import get_model, get_device, get_criterion
 from mcrlab.metrices import compute_metrics
+
+
+# ----------------------
+# > HuggingFace Helper <
+# ----------------------
+class ImagePlottingCallback(TrainerCallback):
+    def __init__(self, val_dataset, model_name, processor, config, num_samples=1):
+        super().__init__()
+        self.val_dataset = val_dataset
+        self.model_name = model_name.lower()
+        self.processor = processor
+        self.config = config
+        self.num_samples = num_samples
+        
+        # create folderfor saving
+        self.plot_dir = f"./output/plots/{model_name}"
+        os.makedirs(self.plot_dir, exist_ok=True)
+
+    def on_evaluate(self, args, state: TrainerState, control: TrainerControl, model=None, **kwargs):
+        """
+        Calls after every evaluation
+        """
+        if model is None:
+            return
+
+        was_training = model.training
+        model.eval()
+        device = next(model.parameters()).device
+
+        plotted_samples = 0
+
+        # go through the first x samples
+        with torch.no_grad():
+            for i in range(len(self.val_dataset)):
+                sample = self.val_dataset[i]
+                
+                # Prepare inputs -> add batch dim + move to device
+                pixel_values = sample["pixel_values"].unsqueeze(0).to(device)
+                labels = sample["labels"]  # Ground Truth (bereits als Tensor im Dataset)
+
+                # make prediction
+                outputs = model(pixel_values=pixel_values)
+                
+                # extract target_sizes if needed (for Mask2Former/OneFormer?)
+                target_sizes = [labels.shape[-2:]] if self.model_name in ["mask2former", "oneformer"] else None
+                
+                preds = get_segmentation_prediction(
+                    outputs,
+                    model_name=self.model_name,
+                    processor=self.processor,
+                    target_sizes=target_sizes
+                )
+                
+                input_img = pixel_values[0].cpu().numpy().transpose(1, 2, 0)
+                
+                if input_img.shape[-1] == 3:
+                    if input_img.max() > 1:
+                        print(f"[WARNING] Found value bigger than 1 ({input_img.max()}), will clip it away for visualization.")
+                    if input_img.min() < 0:
+                        print(f"[WARNING] Found value smaller than 0 ({input_img.min()}), will clip it away for visualization.")
+                    input_to_show = np.clip(input_img, 0, 1) 
+                else:
+                    input_to_show = input_img[:, :, 0]
+
+                gt_mask = labels.cpu().numpy()
+                # torch.as_tensor(labels)
+                pred_mask = preds[0].cpu().numpy()
+
+                if np.sum(gt_mask == 1) < 25:
+                    continue
+
+                # create plot
+                fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+                
+                axes[0].imshow(input_to_show)
+                axes[0].set_title("Input (Image/BEV)")
+                axes[0].axis("off")
+
+                axes[1].imshow(gt_mask, cmap='viridis')
+                axes[1].set_title("Ground Truth")
+                axes[1].axis("off")
+
+                axes[2].imshow(pred_mask, cmap='viridis')
+                axes[2].set_title(f"Prediction (Epoch {state.epoch:.1f})")
+                axes[2].axis("off")
+
+                save_path = os.path.join(self.plot_dir, f"step_{state.global_step}_sample_{i}.png")
+                plt.savefig(save_path, bbox_inches='tight')
+                plt.close(fig)
+
+                plotted_samples += 1
+
+                if plotted_samples >= self.num_samples:
+                    break
+    
+        if was_training:
+            model.train()
 
 
 
@@ -489,6 +591,15 @@ def train_hf_pipeline(config):
                              augment=False)
     # config.data.preprocessed
 
+    # Callback for in-between sample plotting
+    plotting_callback = ImagePlottingCallback(
+        val_dataset=val_dataset,
+        model_name=model_name,
+        processor=processor,
+        config=config,
+        num_samples=1
+    )
+
     # Helper Functions
     def collate_fn(batch):
         pixel_values = torch.stack([x["pixel_values"] for x in batch])
@@ -536,7 +647,7 @@ def train_hf_pipeline(config):
         logging_steps=10,
         remove_unused_columns=False,   # important for SAM
         push_to_hub=False,
-        report_to=["tensorboard", "mlflow"]  # "none"
+        report_to=["tensorboard", "mlflow"],  # "none"
     )
 
     # for debugging
@@ -563,7 +674,8 @@ def train_hf_pipeline(config):
             compute_metrics_fn,
             model_name=model_name,
             processor=processor
-        )
+        ),
+        callbacks=[plotting_callback]
     )
 
     trainer.train()
