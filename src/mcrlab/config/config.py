@@ -74,10 +74,15 @@ class EvalExtractionConfig(BaseModel):
     type: str
     save_path: str
 
+class InferenceConfig(BaseModel):
+    checkpoint_path: str
+    save_path: str
+
 class Config(BaseModel):
     mode: str
     train: TrainConfig
     test: TestConfig
+    inference: InferenceConfig
     # inference: InferenceConfig
     preprocessing: PreprocessingConfig
     eval_extraction: EvalExtractionConfig

@@ -28,6 +28,11 @@ eval_extraction:
     type: "all"
     save_path: "./output/eval_ground_truths.json"
 
+inference:
+  checkpoint_path: "./output/checkpoint/"
+  save_path: "./output/inference/eval_preds.json"
+
+
 model:
   name: "segformer"
   check_point_path: None

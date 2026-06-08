@@ -37,19 +37,23 @@ from mcrlab.metrices import compute_metrics
 # > HuggingFace Helper <
 # ----------------------
 class ImagePlottingCallback(TrainerCallback):
-    def __init__(self, val_dataset, model_name, processor, config, num_samples=1):
+    def __init__(self, val_dataset, model_name, processor, config, num_samples=1, pre_name="", clear_path=True, save_post_dir_name=None):
         super().__init__()
         self.val_dataset = val_dataset
         self.model_name = model_name.lower()
         self.processor = processor
         self.config = config
         self.num_samples = num_samples
+        self.pre_name = pre_name
         
         # create folderfor saving
         self.plot_dir = f"./output/plots/{model_name}"
+        if save_post_dir_name is not None:
+            self.plot_dir += f"_{save_post_dir_name}"
         os.makedirs(self.plot_dir, exist_ok=True)
-        shutil.rmtree(self.plot_dir)
-        os.makedirs(self.plot_dir, exist_ok=True)
+        if clear_path:
+            shutil.rmtree(self.plot_dir)
+            os.makedirs(self.plot_dir, exist_ok=True)
 
     def on_evaluate(self, args, state: TrainerState, control: TrainerControl, model=None, **kwargs):
         """
@@ -132,7 +136,7 @@ class ImagePlottingCallback(TrainerCallback):
                 axes[2].set_title(f"Prediction (Epoch {state.epoch:.1f})")
                 axes[2].axis("off")
 
-                save_path = os.path.join(self.plot_dir, f"step_{state.global_step}_sample_{i}.png")
+                save_path = os.path.join(self.plot_dir, f"{self.pre_name}_epoch_{state.epoch:03}_step_{state.global_step:03}_sample_{i:03}.png")
                 plt.savefig(save_path, bbox_inches='tight')
                 plt.close(fig)
 
@@ -610,6 +614,8 @@ def train_hf_pipeline(config):
     if not torch.cuda.is_available():
         raise RuntimeError("Does not find GPU accelerator!")
 
+    batch_size = 12
+
     model_name = config.model.name.lower()
     checkpoint_path = config.model.check_point_path
     if checkpoint_path == "None":
@@ -662,7 +668,8 @@ def train_hf_pipeline(config):
         model_name=model_name,
         processor=processor,
         config=config,
-        num_samples=5
+        num_samples=5,
+        pre_name="finetuning",
     )
 
     # Helper Functions
@@ -696,8 +703,8 @@ def train_hf_pipeline(config):
     # FIXME -> make many of the settings adjustable via config
     training_args = HFTrainingArguments(
         output_dir=f"./output/checkpoints/{config.model.name}",
-        per_device_train_batch_size=12,
-        per_device_eval_batch_size=12,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
         learning_rate=6e-5,           # 6e-5     
         lr_scheduler_type="cosine",   # cosine
         warmup_steps=200,             # 0.1
@@ -706,8 +713,9 @@ def train_hf_pipeline(config):
         num_train_epochs=200,   
         dataloader_num_workers=4,
         eval_strategy="steps",
+        eval_steps=int( len(train_dataset)/batch_size ),
         save_strategy="steps",
-        save_steps=500,
+        save_steps=int( len(train_dataset)/batch_size ),
         save_total_limit=2,
         logging_steps=10,
         remove_unused_columns=False,   # important for SAM
@@ -746,6 +754,81 @@ def train_hf_pipeline(config):
 
     trainer.train()
     print("Success! Your Training is finish and your pipeline works.")
+
+    # ------------------------------------
+    # --> POST TRAINING <--
+
+    # robustness finetuning
+    # danger: Catastrophic Forgetting
+
+    print("Start post training.")
+
+    train_dataset = BEVDataset(path=all_train_paths, 
+                               file_paths=[], 
+                               has_labels=True, 
+                               image_training=True, 
+                               preprocessor=processor,
+                               augment=True)
+    val_dataset = BEVDataset(path=all_val_paths, 
+                             file_paths=[], 
+                             has_labels=True, 
+                             image_training=True, 
+                             preprocessor=processor,
+                             augment=False)
+
+    plotting_callback = ImagePlottingCallback(
+        val_dataset=val_dataset,
+        model_name=model_name,
+        processor=processor,
+        config=config,
+        num_samples=5,
+        pre_name="post_training", 
+        clear_path=True,
+        save_post_dir_name="post_training"
+    )
+
+    training_args = HFTrainingArguments(
+        output_dir=f"./output/checkpoints/{config.model.name}_post_training",
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        learning_rate=5e-6,           # 6e-5     
+        lr_scheduler_type="cosine",   # cosine
+        warmup_steps=0,             # 0.1
+        fp16=False,                    # faster training
+        gradient_accumulation_steps=4,
+        num_train_epochs=100,   
+        dataloader_num_workers=4,
+        eval_strategy="steps",
+        eval_steps=int( len(train_dataset)/batch_size ) * 2,
+        save_strategy="steps",  # or best?
+        save_steps=int( len(train_dataset)/batch_size ) * 2,
+        save_total_limit=2,
+        logging_steps=10,
+        remove_unused_columns=False,   # important for SAM
+        push_to_hub=False,
+        report_to=["tensorboard", "mlflow"],  # "none"
+        use_cpu=False
+    )
+
+    trainer = HFTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,  # load bev/meta files and extract in right format -> use BEV Dataset
+        eval_dataset=val_dataset,
+        # train_dataset=train_dataset.select(range(2)) if hasattr(train_dataset, 'select') else train_dataset,
+        # eval_dataset=val_dataset.select(range(2)) if hasattr(val_dataset, 'select') else val_dataset,
+        data_collator=collate_fn,
+        compute_metrics=partial(
+            compute_metrics_fn,
+            model_name=model_name,
+            processor=processor
+        ),
+        callbacks=[plotting_callback]
+    )
+
+    trainer.train()
+
+    print("Post Training is finish!")
 
 
 
