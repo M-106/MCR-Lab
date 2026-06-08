@@ -13,8 +13,8 @@ from transformers import pipeline
 # from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
-from transformers import Sam3Processor, Sam3Model
-from transformers import Sam2Processor, Sam2Model
+# from transformers import Sam3Processor, Sam3Model
+# from transformers import Sam2Processor, Sam2Model
 from transformers import AutoModel, AutoProcessor
 
 from mcrlab.image.utils import one_channel_img_to_pil_rgb_img

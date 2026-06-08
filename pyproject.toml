@@ -19,10 +19,23 @@ dependencies = [
     "laspy",
     "pydantic",  # config
     "pyyaml",
-    "transformers[torch]",
+    
+    "transformers==4.41.0",
+    "tokenizers==0.19.1",
+    "accelerate==0.30.1",
+    "datasets==2.19.0",
     "huggingface_hub",
-    "torch",    # afterwards in install your torch version
-    "torchvision", 
+
+    # "transformers",
+    # "tokenizers",
+    # "accelerate",
+    # "datasets",
+    # "huggingface_hub",
+    
+    # "torch==2.2.2",
+    # "torchvision==0.17.2",
+
+    "torch_geometric",
     "tensorboard",
     "numba",
     "python-dotenv",
@@ -31,7 +44,9 @@ dependencies = [
     "ultralytics",
     "h5py",
     "evaluate",
-    "albumentations"
+    "albumentations",
+    "mlflow",
+    "tensorboard"
     # "pywhu3d",
     # "torch-geometric",
     # "pytorch3d",

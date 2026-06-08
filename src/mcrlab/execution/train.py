@@ -2,6 +2,7 @@
 # > Imports <
 # -----------
 import os
+import shutil
 from functools import partial
 
 from tqdm import tqdm
@@ -16,6 +17,7 @@ from transformers import (Trainer as HFTrainer,
                          #TrainerCallBack as HFTrainerCallBack
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import random_split, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
@@ -45,6 +47,8 @@ class ImagePlottingCallback(TrainerCallback):
         
         # create folderfor saving
         self.plot_dir = f"./output/plots/{model_name}"
+        os.makedirs(self.plot_dir, exist_ok=True)
+        shutil.rmtree(self.plot_dir)
         os.makedirs(self.plot_dir, exist_ok=True)
 
     def on_evaluate(self, args, state: TrainerState, control: TrainerControl, model=None, **kwargs):
@@ -85,20 +89,33 @@ class ImagePlottingCallback(TrainerCallback):
                 input_img = pixel_values[0].cpu().numpy().transpose(1, 2, 0)
                 
                 if input_img.shape[-1] == 3:
-                    if input_img.max() > 1:
-                        print(f"[WARNING] Found value bigger than 1 ({input_img.max()}), will clip it away for visualization.")
-                    if input_img.min() < 0:
-                        print(f"[WARNING] Found value smaller than 0 ({input_img.min()}), will clip it away for visualization.")
-                    input_to_show = np.clip(input_img, 0, 1) 
+                    # if input_img.max() > 1:
+                    #     print(f"[WARNING] Found value bigger than 1 ({input_img.max()}), will clip it away for visualization.")
+                    # if input_img.min() < 0:
+                    #     print(f"[WARNING] Found value smaller than 0 ({input_img.min()}), will clip it away for visualization.")
+                    
+                    input_to_show = np.clip(((input_img-input_img.min())/(input_img.max() - input_img.min())), 0, 1) 
                 else:
                     input_to_show = input_img[:, :, 0]
 
-                gt_mask = labels.cpu().numpy()
+                gt_mask = labels.cpu().numpy().squeeze()
                 # torch.as_tensor(labels)
-                pred_mask = preds[0].cpu().numpy()
+                pred_mask = preds[0].cpu().numpy().squeeze()
 
                 if np.sum(gt_mask == 1) < 25:
                     continue
+
+                # "remove" ignore label, so it does not hinder the plot
+                gt_mask = np.where(gt_mask == 255, 0, gt_mask)
+
+                # print(f"[DEBUG] GT unique values: {np.unique(gt_mask)} | Pred unique values: {np.unique(pred_mask)}")
+
+                # # scale values
+                # if gt_mask.max() <= 1:
+                #     gt_mask *= 255
+
+                # if pred_mask.max() <= 1:
+                #     pred_mask *= 255
 
                 # create plot
                 fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -107,11 +124,11 @@ class ImagePlottingCallback(TrainerCallback):
                 axes[0].set_title("Input (Image/BEV)")
                 axes[0].axis("off")
 
-                axes[1].imshow(gt_mask, cmap='viridis')
+                axes[1].imshow(gt_mask, cmap='viridis', vmin=0, vmax=1)
                 axes[1].set_title("Ground Truth")
                 axes[1].axis("off")
 
-                axes[2].imshow(pred_mask, cmap='viridis')
+                axes[2].imshow(pred_mask, cmap='viridis', vmin=0, vmax=1)
                 axes[2].set_title(f"Prediction (Epoch {state.epoch:.1f})")
                 axes[2].axis("off")
 
@@ -527,26 +544,72 @@ def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
     return model, processor
 
 
+
 def get_segmentation_prediction(outputs, model_name, processor=None, target_sizes=None):
     model_name = model_name.lower()
 
+    is_numpy_input = isinstance(outputs, np.ndarray)
+
     if model_name in ["segformer", "deeplabv3"]:
-        logits = outputs.logits
-        return logits.argmax(dim=1)
+        if not is_numpy_input and hasattr(outputs, "logits"):
+            logits = outputs.logits
+        else:
+            logits = outputs
+        
+        # raise RuntimeError(f"DEBUGGING STOP, logits/pred shape: {logits.shape}\nMin-Max ({logits.min()} - {logits.max()})")
+        # if isinstance(logits, np.ndarray):
+        #     preds = logits.argmax(axis=1)
+        # else:
+        #     preds = logits.argmax(dim=1)
+
+        if isinstance(logits, np.ndarray):
+            logits_tensor = torch.from_numpy(logits)
+        else:
+            logits_tensor = logits.detach().cpu()
+
+        preds = logits_tensor.argmax(dim=1)
+
+        # upscaling because: SegFormer logits are 1/4 of input size
+        if target_sizes is not None:
+            size = tuple(int(x) for x in target_sizes[0])
+    
+            preds = preds.unsqueeze(1).float()  # Interpolate braucht 4D: (B, 1, H, W)
+            preds = F.interpolate(preds, size=size, mode="nearest")
+            preds = preds.squeeze(1).long()
 
     elif model_name in ["mask2former", "oneformer"]:
-        preds = processor.post_process_semantic_segmentation(
-            outputs,
-            target_sizes=target_sizes
-        )
-
-        return torch.stack(preds)
+        if is_numpy_input:
+            logits_tensor = torch.from_numpy(outputs)
+            preds = logits_tensor.argmax(dim=1)
+            
+            if target_sizes is not None:
+                size = tuple(int(x) for x in target_sizes[0])
+                preds = preds.unsqueeze(1).float()
+                preds = F.interpolate(preds, size=size, mode="nearest")
+                preds = preds.squeeze(1).long()
+        else:
+            if processor is None:
+                raise ValueError(f"Processor muss für {model_name} übergeben werden!")
+            
+            # Post-processing liefert eine Liste von PyTorch-Tensoren
+            preds_list = processor.post_process_semantic_segmentation(
+                outputs,
+                target_sizes=target_sizes
+            )
+            preds = torch.stack(preds_list)
     else:
         raise ValueError()
 
 
+    return preds.numpy() if is_numpy_input else preds
+
 
 def train_hf_pipeline(config):
+    print("GPU available:", torch.cuda.is_available())
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("Does not find GPU accelerator!")
+
     model_name = config.model.name.lower()
     checkpoint_path = config.model.check_point_path
     if checkpoint_path == "None":
@@ -571,6 +634,7 @@ def train_hf_pipeline(config):
                                image_training=True, 
                                preprocessor=processor,
                                augment=True)
+    train_dataset.manhole_filter(required_manhole_points=50)
     
     val_dataset = get_data_loader(config.data.name, 
                                    config.data.path, 
@@ -589,6 +653,7 @@ def train_hf_pipeline(config):
                              image_training=True, 
                              preprocessor=processor,
                              augment=False)
+    val_dataset.manhole_filter(required_manhole_points=50)
     # config.data.preprocessed
 
     # Callback for in-between sample plotting
@@ -597,7 +662,7 @@ def train_hf_pipeline(config):
         model_name=model_name,
         processor=processor,
         config=config,
-        num_samples=1
+        num_samples=5
     )
 
     # Helper Functions
@@ -631,16 +696,16 @@ def train_hf_pipeline(config):
     # FIXME -> make many of the settings adjustable via config
     training_args = HFTrainingArguments(
         output_dir=f"./output/checkpoints/{config.model.name}",
-        per_device_train_batch_size=4,
-        per_device_eval_batch_size=4,
+        per_device_train_batch_size=12,
+        per_device_eval_batch_size=12,
         learning_rate=6e-5,           # 6e-5     
         lr_scheduler_type="cosine",   # cosine
-        warmup_ratio=0.1,             # 0.1
+        warmup_steps=200,             # 0.1
         fp16=False,                    # faster training
         gradient_accumulation_steps=4,
-        num_train_epochs=50,   
+        num_train_epochs=200,   
         dataloader_num_workers=4,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         save_strategy="steps",
         save_steps=500,
         save_total_limit=2,
@@ -648,6 +713,7 @@ def train_hf_pipeline(config):
         remove_unused_columns=False,   # important for SAM
         push_to_hub=False,
         report_to=["tensorboard", "mlflow"],  # "none"
+        use_cpu=False
     )
 
     # for debugging
@@ -679,7 +745,7 @@ def train_hf_pipeline(config):
     )
 
     trainer.train()
-    print("Success! The pipeline works.")
+    print("Success! Your Training is finish and your pipeline works.")
 
 
 

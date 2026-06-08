@@ -60,11 +60,15 @@ def normalize_bev(bev):
             denom = p98 - p2
             if denom > 1e-6:
                 channel = np.clip((channel-p2) / denom, 0.0, 1.0)
+            else:
+                channel = np.zeros_like(channel, dtype=np.float32)
         else:
             # min-max normalization
             vmin, vmax = channel.min(), channel.max()
             if vmax - vmin > 1e-6:
                 channel = np.clip((channel - vmin) / (vmax - vmin), 0.0, 1.0)
+            else:
+                channel = np.zeros_like(channel, dtype=np.float32)
             
         bev[:, :, cur_channel_idx] = channel
 

@@ -1033,23 +1033,72 @@ class SemanticKittiDataset(Dataset):
 
 
 
+def augment_intensity_only(image, augmentation_type="noise", intensity_dropout=0.1, **kwargs):
+    """
+    Custom function to apply augmentations ONLY to Channel 1 (Intensity).
+
+    Make sure that your data is in 0-1 range when using this augmentation!
+
+    Expected image shape: (H, W, 3) -> [Max Height, Intensity, Density]
+    """
+    # Create a copy so we don't overwrite the original data in-place
+    img = image.copy()
+    intensity = img[:, :, 1] # Extract the intensity channel
+    
+    if augmentation_type == "shift":
+        shift = np.random.uniform(-0.1, 0.1)
+        intensity = np.clip(intensity + shift, 0.0, 1.0)
+        
+    elif augmentation_type == "dropout":
+        dropout_p = intensity_dropout
+        mask = np.random.random(intensity.shape) < dropout_p
+        intensity[mask] = 0.0
+        
+    elif augmentation_type == "noise":
+        noise = np.random.normal(0, 0.02, size=intensity.shape)
+        intensity = np.clip(intensity + noise, 0.0, 1.0)
+
+    # assign augmented intensity
+    img[:, :, 1] = intensity
+    return img
+
+
+
 def get_bev_augmentations():
     return A.Compose([
         # 1. Rotations (90, 180, 270) are "lossless" for grid data
-        A.RandomRotate90(p=0.5),
+        A.RandomRotate90(p=0.15),
         
         # 2. Horizontal and Vertical Flips
-        A.HorizontalFlip(p=0.5),
-        A.VerticalFlip(p=0.5),
+        A.HorizontalFlip(p=0.15),
+        A.VerticalFlip(p=0.15),
         
         # 3. Fine-grained rotation for circular manhole variety
-        A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.05, rotate_limit=45, p=0.5),
+        A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.05, rotate_limit=45, p=0.15),
         
-        # 4. Optional: Randomly change brightness of intensity/height channels
-        A.RandomBrightnessContrast(p=0.2),
+        # A.RandomBrightnessContrast(p=0.2),
+        # A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
+
+        # 4. Custom Intensity Shifting (Only Channel 1)
+        A.Lambda(
+            name="IntensityShift",
+            image=lambda img, **kwargs: augment_intensity_only(img, "shift"),
+            p=0.15
+        ),
         
-        # 5. Optional: Add a bit of noise
-        A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
+        # 5. Custom Intensity Dropout (Only Channel 1)
+        A.Lambda(
+            name="IntensityDropout",
+            image=lambda img, **kwargs: augment_intensity_only(img, "dropout", 0.2),
+            p=0.1
+        ),
+        
+        # # 6. Custom Intensity Noise (Only Channel 1)
+        # A.Lambda(
+        #     name="IntensityNoise",
+        #     image=lambda img, **kwargs: augment_intensity_only(img, "noise"),
+        #     p=0.1
+        # ),
     ])
 
 class BEVDataset(Dataset):
@@ -1164,6 +1213,24 @@ class BEVDataset(Dataset):
                 "labels": None,
                 "meta": meta
             }
+
+    def manhole_filter(self, required_manhole_points=200):
+        new_file_paths = []
+
+        for idx in range(len(self.file_paths)):
+            cur_file_path = self.file_paths[idx]
+
+            tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
+
+            labels = tile[-1]
+
+            manhole_points = np.sum(labels == 1)
+
+            if manhole_points >= required_manhole_points:
+                new_file_paths.append(self.file_paths[idx])
+
+        print(f"Reduced from {len(self.file_paths)} to {len(new_file_paths)} (filtered by manhole points -> min manhole points: {required_manhole_points}).")
+        self.file_paths = new_file_paths
         
     def get_patch_via_identifier(self, pc_id, x_start, y_start, return_generator=False):
         file_path = self.file_paths_dict[f"{pc_id}_{x_start}_{y_start}"]
