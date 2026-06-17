@@ -5,6 +5,8 @@ import os
 import shutil
 import gc
 import pickle
+import random
+import copy
 
 import numpy as np
 import torch
@@ -12,6 +14,7 @@ from torch.utils.data import Dataset, DataLoader
 
 # from skimage.ndimage import label as ski_label
 from sklearn.cluster import DBSCAN
+import cv2
 
 import open3d as o3d
 import CSF  # package: cloth-simulation-filter
@@ -1033,7 +1036,7 @@ class SemanticKittiDataset(Dataset):
 
 
 
-def augment_intensity_only(image, augmentation_type="noise", intensity_dropout=0.1, **kwargs):
+def custom_augmentation(image, augmentation_type="noise", dropout=0.1, **kwargs):
     """
     Custom function to apply augmentations ONLY to Channel 1 (Intensity).
 
@@ -1043,23 +1046,39 @@ def augment_intensity_only(image, augmentation_type="noise", intensity_dropout=0
     """
     # Create a copy so we don't overwrite the original data in-place
     img = image.copy()
-    intensity = img[:, :, 1] # Extract the intensity channel
+    # n_channels = img.shape[-1]
+
+    # for cur_channel_idx in range(n_channels): 
+    cur_channel_idx = 1
+    channel = img[:, :, cur_channel_idx] # Extract the channel
     
     if augmentation_type == "shift":
         shift = np.random.uniform(-0.1, 0.1)
-        intensity = np.clip(intensity + shift, 0.0, 1.0)
+        channel = np.clip(channel + shift, 0.0, 1.0)
         
     elif augmentation_type == "dropout":
-        dropout_p = intensity_dropout
-        mask = np.random.random(intensity.shape) < dropout_p
-        intensity[mask] = 0.0
+        dropout_p = dropout
+        mask = np.random.random(channel.shape) < dropout_p
+        channel[mask] = 0.0
         
     elif augmentation_type == "noise":
-        noise = np.random.normal(0, 0.02, size=intensity.shape)
-        intensity = np.clip(intensity + noise, 0.0, 1.0)
+        noise = np.random.normal(0, 0.02, size=channel.shape)
+        channel = np.clip(channel + noise, 0.0, 1.0)
 
-    # assign augmented intensity
-    img[:, :, 1] = intensity
+    elif augmentation_type == "local_contrast":
+        alpha = np.random.uniform(0.7, 1.3)
+        mean = np.mean(channel)
+        channel = np.clip((channel - mean) * alpha + mean, 0.0, 1.0)
+    
+    elif augmentation_type == "blur":
+        k = np.random.choice([3, 5, 7])
+        channel = cv2.GaussianBlur(channel, (k, k), 0)
+
+    else:
+        raise ValueError(f"Did not found augmentation type: '{augmentation_type}'")
+
+    # assign augmented channel
+    img[:, :, cur_channel_idx] = channel
     return img
 
 
@@ -1081,22 +1100,36 @@ def get_bev_augmentations():
 
         # 4. Custom Intensity Shifting (Only Channel 1)
         A.Lambda(
-            name="IntensityShift",
-            image=lambda img, **kwargs: augment_intensity_only(img, "shift"),
+            name="Shift",
+            image=lambda img, **kwargs: custom_augmentation(img, "shift"),
+            p=0.15
+        ),
+
+        # 5. Custom Local Intensity Shifting (Only Channel 1)
+        A.Lambda(
+            name="LocalShift",
+            image=lambda img, **kwargs: custom_augmentation(img, "local_contrast"),
+            p=0.15
+        ),
+
+        # 6. Custom Local Intensity Shifting (Only Channel 1)
+        A.Lambda(
+            name="Blur",
+            image=lambda img, **kwargs: custom_augmentation(img, "blur"),
             p=0.15
         ),
         
-        # 5. Custom Intensity Dropout (Only Channel 1)
-        A.Lambda(
-            name="IntensityDropout",
-            image=lambda img, **kwargs: augment_intensity_only(img, "dropout", 0.2),
-            p=0.1
-        ),
-        
-        # # 6. Custom Intensity Noise (Only Channel 1)
+        # 7. Custom Dropout (Only Channel 1)
         # A.Lambda(
-        #     name="IntensityNoise",
-        #     image=lambda img, **kwargs: augment_intensity_only(img, "noise"),
+        #     name="Dropout",
+        #     image=lambda img, **kwargs: custom_augmentation(img, "dropout", 0.2),
+        #     p=0.1
+        # ),
+        
+        # # 8. Custom Noise (Only Channel 1)
+        # A.Lambda(
+        #     name="Noise",
+        #     image=lambda img, **kwargs: custom_augmentation(img, "noise"),
         #     p=0.1
         # ),
     ])
@@ -1116,7 +1149,7 @@ class BEVDataset(Dataset):
     def __init__(self, path=None, 
                  file_paths=[], has_labels=False,
                  image_training=False, preprocessor=None,
-                 augment=False):
+                 augment=False, pass_label_in_preprocessor=False):
         """
         path is a list of point cloud file or a list of paths to search the bev images.
 
@@ -1136,6 +1169,7 @@ class BEVDataset(Dataset):
         self.preprocessor = preprocessor
         self.augment = augment
         self.aug_pipeline = get_bev_augmentations() if augment else None
+        self.pass_label_in_preprocessor = pass_label_in_preprocessor
 
         # find pkl files
         all_bev_paths = []
@@ -1148,7 +1182,7 @@ class BEVDataset(Dataset):
                 bev_file_name = filename.replace("preprocessed_patch", "preprocessed_patch_bev") 
                 all_bev_paths.append(os.path.join(root, bev_file_name))
 
-        self.file_paths = all_bev_paths
+        self.file_paths = copy.deepcopy(all_bev_paths)
 
         if file_paths is not None:
             self.file_paths += file_paths
@@ -1184,13 +1218,32 @@ class BEVDataset(Dataset):
             x = torch.from_numpy(x).float()
             if self.image_training:
                 x = x[[0,2,3]]     # drop channel
+
+                # raise ValueError(f"DEBUGGING STOP -> Shape x: {x_np.shape} -> Shape y: {y_np.shape}")
+
                 if self.preprocessor is not None:
                     # HF preprocessors expect numpy (H, W, C) or PIL
                     x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
-                    processed = self.preprocessor(
-                        images=x_np,
-                        return_tensors="pt"
-                    )
+                    if self.pass_label_in_preprocessor:
+                        y_np = y_np.astype(np.int32)
+                        processed = self.preprocessor(
+                            images=x_np,
+                            segmentation_maps=y_np,
+                            return_tensors="pt"
+                        )
+                        x = processed["pixel_values"].squeeze(0)  # (C, H, W)
+                        return {
+                            "pixel_values": x,
+                            "mask_labels": processed["mask_labels"][0],    # squeeze batch dim
+                            "class_labels": processed["class_labels"][0],
+                            "labels": torch.from_numpy(y_np).long(),
+                            "meta": meta
+                        }
+                    else:
+                        processed = self.preprocessor(
+                            images=x_np,
+                            return_tensors="pt"
+                        )
                     # FIXME, OneFromer need: task_inputs=["semantic"]?
                     x = processed["pixel_values"].squeeze(0)  # (C, H, W)
                 else:
@@ -1214,8 +1267,10 @@ class BEVDataset(Dataset):
                 "meta": meta
             }
 
-    def manhole_filter(self, required_manhole_points=200):
+    def manhole_filter(self, required_manhole_points=200, amount_non_manhole_samples=10):
         new_file_paths = []
+
+        all_non_manhole_paths = []
 
         for idx in range(len(self.file_paths)):
             cur_file_path = self.file_paths[idx]
@@ -1228,7 +1283,18 @@ class BEVDataset(Dataset):
 
             if manhole_points >= required_manhole_points:
                 new_file_paths.append(self.file_paths[idx])
+            
+            if manhole_points == 0:
+                all_non_manhole_paths.append(self.file_paths[idx])
 
+
+        # add non manhole samples
+        samples_to_take = min(len(all_non_manhole_paths), amount_non_manhole_samples)
+        if samples_to_take > 0:
+            non_manhole_paths_to_add = random.sample(all_non_manhole_paths, samples_to_take)
+            new_file_paths.extend(non_manhole_paths_to_add)
+
+        # info and update
         print(f"Reduced from {len(self.file_paths)} to {len(new_file_paths)} (filtered by manhole points -> min manhole points: {required_manhole_points}).")
         self.file_paths = new_file_paths
         

@@ -46,7 +46,10 @@ dependencies = [
     "evaluate",
     "albumentations",
     "mlflow",
-    "tensorboard"
+    "tensorboard",
+
+    "segmentation_models_pytorch",
+
     # "pywhu3d",
     # "torch-geometric",
     # "pytorch3d",

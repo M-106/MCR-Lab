@@ -13,10 +13,12 @@ from transformers import (Trainer as HFTrainer,
                          OneFormerForUniversalSegmentation,
                          # DeepLabV3ForSemanticSegmentation,
                          SegformerImageProcessor,
-                         AutoImageProcessor)
+                         AutoImageProcessor,
+                         PreTrainedModel, PretrainedConfig)
                          #TrainerCallBack as HFTrainerCallBack
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import random_split, DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -37,7 +39,7 @@ from mcrlab.metrices import compute_metrics
 # > HuggingFace Helper <
 # ----------------------
 class ImagePlottingCallback(TrainerCallback):
-    def __init__(self, val_dataset, model_name, processor, config, num_samples=1, pre_name="", clear_path=True, save_post_dir_name=None):
+    def __init__(self, val_dataset, model_name, processor, config, num_samples=1, pre_name="", clear_path=True, save_post_dir_name=None, batch_size=5):
         super().__init__()
         self.val_dataset = val_dataset
         self.model_name = model_name.lower()
@@ -45,6 +47,7 @@ class ImagePlottingCallback(TrainerCallback):
         self.config = config
         self.num_samples = num_samples
         self.pre_name = pre_name
+        self.batch_size = batch_size
         
         # create folderfor saving
         self.plot_dir = f"./output/plots/{model_name}"
@@ -81,7 +84,25 @@ class ImagePlottingCallback(TrainerCallback):
                 outputs = model(pixel_values=pixel_values)
                 
                 # extract target_sizes if needed (for Mask2Former/OneFormer?)
-                target_sizes = [labels.shape[-2:]] if self.model_name in ["mask2former", "oneformer"] else None
+                # print(f"EVAL:\nlabels:\n   type: {type(labels)}\n    len: {len(labels)}\n    shape: {len(labels.shape)}")
+                # print(f"Label [0]:\n   type: {type(labels[0])}\n    len: {len(labels[0])}\n    shape: {len(labels[0].shape)}")
+                # # [print(f"\n    - Output {idx}: {cur_label.shape}, dtype={cur_label.dtype}") for idx, cur_label in enumerate(labels[0])]
+                # print(f"Label [1]:\n   type: {type(labels[1])}\n    len: {len(labels[1])}\n    shape: {len(labels[1].shape)}")
+                # # [print(f"\n    - Output {idx}: {cur_label.shape}, dtype={cur_label.dtype}") for idx, cur_label in enumerate(labels[1])]
+                # # print(f"{labels}")
+                # print(f"\nOutputs:\n   type: {type(outputs)}\n    len: {len(outputs)}")
+
+                if self.model_name in ["mask2former", "oneformer"]:
+                    # size = np.array(labels[0][1].shape[-2:])
+                    # target_sizes = np.repeat(size*4, self.batch_size).reshape((-1, 2))
+                    target_sizes = [(500, 500)] # * self.batch_size
+                else:
+                    # target_sizes = None
+                    target_sizes = [(500, 500)] # * self.batch_size
+                # target_sizes = [labels.shape[-2:]] if self.model_name in ["mask2former", "oneformer"] else None
+
+                # if target_sizes is not None:
+                #     print(f"target len: {len(target_sizes)}")
                 
                 preds = get_segmentation_prediction(
                     outputs,
@@ -98,12 +119,20 @@ class ImagePlottingCallback(TrainerCallback):
                     # if input_img.min() < 0:
                     #     print(f"[WARNING] Found value smaller than 0 ({input_img.min()}), will clip it away for visualization.")
                     
-                    input_to_show = np.clip(((input_img-input_img.min())/(input_img.max() - input_img.min())), 0, 1) 
+                    img_min = input_img.min()
+                    img_max = input_img.max()
+                    if img_max > img_min:
+                        input_to_show = (input_img - img_min) / (img_max - img_min)
+                    else:
+                        input_to_show = np.zeros_like(input_img)
+                    input_to_show = np.clip(input_to_show, 0, 1)
                 else:
+                    raise ValueError("Debuggign Stop, expected image to have 3 channels")
                     input_to_show = input_img[:, :, 0]
 
                 gt_mask = labels.cpu().numpy().squeeze()
                 # torch.as_tensor(labels)
+                # print(f"preds before: {preds.shape}")
                 pred_mask = preds[0].cpu().numpy().squeeze()
 
                 if np.sum(gt_mask == 1) < 25:
@@ -121,20 +150,57 @@ class ImagePlottingCallback(TrainerCallback):
                 # if pred_mask.max() <= 1:
                 #     pred_mask *= 255
 
+                # print("\n=== DEBUGGING PRINT ===")
+                # print("pixel_values:", pixel_values.shape)
+                # print("outputs.logits:", outputs.logits.shape)
+                # print("gt_mask:", gt_mask.shape)
+                # print("pred_mask:", pred_mask.shape)
+                # preds before: torch.Size([1, 125, 125])      
+
+                # === DEBUGGING PRINT ===
+                # pixel_values: torch.Size([1, 3, 500, 500])
+                # outputs.logits: torch.Size([1, 2, 125, 125])
+                # gt_mask: (500, 500)
+                # pred_mask: (125, 125) 
+
                 # create plot
-                fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+                fig, axes = plt.subplots(1, 6, figsize=(5*6, 5))
                 
-                axes[0].imshow(input_to_show)
-                axes[0].set_title("Input (Image/BEV)")
+                # Image 1 - Input Channel Max Height
+                axes[0].imshow(input_to_show[:, :, 0], cmap="viridis")
+                axes[0].set_title("Input Max height")
                 axes[0].axis("off")
 
-                axes[1].imshow(gt_mask, cmap='viridis', vmin=0, vmax=1)
-                axes[1].set_title("Ground Truth")
+                # Image 2 - Input Channel Intensity
+                axes[1].imshow(input_to_show[:, :, 1], cmap="viridis")
+                axes[1].set_title("Input Intensity")
                 axes[1].axis("off")
 
-                axes[2].imshow(pred_mask, cmap='viridis', vmin=0, vmax=1)
-                axes[2].set_title(f"Prediction (Epoch {state.epoch:.1f})")
+                # Image 3 - Input Channel Density
+                axes[2].imshow(input_to_show[:, :, 2], cmap="viridis")
+                axes[2].set_title("Input Density")
                 axes[2].axis("off")
+
+                # Image 4 - Ground Truth
+                axes[3].imshow(gt_mask, cmap='viridis', vmin=0, vmax=1)
+                axes[3].set_title("Ground Truth")
+                axes[3].axis("off")
+
+                # Image 5 - Prediction
+                axes[4].imshow(pred_mask, cmap='viridis', vmin=0, vmax=1)
+                axes[4].set_title(f"Prediction")
+                axes[4].axis("off")
+
+                # FIXME -> also difference? -> be careful when substracting because of dtype
+
+                # Image 5 - Difference
+                diff = (gt_mask != pred_mask).astype(np.uint8)
+                # diff = np.abs(gt_mask.astype(np.int64) - pred_mask.astype(np.int64))
+                axes[5].imshow(diff, cmap='viridis', vmin=0, vmax=1)
+                axes[5].set_title(f"Difference")
+                axes[5].axis("off")
+
+                fig.suptitle(f"Sample Prediction Epoch {state.epoch:.1f}")
 
                 save_path = os.path.join(self.plot_dir, f"{self.pre_name}_epoch_{state.epoch:03}_step_{state.global_step:03}_sample_{i:03}.png")
                 plt.savefig(save_path, bbox_inches='tight')
@@ -181,330 +247,67 @@ def get_scheduler(name, optimizer):
 
 
 
-# -----------------
-# > Trainer Class <
-# -----------------
-class Trainer:
-    def __init__(self, 
-                 model,
-                 name,
-                 criterion,
-                 optimizer,
-                 epochs,
-                 data_loader,
-                 val_data_loader,
-                 val_steps=5,
-                 lr_scheduler=None,
-                 device=None,
-                 use_amp=False,
-                 scaler=False,
-                 # logging_steps=10,
-                 output_dir="./results",
-                 checkpoint_best_model=True,
-                 logger=LoggerPrinter,
-                 writer=None):
-        
-        self.model = model
-        self.name = name
-        self.criterion = criterion
-        self.optimizer = optimizer
-        self.epochs = epochs
-        self.data_loader = data_loader
-        self.val_data_loader = val_data_loader
-        self.val_steps = val_steps
-        self.lr_scheduler = lr_scheduler
-        self.device = device
-        self.use_amp = use_amp
-        self.scaler = scaler
-        # self.logging_steps = logging_steps
-        self.output_dir = output_dir
-        self.checkpoint_best_model = checkpoint_best_model
-        self.logger = logger
-        self.writer = writer
-
-        if self.device is None:
-            self.device = get_device()
-
-        self.model.to(self.device)
-
-
-
-    def train_epoch(self, epoch):
-        self.model.train()
-
-        total_loss = 0.0  # float("inf")
-        processed_batches = 0
-
-        for batch_idx, (x_batches, y_batches) in tqdm(enumerate(self.data_loader), desc=f"Training, Epoch {epoch}"):
-            # move data to device
-            x_batches = x_batches.to(self.device)
-            y_batches = y_batches.to(self.device)
-
-            if self.use_amp and self.device.type == "cuda":
-                with torch.cuda.amp.autocast():
-                    predictions = self.model(x_batches)
-                    loss = self.criterion(predictions, y_batches)
-            else:
-                predictions = self.model(x_batches)
-                loss = self.criterion(predictions, y_batches)
-
-            self.optimizer.zero_grad(set_to_none=True)
-
-            if self.scaler is not None:
-                self.scaler.scale(loss).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                loss.backward()
-                self.optimizer.step()
-
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()  # some scheduler want per epoch!!
-
-            if self.writer is not None:
-                self.writer.add_scalar("Loss/train", loss.item(), processed_batches)
-
-            total_loss += loss.item()
-            processed_batches += 1
-
-        # mean loss
-        return total_loss / max(processed_batches, 1)
-    
-
-
-    def evaluate(self):
-        if self.val_data_loader is None:
-            return 0.0  # float("inf")
-        
-        self.model.eval()
-        total_loss = 0.0
-        # other metrices maybe ...
-        processed_batches = 0
-
-        # or: no_grad -> but inference mode is quicker
-        with torch.inference_mode():
-            for batch_idx, (x_batches, y_batches) in tqdm(enumerate(self.val_data_loader), desc=f"Validation"):
-                x_batches = x_batches.to(self.device)
-                y_batches = y_batches.to(self.device)
-
-                predictions = self.model(x_batches)
-                loss = self.criterion(predictions, y_batches)
-
-                total_loss += loss.item()
-                processed_batches += 1
-
-        return total_loss / max(processed_batches, 1)
-
-
-
-    def train(self):
-        self.best_val_loss = float("inf")
-
-        for epoch in tqdm(range(self.epochs), desc="Epoch", total=self.epochs):
-            loss = self.train_epoch(epoch)
-
-            if epoch % self.val_steps == 0:
-                val_loss = self.evaluate()
-
-                if self.checkpoint_best_model and val_loss < self.best_val_loss:
-                    self.best_val_loss = val_loss
-                    save_model(self.model, self.output_dir, name="best_"+self.name)
-
-            # experiment tracking
-            # ...
-
-            # checkpoint saving
-            if not self.checkpoint_best_model and epoch % 5 == 0:
-                save_model(self.model, self.output_dir, name=self.name)
-
-        self.logger.info("Congratulations the training is finish.")
-        # add more loggings ...
-
-
-
-# # -----------------------
-# # > Main Train Pipeline <
-# # -----------------------
-# def train_pipeline(config):
-#     # extract config settings
-#     checkpoint_dir = os.path.join(config.train.checkpoint_dir, config.model.name)
-#     batch_size = config.train.batch_size
-#     learning_rate = config.train.learning_rate
-#     use_amp = config.train.use_amp
-#     scaler_name = config.train.scaler
-#     criterion_name = config.train.criterion
-#     optimizer_name = config.train.optimizer
-#     best_model = config.train.checkpoint_best_model
-#     val_steps = config.train.val_steps
-#     lr_scheduler = config.train.lr_scheduler
-
-#     model_name = config.model.name
-
-#     # load model
-#     model = get_model(config.model.name)
-#     # model = MLP()
-#     # model.load_state_dict(torch.load(""))
-
-#     # load data
-#     data_loader = get_data_loader(config.data.name, config.data.path, 
-#                                     testdata=False, 
-#                                     transform=get_basic_transform(num_points=-1), # get_basic_transform(num_points=-1),
-#                                     batch_size=batch_size, shuffle=True, num_workers=1,
-#                                     preprocessed=True,
-#                                     return_train_format=True)
-#     dataset = data_loader.dataset
-
-#     train_size = int(0.8*len(dataset))
-#     val_size = len(dataset) - train_size
-#     generator = torch.Generator().manual_seed(42)
-
-#     train_dataset, val_dataset = random_split(dataset, 
-#                                               [train_size, val_size], 
-#                                               generator=generator)
-
-#     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-#     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-#     # Experiment Tracking
-#     writer = SummaryWriter()
-
-#     optimizer = get_optimizer(optimizer_name, model, learning_rate)
-
-#     # start training
-#     trainer = Trainer(
-#         model=model,
-#         name=model_name,
-#         criterion=get_criterion(criterion_name),
-#         optimizer=optimizer,
-#         epochs=config.train.epochs,
-#         data_loader=train_loader,
-#         val_data_loader=val_loader,
-#         val_steps=val_steps,
-#         lr_scheduler=get_scheduler(lr_scheduler, optimizer),
-#         device=get_device(config.device),
-#         use_amp=use_amp,
-#         scaler=get_scaler(scaler_name),
-#         output_dir=checkpoint_dir,
-#         checkpoint_best_model=best_model,
-#         writer=writer
-#     )
-
-#     trainer.train()
-
-#     writer.close()
-
-
-
 # ------------------------------
 # > HuggingFace Train Pipeline <
 # ------------------------------
-# FIXME: Checkpoint loading making more generell or all like with segformer??
-# def get_model_and_preprocessor(model_name, check_point_path=None):
-#     if model_name == "segformer":
-#         if check_point_path is not None:
-#             model = SegformerForSemanticSegmentation.from_pretrained(
-#                 check_point_path,  # just path to the folder!
-#                 num_labels=2,
-#                 ignore_mismatched_sizes=True
-#             )
-#             # or
-#             # model = SegformerForSemanticSegmentation.from_pretrained(model_name)
-#             # state_dict = torch.load("pytorch_model.bin", map_location="cpu")
-#             # model.load_state_dict(state_dict)
-#         else:
-#             model = SegformerForSemanticSegmentation.from_pretrained(
-#                 "nvidia/segformer-b5-finetuned-cityscapes-1024-1024",
-#                 num_labels=2,
-#                 ignore_mismatched_sizes=True
-#             )
 
-#         model.config.ignore_index = 255  # or -1?
-#         model.config.num_labels = 2
-#         # model.config.id2label = {...}
-#         # model.config.label2id = {...}
+class UnetConfig(PretrainedConfig):
+    model_type = "unet"
+    def __init__(self, num_labels=2, **kwargs):
+        super().__init__(**kwargs)
+        self.num_labels = num_labels
 
-#         preprocessor = SegformerImageProcessor.from_pretrained(
-#             "nvidia/segformer-b5-finetuned-cityscapes-1024-1024",
-#             do_resize=True,
-#             size={"height": 512, "width": 512},   # match your tile size
-#             do_rescale=False,    # ← important: your data is already float
-#             do_normalize=True,
-#             image_mean=[0.485, 0.456, 0.406],     # ImageNet stats, or use
-#             image_std=[0.229, 0.224, 0.225],      # your own dataset stats
-#         )
-#     elif model_name == "mask2former":
-#         model = Mask2FormerForUniversalSegmentation.from_pretrained(
-#             "facebook/mask2former-swin-large-cityscapes-semantic",
-#             num_labels=2,
-#             ignore_mismatched_sizes=True
-#         )
-#         model.config.ignore_index = 255
-#         model.config.num_labels = 2
-
-#         preprocessor = AutoImageProcessor.from_pretrained(
-#             "facebook/mask2former-swin-large-cityscapes-semantic",
-#             do_resize=True,
-#             size={"shortest_edge": 512},
-#             do_rescale=False,    # ← same: already float tensor
-#             do_normalize=True,
-#             image_mean=[0.485, 0.456, 0.406],
-#             image_std=[0.229, 0.224, 0.225],
-#         )
-#     elif model_name == "oneformer":
-#         model = OneFormerForUniversalSegmentation.from_pretrained(
-#             "shi-labs/oneformer_cityscapes_swin-l_160k",
-#             num_labels=2,
-#             ignore_mismatched_sizes=True
-#         )
-#         model.config.ignore_index = 255
-#         model.config.num_labels = 2
-
-#         preprocessor = AutoImageProcessor.from_pretrained(
-#             "shi-labs/oneformer_cityscapes_swin-l_160k",
-#             do_resize=True,
-#             size={"shortest_edge": 512},
-#             do_rescale=False,
-#             do_normalize=True,
-#             image_mean=[0.485, 0.456, 0.406],
-#             image_std=[0.229, 0.224, 0.225],
-#         )
-#     elif model_name == "deeplabv3":
-#         model = DeepLabV3ForSemanticSegmentation.from_pretrained(
-#             "microsoft/deeplabv3-resnet-101",
-#             num_labels=2,
-#             ignore_mismatched_sizes=True
-#         )
-#         model.config.ignore_index = 255
-#         model.config.num_labels = 2
+class UnetForSemanticSegmentation(PreTrainedModel):
+    config_class = UnetConfig
     
-#         preprocessor = AutoImageProcessor.from_pretrained(
-#             "microsoft/deeplabv3-resnet-101",  # or resnet-50
-#             do_resize=True,
-#             size={"height": 512, "width": 512},
-#             do_rescale=False,      # already float32
-#             do_normalize=True,
-#             image_mean=[0.485, 0.456, 0.406],
-#             image_std=[0.229, 0.224, 0.225],
-#         )
-#     else:
-#         raise ValueError(f"Does not support model '{model_name}'")
-    
-#     return model, preprocessor
+    def __init__(self, config):
+        super().__init__(config)
+        # using segmentation_models_pytorch
+        import segmentation_models_pytorch as smp
+        self.unet = smp.Unet(
+            encoder_name="resnet34",  # "resnet50", "efficientnet-b3" or "efficientnet-b4", "mit_b2" or "mit_b3"
+            encoder_weights="imagenet", 
+            classes=config.num_labels
+        )
+        
+    def forward(self, pixel_values, labels=None, **kwargs):
+        logits = self.unet(pixel_values)
+        
+        loss = None
+        if labels is not None:
+            # handle wrong dimensionality
+            if labels.dim() == 4 and labels.shape[1] == 1:
+                labels = labels.squeeze(1)
+            
+            print("pixel_values:", pixel_values.shape)
+            print("logits:", logits.shape)
+            print("labels:", labels.shape)
+
+            loss_fct = nn.CrossEntropyLoss(ignore_index=255)
+            loss = loss_fct(logits, labels.long())
+            
+        # HF Trainer wants an object with 'loss' and 'logits' attributes
+        from transformers.modeling_outputs import SemanticSegmenterOutput
+        return SemanticSegmenterOutput(loss=loss, logits=logits)
+
+
 # Model registry: name -> (model_class, default_checkpoint)
 MODEL_REGISTRY = {
     "segformer":   (SegformerForSemanticSegmentation,        "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"),
     "mask2former": (Mask2FormerForUniversalSegmentation,     "facebook/mask2former-swin-large-cityscapes-semantic"),
     "oneformer":   (OneFormerForUniversalSegmentation,       "shi-labs/oneformer_cityscapes_swin-l_160k"),
+    "unet":        (UnetForSemanticSegmentation,             "resnet34"),
     # "deeplabv3":   (DeepLabV3ForSemanticSegmentation,        "microsoft/deeplabv3-resnet-101"),
     # -> model = deeplabv3_resnet50(weights=DeepLabV3_ResNet50_Weights.DEFAULT)
 }
 
 # processor size config per model
 PROCESSOR_SIZE = {
-    "segformer":   {"height": 512, "width": 512},
-    "mask2former": {"shortest_edge": 512},
-    "oneformer":   {"shortest_edge": 512},
-    # "deeplabv3":   {"height": 512, "width": 512},
+    "segformer":   {"height": 500, "width": 500},
+    "mask2former": {"height": 500, "width": 500},  # {"shortest_edge": 500},
+    "oneformer":   {"height": 500, "width": 500},  # {"shortest_edge": 500},
+    "unet":        {"height": 500, "width": 500},
+    # "deeplabv3":   {"height": 500, "width": 500},
 }
 
 
@@ -524,17 +327,25 @@ def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
 
     # MODEL LOADING
     # ------------
-    model = model_class.from_pretrained(
-        checkpoint,
-        num_labels=num_labels,
-        ignore_mismatched_sizes=True
-    )
-    model.config.ignore_index = 255
-    model.config.num_labels = num_labels
+    if model_name == "unet":
+        # use wrapper
+        config = UnetConfig(num_labels=num_labels)
+        model = model_class(config)
+    else:
+        model = model_class.from_pretrained(
+            checkpoint,
+            num_labels=num_labels,
+            ignore_mismatched_sizes=True
+        )
+        model.config.ignore_index = 255
+        model.config.num_labels = num_labels
 
     # PROCESSOR
     # ------------
-    processor_source = default_checkpoint if check_point_path else checkpoint
+    if model_name == "unet":
+        processor_source = "nvidia/mit-b0"
+    else:
+        processor_source = default_checkpoint if check_point_path else checkpoint
     processor = AutoImageProcessor.from_pretrained(
         processor_source,
         do_resize=True,
@@ -553,8 +364,9 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
     model_name = model_name.lower()
 
     is_numpy_input = isinstance(outputs, np.ndarray)
+    is_torch_input = isinstance(outputs, torch.Tensor)
 
-    if model_name in ["segformer", "deeplabv3"]:
+    if model_name in ["segformer", "deeplabv3", "unet"]:
         if not is_numpy_input and hasattr(outputs, "logits"):
             logits = outputs.logits
         else:
@@ -571,58 +383,126 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
         else:
             logits_tensor = logits.detach().cpu()
 
-        preds = logits_tensor.argmax(dim=1)
+        
 
         # upscaling because: SegFormer logits are 1/4 of input size
-        if target_sizes is not None:
-            size = tuple(int(x) for x in target_sizes[0])
-    
-            preds = preds.unsqueeze(1).float()  # Interpolate braucht 4D: (B, 1, H, W)
-            preds = F.interpolate(preds, size=size, mode="nearest")
-            preds = preds.squeeze(1).long()
+        if model_name in ["segformer", "unet"] and hasattr(outputs, "logits") and processor is not None:
+            preds_list = processor.post_process_semantic_segmentation(outputs, target_sizes=target_sizes)
+            preds = torch.stack(preds_list)
+        else:
+            preds = logits_tensor.argmax(dim=1)  # (B, W, H)
+
+            if target_sizes is not None:
+                size = tuple(int(x) for x in target_sizes[0])
+        
+                preds = preds.unsqueeze(1).float()  # Interpolate braucht 4D: (B, 1, H, W)
+                preds = F.interpolate(preds, size=size, mode="nearest")
+                preds = preds.squeeze(1).long()
 
     elif model_name in ["mask2former", "oneformer"]:
-        if is_numpy_input:
-            logits_tensor = torch.from_numpy(outputs)
+
+        print(f"\noutputs Len: {len(outputs)} Dtype: {type(outputs)}\nSub-Element type: {type(outputs[0])}\nShapes:")
+        for cur_idx, cur_elem in enumerate(outputs):
+            if hasattr(cur_elem, "shape"):
+                shape_str = f"{cur_elem.shape}"
+            else:
+                shape_str = "none"
+            print(f"  - {cur_idx:02}:\n      dtype={type(cur_elem)}\n      shape={shape_str}")
+        # raise ValueError("DEBUGGING STOP")
+
+        if is_numpy_input or is_torch_input:
+            if is_numpy_input:
+                logits_tensor = torch.from_numpy(outputs)
+            else:
+                logits_tensor = outputs
             preds = logits_tensor.argmax(dim=1)
-            
+        
             if target_sizes is not None:
                 size = tuple(int(x) for x in target_sizes[0])
                 preds = preds.unsqueeze(1).float()
                 preds = F.interpolate(preds, size=size, mode="nearest")
                 preds = preds.squeeze(1).long()
+        elif isinstance(outputs, tuple):
+            # debugging
+            # print(type(outputs), len(outputs) if isinstance(outputs, tuple) else outputs.shape)
+            # for i, o in enumerate(outputs):
+            #     print(f"  outputs[{i}]: shape={o.shape}, dtype={o.dtype}")
+
+            # raise ValueError("DEBUGING STOP")
+            # <class 'tuple'> 52/3 [00:01<00:00,  1.18it/s]
+            # outputs[0]: shape=(22, 100, 3), dtype=float32
+            # outputs[1]: shape=(22, 100, 128, 128), dtype=float32
+            # outputs[2]: shape=(22, 1536, 16, 16), dtype=float32
+            # outputs[3]: shape=(22, 256, 128, 128), dtype=float32
+            # outputs[4]: shape=(22, 100, 256), dtype=float32
+
+            from transformers.models.mask2former.modeling_mask2former import Mask2FormerForUniversalSegmentationOutput
+            outputs_obj = Mask2FormerForUniversalSegmentationOutput(
+                class_queries_logits=torch.from_numpy(outputs[0]),
+                masks_queries_logits=torch.from_numpy(outputs[1]),
+            )
+
+            # Post-processing liefert eine Liste von PyTorch-Tensoren
+            preds_list = processor.post_process_semantic_segmentation(
+                outputs_obj,
+                target_sizes=target_sizes
+            )
+            preds = torch.stack(preds_list)
         else:
             if processor is None:
-                raise ValueError(f"Processor muss für {model_name} übergeben werden!")
-            
-            # Post-processing liefert eine Liste von PyTorch-Tensoren
+                raise ValueError(f"Processor muss für {model_name} übergeben werden! (maybe activate code below)")
+
+            if target_sizes is None or len(target_sizes) != outputs.class_queries_logits.shape[0]:
+                current_batch_size = outputs.class_queries_logits.shape[0]
+                target_sizes = [(500, 500)] * current_batch_size
+
             preds_list = processor.post_process_semantic_segmentation(
                 outputs,
                 target_sizes=target_sizes
             )
             preds = torch.stack(preds_list)
     else:
-        raise ValueError()
+        raise ValueError(f"Unsupported model name: {model_name}")
 
+    # if not right size
+    # pred_mask_resized = cv2.resize(pred_mask, (500, 500), interpolation=cv2.INTER_NEAREST)
 
-    return preds.numpy() if is_numpy_input else preds
+    # preds = torch.argmax(outputs.logits, dim=1)
+    # preds = preds.unsqueeze(1).float() 
+    # preds_upsampled = F.interpolate(preds, size=(500, 500), mode="nearest").long()
+    # pred_mask = preds_upsampled.squeeze().cpu().numpy()
+
+    return preds
+    # return preds if is_numpy_input else preds.numpy()
 
 
 def train_hf_pipeline(config):
     print("GPU available:", torch.cuda.is_available())
-
+    
     if not torch.cuda.is_available():
         raise RuntimeError("Does not find GPU accelerator!")
 
-    batch_size = 12
+    batch_size = config.train.batch_size
 
     model_name = config.model.name.lower()
+
+    # FIXME
+    # for cur_file in os.listdir("./output/"):
+    #     cur_file_path = os.path.join("./output/", cur_file)
+    #     if os.path.isdir(cur_file_path):
+    try:
+        shutil.rmtree("./output/plots")
+        shutil.rmtree("./output/checkpoints")
+    except Exceptio as e:
+        print(e)
+
     checkpoint_path = config.model.check_point_path
     if checkpoint_path == "None":
         checkpoint_path = None
     model, processor = get_model_and_processor(model_name, checkpoint_path)
 
     # Load Data
+    pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
     train_dataset = get_data_loader(config.data.name, 
                                    config.data.path, 
                                    type="train", 
@@ -639,8 +519,9 @@ def train_hf_pipeline(config):
                                has_labels=True, 
                                image_training=True, 
                                preprocessor=processor,
-                               augment=True)
-    train_dataset.manhole_filter(required_manhole_points=50)
+                               augment=True,
+                               pass_label_in_preprocessor=pass_label_in_preprocessor)
+    train_dataset.manhole_filter(required_manhole_points=50, amount_non_manhole_samples=10)
     
     val_dataset = get_data_loader(config.data.name, 
                                    config.data.path, 
@@ -658,7 +539,8 @@ def train_hf_pipeline(config):
                              has_labels=True, 
                              image_training=True, 
                              preprocessor=processor,
-                             augment=False)
+                             augment=False,
+                             pass_label_in_preprocessor=pass_label_in_preprocessor)
     val_dataset.manhole_filter(required_manhole_points=50)
     # config.data.preprocessed
 
@@ -670,33 +552,213 @@ def train_hf_pipeline(config):
         config=config,
         num_samples=5,
         pre_name="finetuning",
+        batch_size=batch_size
     )
 
     # Helper Functions
-    def collate_fn(batch):
+    def collate_fn(batch, model_name):
         pixel_values = torch.stack([x["pixel_values"] for x in batch])
-        labels = torch.stack([x["labels"] for x in batch])
-        return {"pixel_values": pixel_values, "labels": labels}
+        
+        if model_name in ["mask2former", "oneformer"]:
+            return {
+                "pixel_values": pixel_values,
+                "mask_labels": [x["mask_labels"] for x in batch],
+                "class_labels": [x["class_labels"] for x in batch]
+            }
+        else:
+            labels = torch.stack([x["labels"] for x in batch])
+            # print(f"\n\n=== DEBUGGING PRINT === (collate_fn)\nLabels Shape: {labels.shape}")
+            return {
+                "pixel_values": pixel_values, 
+                "labels": labels
+            }
 
-    def compute_metrics_fn(eval_pred, model_name, processor):
+    def compute_metrics_fn(eval_pred, model_name, processor, batch_size):
         if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
+            # raise ValueError("This path is unexpected might need to revert? or use model name to handle!")
             outputs = eval_pred.predictions
             labels = eval_pred.label_ids
 
-            target_sizes = [label.shape[-2:] for label in labels]
+            # print(f"\n\n=== DEBUGGING PRINT === (compute_metrics_fn)\nLabels Shape: {labels.shape}")
+            # FIXME labels already have 500, 500
+
+            # print("Output/Preds:", type(outputs), len(outputs) if isinstance(outputs, tuple) else outputs.shape)
+            # for i, o in enumerate(outputs):
+            #     print(f"  outputs[{i}]: shape={o.shape}, dtype={o.dtype}")
+
+
+            # print(f"Labels:\n   type: {type(labels)}\n    len: {len(labels)}")
+            # print(f"Label [0]:\n   type: {type(labels[0])}\n    len: {len(labels[0])}")
+            # [print(f"    - Output {idx}: {cur_label.shape}, dtype={cur_label.dtype}") for idx, cur_label in enumerate(labels[0])]
+            # print(f"Label [1]:\n   type: {type(labels[1])}\n    len: {len(labels[1])}")
+            # [print(f"    - Output {idx}: {cur_label.shape}, dtype={cur_label.dtype})") for idx, cur_label in enumerate(labels[1])]
+            # print(f"{labels}")
+            # print(labels[1])
+
+            # print(f"Pred:\n   type: {type(outputs)}\n    len: {len(outputs)}")
+            # print(f"Label [0]:\n   type: {type(outputs[0])}\n    len: {len(outputs[0])}")
+            # [print(f"    - Output {idx}: {cur_out.shape}, dtype={cur_out.dtype}") for idx, cur_out in enumerate(outputs[0])]
+            # print(f"Label [1]:\n   type: {type(outputs[1])}\n    len: {len(outputs[1])}")
+            # [print(f"    - Output {idx}: {cur_out.shape}, dtype={cur_out.dtype})") for idx, cur_out in enumerate(outputs[1])]
+
+                # Labels:
+                # type: <class 'tuple'>
+                #     len: 2
+                # Label [0]:
+                # type: <class 'list'>
+                #     len: 8
+                #     - Output 0: (7, 512, 512), dtype=float32
+                #     - Output 1: (7, 512, 512), dtype=float32
+                #     - Output 2: (7, 512, 512), dtype=float32
+                #     - Output 3: (7, 512, 512), dtype=float32
+                #     - Output 4: (7, 512, 512), dtype=float32
+                #     - Output 5: (7, 512, 512), dtype=float32
+                #     - Output 6: (6, 512, 512), dtype=float32
+                #     - Output 7: (6, 512, 512), dtype=float32
+                # Label [1]:
+                # type: <class 'list'>
+                #     len: 8
+                #     - Output 0: (7,), dtype=int64)
+                #     - Output 1: (7,), dtype=int64)
+                #     - Output 2: (7,), dtype=int64)
+                #     - Output 3: (7,), dtype=int64)
+                #     - Output 4: (7,), dtype=int64)
+                #     - Output 5: (7,), dtype=int64)
+                #     - Output 6: (6,), dtype=int64)
+                #     - Output 7: (6,), dtype=int64)
+                # Preds:
+                # type: <class 'tuple'>
+                #     len: 2
+                # Pred [0]:
+                # type: <class 'numpy.ndarray'>
+                #     len: 32
+                #     - Output 0: (100, 3), dtype=float32
+                #     - Output 1: (100, 3), dtype=float32
+                #     - Output 2: (100, 3), dtype=float32
+                #     - Output 3: (100, 3), dtype=float32
+                #     - Output 4: (100, 3), dtype=float32
+                #     - Output 5: (100, 3), dtype=float32
+                #     - Output 6: (100, 3), dtype=float32
+                #     - Output 7: (100, 3), dtype=float32
+                #     - Output 8: (100, 3), dtype=float32
+                #     - Output 9: (100, 3), dtype=float32
+                #     - Output 10: (100, 3), dtype=float32
+                #     - Output 11: (100, 3), dtype=float32
+                #     - Output 12: (100, 3), dtype=float32
+                #     - Output 13: (100, 3), dtype=float32
+                #     - Output 14: (100, 3), dtype=float32
+                #     - Output 15: (100, 3), dtype=float32
+                #     - Output 16: (100, 3), dtype=float32
+                #     - Output 17: (100, 3), dtype=float32
+                #     - Output 18: (100, 3), dtype=float32
+                #     - Output 19: (100, 3), dtype=float32
+                #     - Output 20: (100, 3), dtype=float32
+                #     - Output 21: (100, 3), dtype=float32
+                #     - Output 22: (100, 3), dtype=float32
+                #     - Output 23: (100, 3), dtype=float32
+                #     - Output 24: (100, 3), dtype=float32
+                #     - Output 25: (100, 3), dtype=float32
+                #     - Output 26: (100, 3), dtype=float32
+                #     - Output 27: (100, 3), dtype=float32
+                #     - Output 28: (100, 3), dtype=float32
+                #     - Output 29: (100, 3), dtype=float32
+                #     - Output 30: (100, 3), dtype=float32
+                #     - Output 31: (100, 3), dtype=float32
+                # Pred [1]:
+                # type: <class 'numpy.ndarray'>
+                #     len: 32
+                #     - Output 0: (100, 128, 128), dtype=float32)
+                #     - Output 1: (100, 128, 128), dtype=float32)
+                #     - Output 2: (100, 128, 128), dtype=float32)
+                #     - Output 3: (100, 128, 128), dtype=float32)
+                #     - Output 4: (100, 128, 128), dtype=float32)
+                #     - Output 5: (100, 128, 128), dtype=float32)
+                #     - Output 6: (100, 128, 128), dtype=float32)
+                #     - Output 7: (100, 128, 128), dtype=float32)
+                #     - Output 8: (100, 128, 128), dtype=float32)
+                #     - Output 9: (100, 128, 128), dtype=float32)
+                #     - Output 10: (100, 128, 128), dtype=float32)
+                #     - Output 11: (100, 128, 128), dtype=float32)
+                #     - Output 12: (100, 128, 128), dtype=float32)
+                #     - Output 13: (100, 128, 128), dtype=float32)
+                #     - Output 14: (100, 128, 128), dtype=float32)
+                #     - Output 15: (100, 128, 128), dtype=float32)
+                #     - Output 16: (100, 128, 128), dtype=float32)
+                #     - Output 17: (100, 128, 128), dtype=float32)
+                #     - Output 18: (100, 128, 128), dtype=float32)
+                #     - Output 19: (100, 128, 128), dtype=float32)
+                #     - Output 20: (100, 128, 128), dtype=float32)
+                #     - Output 21: (100, 128, 128), dtype=float32)
+                #     - Output 22: (100, 128, 128), dtype=float32)
+                #     - Output 23: (100, 128, 128), dtype=float32)
+                #     - Output 24: (100, 128, 128), dtype=float32)
+                #     - Output 25: (100, 128, 128), dtype=float32)
+                #     - Output 26: (100, 128, 128), dtype=float32)
+                #     - Output 27: (100, 128, 128), dtype=float32)
+                #     - Output 28: (100, 128, 128), dtype=float32)
+                #     - Output 29: (100, 128, 128), dtype=float32)
+                #     - Output 30: (100, 128, 128), dtype=float32)
+                #     - Output 31: (100, 128, 128), dtype=float32)
+
+            if model_name in ["segformer", "unet"]:
+                # target_sizes = [labels.shape[-2:]] * labels.shape[0]
+                target_sizes = [(500, 500)] * labels.shape[0]  # batch_size  # [label.shape[-2:] for label in labels]
+
+                preds = get_segmentation_prediction(
+                    outputs,
+                    model_name=model_name,
+                    processor=processor,
+                    target_sizes=target_sizes
+                )
+            else:
+                # raise ValueError("DEBUGGING STOP: did not expect to go here...")
+                # unpack labels and get true number of pictures
+                mask_labels_list = labels[0]
+                class_labels_list = labels[1]
+                num_real_images = len(mask_labels_list)
+
+                aggregated_batch_size = outputs[0].shape[0] if isinstance(outputs, tuple) else outputs.shape[0]
+                target_sizes = [(500, 500)] * aggregated_batch_size
+
+                # slicing preds to match labels
+                # if isinstance(outputs, (list, tuple)):
+                #     cls_logits = outputs[0][:num_images]
+                #     mask_logits = outputs[1][:num_images]
+                #     outputs = (cls_logits, mask_logits)
+                # else:
+                #     outputs = outputs[:num_images]
+
+                preds = get_segmentation_prediction(
+                    outputs,
+                    model_name=model_name,
+                    processor=processor,
+                    target_sizes=target_sizes
+                )
+
+                # drop padded elements, right??
+                preds = preds[:num_real_images]
+
+                semantic_labels = []
+                for masks, classes in zip(mask_labels_list, class_labels_list):
+                    H, W = masks.shape[1], masks.shape[2]
+                    sem = np.zeros((H, W), dtype=np.int64)
+                    for mask, cls in zip(masks, classes):
+                        sem[mask > 0.5] = cls
+                    semantic_labels.append(sem)
+                labels = np.stack(semantic_labels)
+
         else:
             outputs, labels = eval_pred
 
-            target_sizes = None
+            # target_sizes = None
+            target_sizes = [(500, 500)] * batch_size
 
-
-
-        preds = get_segmentation_prediction(
-            outputs,
-            model_name=model_name,
-            processor=processor,
-            target_sizes=target_sizes
-        )
+            preds = get_segmentation_prediction(
+                outputs,
+                model_name=model_name,
+                processor=processor,
+                target_sizes=target_sizes
+            )
 
         return compute_metrics(preds=preds, labels=labels)
 
@@ -710,7 +772,7 @@ def train_hf_pipeline(config):
         warmup_steps=200,             # 0.1
         fp16=False,                    # faster training
         gradient_accumulation_steps=4,
-        num_train_epochs=200,   
+        num_train_epochs=400,   
         dataloader_num_workers=4,
         eval_strategy="steps",
         eval_steps=int( len(train_dataset)/batch_size ),
@@ -743,13 +805,16 @@ def train_hf_pipeline(config):
         eval_dataset=val_dataset,
         # train_dataset=train_dataset.select(range(2)) if hasattr(train_dataset, 'select') else train_dataset,
         # eval_dataset=val_dataset.select(range(2)) if hasattr(val_dataset, 'select') else val_dataset,
-        data_collator=collate_fn,
+        data_collator=partial(collate_fn, model_name=model_name),
         compute_metrics=partial(
             compute_metrics_fn,
             model_name=model_name,
-            processor=processor
+            processor=processor,
+            batch_size=batch_size
         ),
-        callbacks=[plotting_callback]
+        callbacks=[plotting_callback],
+        # FIXME -> really need for mask2former?
+        preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,  # only keep class + mask logits
     )
 
     trainer.train()
@@ -761,74 +826,75 @@ def train_hf_pipeline(config):
     # robustness finetuning
     # danger: Catastrophic Forgetting
 
-    print("Start post training.")
+    # print("Start post training.")
 
-    train_dataset = BEVDataset(path=all_train_paths, 
-                               file_paths=[], 
-                               has_labels=True, 
-                               image_training=True, 
-                               preprocessor=processor,
-                               augment=True)
-    val_dataset = BEVDataset(path=all_val_paths, 
-                             file_paths=[], 
-                             has_labels=True, 
-                             image_training=True, 
-                             preprocessor=processor,
-                             augment=False)
+    # train_dataset = BEVDataset(path=all_train_paths, 
+    #                            file_paths=[], 
+    #                            has_labels=True, 
+    #                            image_training=True, 
+    #                            preprocessor=processor,
+    #                            augment=True)
+    # val_dataset = BEVDataset(path=all_val_paths, 
+    #                          file_paths=[], 
+    #                          has_labels=True, 
+    #                          image_training=True, 
+    #                          preprocessor=processor,
+    #                          augment=False)
 
-    plotting_callback = ImagePlottingCallback(
-        val_dataset=val_dataset,
-        model_name=model_name,
-        processor=processor,
-        config=config,
-        num_samples=5,
-        pre_name="post_training", 
-        clear_path=True,
-        save_post_dir_name="post_training"
-    )
+    # plotting_callback = ImagePlottingCallback(
+    #     val_dataset=val_dataset,
+    #     model_name=model_name,
+    #     processor=processor,
+    #     config=config,
+    #     num_samples=5,
+    #     pre_name="post_training", 
+    #     clear_path=True,
+    #     save_post_dir_name="post_training",
+    #     batch_size=batch_size
+    # )
 
-    training_args = HFTrainingArguments(
-        output_dir=f"./output/checkpoints/{config.model.name}_post_training",
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
-        learning_rate=5e-6,           # 6e-5     
-        lr_scheduler_type="cosine",   # cosine
-        warmup_steps=0,             # 0.1
-        fp16=False,                    # faster training
-        gradient_accumulation_steps=4,
-        num_train_epochs=100,   
-        dataloader_num_workers=4,
-        eval_strategy="steps",
-        eval_steps=int( len(train_dataset)/batch_size ) * 2,
-        save_strategy="steps",  # or best?
-        save_steps=int( len(train_dataset)/batch_size ) * 2,
-        save_total_limit=2,
-        logging_steps=10,
-        remove_unused_columns=False,   # important for SAM
-        push_to_hub=False,
-        report_to=["tensorboard", "mlflow"],  # "none"
-        use_cpu=False
-    )
+    # training_args = HFTrainingArguments(
+    #     output_dir=f"./output/checkpoints/{config.model.name}_post_training",
+    #     per_device_train_batch_size=batch_size,
+    #     per_device_eval_batch_size=batch_size,
+    #     learning_rate=5e-6,           # 6e-5     
+    #     lr_scheduler_type="cosine",   # cosine
+    #     warmup_steps=0,             # 0.1
+    #     fp16=False,                    # faster training
+    #     gradient_accumulation_steps=4,
+    #     num_train_epochs=100,   
+    #     dataloader_num_workers=4,
+    #     eval_strategy="steps",
+    #     eval_steps=int( len(train_dataset)/batch_size ) * 2,
+    #     save_strategy="steps",  # or best?
+    #     save_steps=int( len(train_dataset)/batch_size ) * 2,
+    #     save_total_limit=2,
+    #     logging_steps=10,
+    #     remove_unused_columns=False,   # important for SAM
+    #     push_to_hub=False,
+    #     report_to=["tensorboard", "mlflow"],  # "none"
+    #     use_cpu=False
+    # )
 
-    trainer = HFTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,  # load bev/meta files and extract in right format -> use BEV Dataset
-        eval_dataset=val_dataset,
-        # train_dataset=train_dataset.select(range(2)) if hasattr(train_dataset, 'select') else train_dataset,
-        # eval_dataset=val_dataset.select(range(2)) if hasattr(val_dataset, 'select') else val_dataset,
-        data_collator=collate_fn,
-        compute_metrics=partial(
-            compute_metrics_fn,
-            model_name=model_name,
-            processor=processor
-        ),
-        callbacks=[plotting_callback]
-    )
+    # trainer = HFTrainer(
+    #     model=model,
+    #     args=training_args,
+    #     train_dataset=train_dataset,  # load bev/meta files and extract in right format -> use BEV Dataset
+    #     eval_dataset=val_dataset,
+    #     # train_dataset=train_dataset.select(range(2)) if hasattr(train_dataset, 'select') else train_dataset,
+    #     # eval_dataset=val_dataset.select(range(2)) if hasattr(val_dataset, 'select') else val_dataset,
+    #     data_collator=collate_fn,
+    #     compute_metrics=partial(
+    #         compute_metrics_fn,
+    #         model_name=model_name,
+    #         processor=processor
+    #     ),
+    #     callbacks=[plotting_callback]
+    # )
 
-    trainer.train()
+    # trainer.train()
 
-    print("Post Training is finish!")
+    # print("Post Training is finish!")
 
 
 

@@ -2,7 +2,7 @@ mode: train    # train, test, inference, tryout, preprocessing, eval_extraction
 
 # FIXME -> currently most of the trai args are not connected yet
 train:
-  batch_size: 32
+  batch_size: 8 # 12
   epochs: 10
   learning_rate: 0.001
   use_amp: False
@@ -26,15 +26,15 @@ eval_extraction:
     data_paths: ["C:/Users/tippolito/Data/whu3d-dataset-wo-test-label", "C:/Users/tippolito/Data/SUD-ROAD"]
     preprocessed: True
     type: "all"
-    save_path: "./output/eval_ground_truths.json"
+    save_path: "./output/eval_ground_truths_mean.json"
+    center_algorithm: "mean"    # "squares", "mean"
 
 inference:
   checkpoint_path: "./output/checkpoint/"
   save_path: "./output/inference/eval_preds.json"
 
-
 model:
-  name: "segformer"
+  name: "segformer"  # "segformer" "mask2former" "unet"
   check_point_path: None
 
 data:

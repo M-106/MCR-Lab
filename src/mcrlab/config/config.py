@@ -73,6 +73,7 @@ class EvalExtractionConfig(BaseModel):
     preprocessed: bool
     type: str
     save_path: str
+    center_algorithm: str
 
 class InferenceConfig(BaseModel):
     checkpoint_path: str

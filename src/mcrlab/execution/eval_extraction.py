@@ -86,7 +86,12 @@ def ground_truth_extraction(config):
 
             for cur_manhole_idx in range(len(points_square)):
                 # cur_points = points_square[cur_manhole_idx]
-                cur_center = center_coordinates_square[cur_manhole_idx]
+                if config.eval_extraction.center_algorithm == "squares":
+                    cur_center = center_coordinates_square[cur_manhole_idx]
+                else:
+                    points_ = points_square[cur_manhole_idx]
+                    cur_center = np.array([np.mean(points_[:, 0]), np.mean(points_[:, 1]), np.mean(points_[:, 2])])
+                
                 # cur_radius = radius_squares[cur_manhole_idx]
                 
                 # save center -> cur_pc_id "pointcloud-id"
