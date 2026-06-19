@@ -22,6 +22,16 @@ def load_config(path):
         return Config(**data)
 
 
+class CustomTrainConfig(BaseModel):
+    batch_size: int
+    epochs: int
+    learning_rate: float
+    criterion: str
+    optimizer: str
+    training_in_2d: bool
+    metrics_aggregator: str
+    experiment_name: str
+
 
 class TrainConfig(BaseModel):
     batch_size: int
@@ -74,6 +84,7 @@ class EvalExtractionConfig(BaseModel):
     type: str
     save_path: str
     center_algorithm: str
+    generate_2d_gt_maps: bool
 
 class InferenceConfig(BaseModel):
     checkpoint_path: str
@@ -81,6 +92,7 @@ class InferenceConfig(BaseModel):
 
 class Config(BaseModel):
     mode: str
+    curstom_train: CustomTrainConfig
     train: TrainConfig
     test: TestConfig
     inference: InferenceConfig

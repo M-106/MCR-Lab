@@ -32,7 +32,11 @@ def main():
 
 
     # do something
-    if config.mode == "train":
+    if config.mode == "custom_train":
+        from mcrlab.execution.custom_train import train
+        train(config)
+
+    elif config.mode == "train":
         from mcrlab.execution.train import train
         train(config)
 
@@ -56,8 +60,12 @@ def main():
         tryout(config)
     
     elif config.mode == "eval_extraction":
-        from mcrlab.execution.eval_extraction import ground_truth_extraction
-        ground_truth_extraction(config)
+        if config.eval_extraction.generate_2d_gt_maps:
+            from mcrlab.execution.eval_extraction import ground_truth_extraction_2d
+            ground_truth_extraction_2d(config)
+        else:
+            from mcrlab.execution.eval_extraction import ground_truth_extraction
+            ground_truth_extraction(config)
         
     else:
         raise ValueError(f"'{config.mode}' is not an available mode for mcrlab.")

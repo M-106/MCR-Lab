@@ -1202,6 +1202,8 @@ class BEVDataset(Dataset):
     def __getitem__(self, idx):
         cur_file_path = self.file_paths[idx]
 
+        pc_id, x_start, y_start = self.extract_grid_identifier(cur_file_path)
+
         tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
 
         if self.has_labels:
@@ -1214,10 +1216,14 @@ class BEVDataset(Dataset):
                 x_np = augmented['image']
                 y_np = augmented['mask']
 
+            # point_exist_mask = np.where(y_np == 255, 0.0, 1.0).astype(np.float32)
+
             x = normalize_bev(x_np.transpose(2, 0, 1))
             x = torch.from_numpy(x).float()
             if self.image_training:
                 x = x[[0,2,3]]     # drop channel
+                # x = x[[1,2,3]]
+                # x[2] = torch.from_numpy(point_exist_mask)
 
                 # raise ValueError(f"DEBUGGING STOP -> Shape x: {x_np.shape} -> Shape y: {y_np.shape}")
 
@@ -1247,7 +1253,9 @@ class BEVDataset(Dataset):
                     # FIXME, OneFromer need: task_inputs=["semantic"]?
                     x = processed["pixel_values"].squeeze(0)  # (C, H, W)
                 else:
-                    x = (x - x.mean()) / (x.std() + 1e-6)
+                    # x = (x - x.mean()) / (x.std() + 1e-6)
+                    # Update me!
+                    x[:2] = (x[:2] - x[:2].mean()) / (x[:2].std() + 1e-6)
                 assert x.ndim == 3
 
             y = torch.from_numpy(y_np).long()
