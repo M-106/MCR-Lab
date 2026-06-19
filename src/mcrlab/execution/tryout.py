@@ -1669,6 +1669,86 @@ def make_split(config, test_size=0.2, val_size=0.1):
     return train_set, val_set, test_set
 
 
+def ground_truth_2d_map_test(config):
+    print("\n --- Center Estimation (with labels) ---")
+
+    if config.data.name == "sud":
+        # label_value = (1, 255) if config.data.preprocessed else 3
+        label_value = 1 if config.data.preprocessed else 3
+    else:
+        # label_value = (1, 255) if config.data.preprocessed else 104002
+        label_value = 1 if config.data.preprocessed else 104002
+
+    print("Loading Data...")
+    train_dataset = get_data_loader(config.data.name, 
+                                   config.data.path, 
+                                   type="train", 
+                                   transform=get_basic_transform(),
+                                   batch_size=1, 
+                                   shuffle=False, 
+                                   num_workers=1,
+                                   preprocessed=True, 
+                                   return_train_format=True,
+                                   return_dataset=True)
+    all_train_paths = train_dataset.point_cloud_paths
+    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
+
+    all_file_paths = train_dataset.file_paths
+
+    path = f"./output/mcr_gt_2d_map_test_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    for idx, batch in enumerate(train_dataset):
+        
+        x = batch["pixel_values"].detach().cpu().permute(1, 2, 0).numpy()
+        # x = np.permute_dims(x, (1, 2, 0))
+        y = batch["labels"].detach().cpu().numpy()
+        # y[y == 255] = 0
+        y = np.ma.masked_where(y == 255, y)
+        # find the created gt map (if there is one)
+        file_name = os.path.split(all_file_paths[idx])[-1]
+        pc_id, x_start, y_start = train_dataset.extract_grid_identifier(file_name)
+
+        gt_path = f"./2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}.npy"
+        if not os.path.exists(gt_path):
+            continue
+
+        gt_2d_map = np.load(gt_path)
+
+        fig, axes = plt.subplots(1, 5, figsize=(8*5, 7))
+
+        axes[0].imshow(x[:, :, 1], cmap="viridis")
+        axes[0].axis("off")
+        axes[0].set_title("Intensity")
+
+        axes[1].imshow(y, cmap="viridis")
+        axes[1].axis("off")
+        axes[1].set_title("Labels")
+
+        axes[2].imshow(gt_2d_map[:, :, 0], cmap="viridis")
+        axes[2].axis("off")
+        axes[2].set_title("GT Binary Map")
+
+        axes[3].imshow(gt_2d_map[:, :, 1], cmap="viridis")
+        axes[3].axis("off")
+        axes[3].set_title("GT Heatmap (sigma 5)")
+
+        axes[4].imshow(gt_2d_map[:, :, 2], cmap="viridis")
+        axes[4].axis("off")
+        axes[4].set_title("GT Heatmap (sigma 60)")
+
+        plt.tight_layout()
+
+        current_name = f"comparison_{config.data.name}_{pc_id}_{x_start}_{y_start}.png"
+        plt.savefig(os.path.join(path, current_name))
+
+        plt.close(fig)
+        
+
+    print("Successfull finished!")
+
 
 # --------------
 # > Playground <
@@ -1687,7 +1767,7 @@ def tryout(config):
     # manhole_density_test(config)
     # manhole_BEV_intensity_test(config)
     # BEV_investigation(config)
-    BEV_Density_investigation(config)
+    # BEV_Density_investigation(config)
     # bev_dataset_stat_investigation(config)
     # manhole_3d_and_2d_intensity_test(config)  
     # circular_manhole_classification_test(config)
@@ -1709,6 +1789,8 @@ def tryout(config):
 
     # clustering_tryout(config)
     # make_split(config)
+
+    ground_truth_2d_map_test(config)
     
 
 

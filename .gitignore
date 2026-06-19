@@ -214,6 +214,7 @@ __marimo__/
 
 cloth_nodes.txt
 
+/2d_gt_patches
 /bev_samples
 /test_bev_images
 /output/*

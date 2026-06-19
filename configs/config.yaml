@@ -1,4 +1,4 @@
-mode: train    # custom_train, train, test, inference, tryout, preprocessing, eval_extraction
+mode: custom_train    # custom_train, train, test, inference, tryout, preprocessing, eval_extraction
 
 
 curstom_train:
@@ -36,7 +36,7 @@ preprocessing:
 
 eval_extraction:
     names: ["whu", "sud"]
-    data_paths: ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"] # ["C:/Users/tippolito/Data/whu3d-dataset-wo-test-label", "C:/Users/tippolito/Data/SUD-ROAD"]
+    data_paths: ["C:/Users/tippolito/Data/whu3d-dataset-wo-test-label", "C:/Users/tippolito/Data/SUD-ROAD"]  # ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"] # 
     preprocessed: True
     type: "all"
     save_path: "./mcr_maps" # "./output/eval_ground_truths_mean.json"
@@ -53,7 +53,7 @@ model:
 
 data:
   name: whu  # paris, whu, sud
-  path: "/data/whu3d-dataset-wo-test-label" # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"
+  path: "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"  # "/data/whu3d-dataset-wo-test-label" # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"
   # "C:/Users/tippolito/Data/SUD-ROAD"
   # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"  
   # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d",

@@ -133,7 +133,7 @@ def generate_gaussian_heatmap(shape, center, sigma=3):
             heatmap /= heatmap.max()
     return heatmap
 
-def ground_truth_extraction_2d_aligned(config):
+def ground_truth_extraction_2d(config):
     print("\n --- Aligned 2D Center Ground Truth Extraction ---")
 
     output_dir = os.path.join(
@@ -215,7 +215,7 @@ def ground_truth_extraction_2d_aligned(config):
             # Init mask (Format HxWxC for the saving/training)
             # Channel 0: Binary, Channel 1: Heatmap
             gt_channels = np.zeros(
-                (patch_height, patch_width, 2), dtype=np.float32
+                (patch_height, patch_width, 3), dtype=np.float32
             )
 
             for cur_manhole_idx in range(len(points_square)):
@@ -250,6 +250,14 @@ def ground_truth_extraction_2d_aligned(config):
                 )
                 gt_channels[:, :, 1] = np.maximum(
                     gt_channels[:, :, 1], heatmap
+                )
+                # Channel 2: generate and accumulate Heatmap (but greater -> 60 for 60 cm average size)
+                # Sigma=3 means at Res=0.01 a radius from round about 3cm around the center
+                heatmap = generate_gaussian_heatmap(
+                    (patch_height, patch_width), (pixel_y, pixel_x), sigma=60
+                )
+                gt_channels[:, :, 2] = np.maximum(
+                    gt_channels[:, :, 2], heatmap
                 )
 
             # save as .npy (Dataset_PCID_X_Y.npy)
