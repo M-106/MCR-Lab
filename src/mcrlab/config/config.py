@@ -70,6 +70,8 @@ class DataConfig(BaseModel):
     path: str
     preprocessed: bool
     type: str
+    heatmap_path: Union[str, None]
+    used_heatmap_channel: int
 
 
 

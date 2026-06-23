@@ -10,7 +10,10 @@ from torch.utils.data import DataLoader, default_collate
 # > Getter <
 # ----------
 def get_data(name:str, path:str, type:str, load_2d:bool,
-             pass_label_in_preprocessor:bool, sample_required_manhole_points=50,
+             pass_label_in_preprocessor:bool, 
+             heatmap_path=None,
+             used_heatmap_channel=2,
+             sample_required_manhole_points=50,
              amount_non_manhole_samples=10,
              return_as_dataloader=True,
              dataloader_batchsize=1,
@@ -44,7 +47,9 @@ def get_data(name:str, path:str, type:str, load_2d:bool,
                                 image_training=True, 
                                 preprocessor=processor,
                                 augment=True,
-                                pass_label_in_preprocessor=pass_label_in_preprocessor)
+                                pass_label_in_preprocessor=pass_label_in_preprocessor,
+                                heatmap_gt_path=heatmap_path,
+                                used_heatmap_channel=used_heatmap_channel)
         dataset.manhole_filter(required_manhole_points=50, amount_non_manhole_samples=10)
     else:
         pass

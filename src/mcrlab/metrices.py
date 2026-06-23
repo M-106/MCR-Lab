@@ -4,7 +4,7 @@
 # import evaluate
 import numpy as np
 from sklearn.metrics import f1_score, precision_score, recall_score, jaccard_score
-from scipy.ndimage import label
+from scipy.ndimage import label, binary_closing, generate_binary_structure
 import torch
 
 # mean_iou_metric = evaluate.load("mean_iou")
@@ -14,18 +14,29 @@ import torch
 # ------------
 # > Metrices <
 # ------------
-def evaluate_object_wise(preds, labels, iou_threshold=0.3):
+def evaluate_object_wise(preds, labels, iou_threshold=0.3, ignore_index=255):
+    valid_mask = (labels != ignore_index)
+    
     # only use/view manholes
-    preds_binary = (preds == 1).astype(np.uint8)
-    labels_binary = (labels == 1).astype(np.uint8)
+    preds_binary = ((preds == 1) & valid_mask).astype(np.uint8)
+    labels_binary = ((labels == 1) & valid_mask).astype(np.uint8)
 
     # get label clusters
-    labeled_preds, num_pred_objects = label(preds_binary)
-    labeled_labels, num_true_objects = label(labels_binary)
+    #    1. morphological closing -> close empty space between points in obj
+    struct = generate_binary_structure(2, 2)  # 8 neighborhood structure
+
+    preds_closed = binary_closing(preds_binary, structure=struct, iterations=4).astype(np.uint8)
+    labels_closed = binary_closing(labels_binary, structure=struct, iterations=4).astype(np.uint8)
+
+    labeled_preds, num_pred_objects = label(preds_closed)
+    labeled_labels, num_true_objects = label(labels_closed)
 
     tp_objects = 0
     all_obj_ious = []
+    used_pred_ids = set()  # tracking of every prediction which got matched with a GT
     matched_pred_ids = set()  # tracking obj ids we already matched
+    # for preventing double counting
+    # 2 obj first get matched and then it get decide whether they are good/bad iou -> tp/fp
 
     # go through every true object and check if there is a prediction for that
     for obj_idx in range(1, num_true_objects+1):
@@ -42,9 +53,11 @@ def evaluate_object_wise(preds, labels, iou_threshold=0.3):
             best_pred_id = np.argmax(counts)
 
             # skip if already used this pred-id (OR then use the second obj intersection if available?)
-            if best_pred_id in matched_pred_ids:
+            if best_pred_id in used_pred_ids:  # in matched_pred_ids:
                 all_obj_ious.append(0)
                 continue
+
+            used_pred_ids.add(best_pred_id)
 
             # calc IoU
             pred_mask = (labeled_preds == best_pred_id)
@@ -60,25 +73,31 @@ def evaluate_object_wise(preds, labels, iou_threshold=0.3):
         else:
             all_obj_ious.append(0.0)
 
-    # calc classical obj metrices
+    num_fp_objects = num_pred_objects - len(used_pred_ids)
+    all_obj_ious.extend([0.0] * max(0, num_fp_objects))
+
     mean_obj_iou = np.mean(all_obj_ious) if len(all_obj_ious) > 0 else 0.0
 
-    # fn_objects = num_true_objects - tp_objects
-    # fp_objects = max(0, num_pred_objects - tp_objects)
+    # # calc classical obj metrices
+    # mean_obj_iou = np.mean(all_obj_ious) if len(all_obj_ious) > 0 else 0.0
 
-    obj_recall = tp_objects / num_true_objects if num_true_objects > 0 else 0
-    obj_precision = tp_objects / num_pred_objects if num_pred_objects > 0 else 0
-    if (obj_precision + obj_recall) > 0:
-        obj_f1 = (2 * obj_precision * obj_recall) / (obj_precision + obj_recall)
-    else:
-        obj_f1 = 0.0
+    # # fn_objects = num_true_objects - tp_objects
+    # # fp_objects = max(0, num_pred_objects - tp_objects)
+
+    # obj_recall = tp_objects / num_true_objects if num_true_objects > 0 else 0
+    # obj_precision = tp_objects / num_pred_objects if num_pred_objects > 0 else 0
+    # if (obj_precision + obj_recall) > 0:
+    #     obj_f1 = (2 * obj_precision * obj_recall) / (obj_precision + obj_recall)
+    # else:
+    #     obj_f1 = 0.0
 
     return {
+        "tp_objects_count": tp_objects,
         "true_objects_count": num_true_objects,
         "pred_objects_count": num_pred_objects,
-        "object_recall": float(obj_recall),     # How many of all manholes got found
-        "object_precision": float(obj_precision), # How many predicted manholes were really manholes
-        "object_f1": float(obj_f1),  # value which scores if all manholes got found and predicted manholes are really manholes          
+        # "object_recall": float(obj_recall),     # How many of all manholes got found
+        # "object_precision": float(obj_precision), # How many predicted manholes were really manholes
+        # "object_f1": float(obj_f1),  # value which scores if all manholes got found and predicted manholes are really manholes          
         "object_mean_iou": float(mean_obj_iou)
     }
 
@@ -104,26 +123,41 @@ def compute_metrics(preds, labels):
     # print(f"\nDEBUG INFO:\n  - preds shape (eval): {preds.shape}\n  - labels shape: {labels.shape}")
 
     batch_size = preds.shape[0]
-    aggregated_obj_metrics = {
-        "true_objects_count": 0, "pred_objects_count": 0,
-        "object_recall": 0.0, "object_precision": 0.0,
-        "object_f1": 0.0, "object_mean_iou": 0.0
-    }
+
+    total_tp = 0
+    total_true = 0
+    total_pred = 0
+    total_obj_iou = 0.0
+
+    # aggregated_obj_metrics = {
+    #     "true_objects_count": 0, "pred_objects_count": 0,
+    #     "object_recall": 0.0, "object_precision": 0.0,
+    #     "object_f1": 0.0, "object_mean_iou": 0.0
+    # }
 
     for batch_idx in range(batch_size):
         # >>> compute object metrics <<<
         obj_metrics = evaluate_object_wise(
-                            preds=preds[batch_idx], 
-                            labels=labels[batch_idx], 
-                            iou_threshold=0.3
-                    )
-        for key in aggregated_obj_metrics:
-            aggregated_obj_metrics[key] += obj_metrics[key]
+            preds=preds[batch_idx], 
+            labels=labels[batch_idx], 
+            iou_threshold=0.3,
+            ignore_index=255
+        )
+        total_tp += obj_metrics["tp_objects_count"]
+        total_true += obj_metrics["true_objects_count"]
+        total_pred += obj_metrics["pred_objects_count"]
+        total_obj_iou += obj_metrics["object_mean_iou"]
+        # for key in aggregated_obj_metrics:
+        #     aggregated_obj_metrics[key] += obj_metrics[key]
 
+    obj_recall = total_tp / total_true if total_true > 0 else 0.0
+    obj_precision = total_tp / total_pred if total_pred > 0 else 0.0
+    obj_f1 = (2 * obj_precision * obj_recall) / (obj_precision + obj_recall) if (obj_precision + obj_recall) > 0 else 0.0
+    mean_obj_iou = total_obj_iou / batch_size
 
     # Average the sample metrics over the batch
-    for key in aggregated_obj_metrics:
-        aggregated_obj_metrics[key] /= batch_size
+    # for key in aggregated_obj_metrics:
+    #     aggregated_obj_metrics[key] /= batch_size
 
     # >>> compute pixel metrics <<<
     # create mask for ignroe index
@@ -155,10 +189,16 @@ def compute_metrics(preds, labels):
         "precision": float(precision),
         "recall": float(recall),
         "mean_iou": float(mean_iou),
-        "obj_f1": aggregated_obj_metrics["object_f1"],
-        "obj_recall": aggregated_obj_metrics["object_recall"],
-        "obj_precision": aggregated_obj_metrics["object_precision"],
-        "obj_mean_iou": aggregated_obj_metrics["object_mean_iou"] 
+        "obj_f1": float(obj_f1),
+        "obj_recall": float(obj_recall),
+        "obj_precision": float(obj_precision),
+        "obj_mean_iou": float(mean_obj_iou),
+        "avg_true_objects_per_img": float(total_true / batch_size),
+        "avg_pred_objects_per_img": float(total_pred / batch_size)
+        # "obj_f1": aggregated_obj_metrics["object_f1"],
+        # "obj_recall": aggregated_obj_metrics["object_recall"],
+        # "obj_precision": aggregated_obj_metrics["object_precision"],
+        # "obj_mean_iou": aggregated_obj_metrics["object_mean_iou"] 
     }
 
 

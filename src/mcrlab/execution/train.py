@@ -3,6 +3,7 @@
 # -----------
 import os
 import shutil
+from datetime import datetime
 from functools import partial
 
 from tqdm import tqdm
@@ -39,7 +40,7 @@ from mcrlab.metrices import compute_metrics
 # > HuggingFace Helper <
 # ----------------------
 class ImagePlottingCallback(TrainerCallback):
-    def __init__(self, val_dataset, model_name, processor, config, num_samples=1, pre_name="", clear_path=True, save_post_dir_name=None, batch_size=5):
+    def __init__(self, val_dataset, model_name, processor, config, save_name, num_samples=1, pre_name="", clear_path=True, batch_size=5):
         super().__init__()
         self.val_dataset = val_dataset
         self.model_name = model_name.lower()
@@ -50,9 +51,10 @@ class ImagePlottingCallback(TrainerCallback):
         self.batch_size = batch_size
         
         # create folderfor saving
-        self.plot_dir = f"./output/plots/{model_name}"
-        if save_post_dir_name is not None:
-            self.plot_dir += f"_{save_post_dir_name}"
+
+        self.plot_dir = f"./output/plots/{save_name}"
+        # if save_post_dir_name is not None:
+        #     self.plot_dir += f"_{save_post_dir_name}"
         os.makedirs(self.plot_dir, exist_ok=True)
         if clear_path:
             shutil.rmtree(self.plot_dir)
@@ -139,6 +141,7 @@ class ImagePlottingCallback(TrainerCallback):
                     continue
 
                 # "remove" ignore label, so it does not hinder the plot
+                missing_point_idx_mask = gt_mask == 255
                 gt_mask = np.where(gt_mask == 255, 0, gt_mask)
 
                 # print(f"[DEBUG] GT unique values: {np.unique(gt_mask)} | Pred unique values: {np.unique(pred_mask)}")
@@ -187,6 +190,7 @@ class ImagePlottingCallback(TrainerCallback):
                 axes[3].axis("off")
 
                 # Image 5 - Prediction
+                pred_mask[missing_point_idx_mask] = 0
                 axes[4].imshow(pred_mask, cmap='viridis', vmin=0, vmax=1)
                 axes[4].set_title(f"Prediction")
                 axes[4].axis("off")
@@ -260,15 +264,19 @@ class UnetConfig(PretrainedConfig):
 class UnetForSemanticSegmentation(PreTrainedModel):
     config_class = UnetConfig
     
-    def __init__(self, config):
+    def __init__(self, config, encoder_weights="imagenet"):
         super().__init__(config)
         # using segmentation_models_pytorch
         import segmentation_models_pytorch as smp
         self.unet = smp.Unet(
             encoder_name="resnet34",  # "resnet50", "efficientnet-b3" or "efficientnet-b4", "mit_b2" or "mit_b3"
-            encoder_weights="imagenet", 
+            encoder_weights=encoder_weights, 
             classes=config.num_labels
         )
+        self.dice_loss = smp.losses.DiceLoss(mode="multiclass", ignore_index=255)
+        # class_weights = torch.tensor([1.0, 100.0]) 
+        # self.ce_loss = nn.CrossEntropyLoss(weight=class_weights, ignore_index=255)
+        self.focal_loss = smp.losses.FocalLoss(mode="multiclass", ignore_index=255)
         
     def forward(self, pixel_values, labels=None, **kwargs):
         logits = self.unet(pixel_values)
@@ -279,13 +287,19 @@ class UnetForSemanticSegmentation(PreTrainedModel):
             if labels.dim() == 4 and labels.shape[1] == 1:
                 labels = labels.squeeze(1)
             
-            print("pixel_values:", pixel_values.shape)
-            print("logits:", logits.shape)
-            print("labels:", labels.shape)
+            # print("pixel_values:", pixel_values.shape)
+            # print("logits:", logits.shape)
+            # print("labels:", labels.shape)
 
-            loss_fct = nn.CrossEntropyLoss(ignore_index=255)
-            loss = loss_fct(logits, labels.long())
-            
+            # loss_fct = nn.CrossEntropyLoss(ignore_index=255)
+            # loss = loss_fct(logits, labels.long())
+
+            # loss = 0.5 * self.ce_loss(logits, labels.long()) + \
+            #        0.5 * self.dice_loss(logits, labels.long())
+            loss = 0.5 * self.focal_loss(logits, labels.long()) + \
+                   0.5 * self.dice_loss(logits, labels.long())
+
+
         # HF Trainer wants an object with 'loss' and 'logits' attributes
         from transformers.modeling_outputs import SemanticSegmenterOutput
         return SemanticSegmenterOutput(loss=loss, logits=logits)
@@ -330,15 +344,15 @@ def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
     if model_name == "unet":
         # use wrapper
         config = UnetConfig(num_labels=num_labels)
-        model = model_class(config)
-    else:
-        model = model_class.from_pretrained(
-            checkpoint,
-            num_labels=num_labels,
-            ignore_mismatched_sizes=True
-        )
-        model.config.ignore_index = 255
-        model.config.num_labels = num_labels
+        model = model_class(config, encoder_weights="imagenet" if not check_point_path else None)
+    
+    model = model_class.from_pretrained(
+        checkpoint,
+        num_labels=num_labels,
+        ignore_mismatched_sizes=True
+    )
+    model.config.ignore_index = 255
+    model.config.num_labels = num_labels
 
     # PROCESSOR
     # ------------
@@ -486,15 +500,25 @@ def train_hf_pipeline(config):
 
     model_name = config.model.name.lower()
 
+    now = datetime.now()
+    year = now.year
+    month = now.month
+    day = now.day
+    hour = now.hour
+    minute = now.minute
+
+    save_name = f"{year}_{month:02}_{day:02}_{hour:02}_{minute:02}_{model_name}"
+
+
     # FIXME
     # for cur_file in os.listdir("./output/"):
     #     cur_file_path = os.path.join("./output/", cur_file)
     #     if os.path.isdir(cur_file_path):
-    try:
-        shutil.rmtree("./output/plots")
-        shutil.rmtree("./output/checkpoints")
-    except Exceptio as e:
-        print(e)
+    # try:
+    #     shutil.rmtree("./output/plots")
+    #     shutil.rmtree("./output/checkpoints")
+    # except Exception as e:
+    #     print(e)
 
     checkpoint_path = config.model.check_point_path
     if checkpoint_path == "None":
@@ -502,6 +526,9 @@ def train_hf_pipeline(config):
     model, processor = get_model_and_processor(model_name, checkpoint_path)
 
     # Load Data
+    heatmap_path = config.data.heatmap_path
+    used_heatmap_channel = config.data.used_heatmap_channel
+
     pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
     train_dataset = get_data_loader(config.data.name, 
                                    config.data.path, 
@@ -520,7 +547,9 @@ def train_hf_pipeline(config):
                                image_training=True, 
                                preprocessor=processor,
                                augment=True,
-                               pass_label_in_preprocessor=pass_label_in_preprocessor)
+                               pass_label_in_preprocessor=pass_label_in_preprocessor,
+                               heatmap_gt_path=heatmap_path,
+                               used_heatmap_channel=used_heatmap_channel)
     train_dataset.manhole_filter(required_manhole_points=50, amount_non_manhole_samples=10)
     
     val_dataset = get_data_loader(config.data.name, 
@@ -540,15 +569,18 @@ def train_hf_pipeline(config):
                              image_training=True, 
                              preprocessor=processor,
                              augment=False,
-                             pass_label_in_preprocessor=pass_label_in_preprocessor)
+                             pass_label_in_preprocessor=pass_label_in_preprocessor,
+                             heatmap_gt_path=heatmap_path,
+                             used_heatmap_channel=used_heatmap_channel)
     val_dataset.manhole_filter(required_manhole_points=50)
     # config.data.preprocessed
 
     # Callback for in-between sample plotting
     plotting_callback = ImagePlottingCallback(
         val_dataset=val_dataset,
-        model_name=model_name,
+        save_name=save_name,
         processor=processor,
+        model_name=model_name,
         config=config,
         num_samples=5,
         pre_name="finetuning",
@@ -764,7 +796,7 @@ def train_hf_pipeline(config):
 
     # FIXME -> make many of the settings adjustable via config
     training_args = HFTrainingArguments(
-        output_dir=f"./output/checkpoints/{config.model.name}",
+        output_dir=f"./output/checkpoints/{save_name}",
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         learning_rate=6e-5,           # 6e-5     

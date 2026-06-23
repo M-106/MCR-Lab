@@ -24,6 +24,8 @@ def train_pipeline(epochs, batch_size,
                    data_name, data_path, 
                    experiment_name,
                    training_in_2d=True, 
+                   heatmap_path=None,
+                   used_heatmap_channel=2,
                    sample_required_manhole_points=50, 
                    amount_non_manhole_samples=10,
                    model_check_point_path=None,
@@ -45,6 +47,8 @@ def train_pipeline(epochs, batch_size,
         type="train", 
         load_2d=training_in_2d,
         pass_label_in_preprocessor=False,
+        heatmap_path=heatmap_path,
+        used_heatmap_channel=used_heatmap_channel,
         sample_required_manhole_points=sample_required_manhole_points,
         amount_non_manhole_samples=amount_non_manhole_samples,
         return_as_dataloader=True,
@@ -58,6 +62,8 @@ def train_pipeline(epochs, batch_size,
         path=data_path, 
         type="val", 
         load_2d=training_in_2d,
+        heatmap_path=heatmap_path,
+        used_heatmap_channel=used_heatmap_channel,
         pass_label_in_preprocessor=False,
         sample_required_manhole_points=sample_required_manhole_points,
         amount_non_manhole_samples=amount_non_manhole_samples,
@@ -243,6 +249,8 @@ def train(config):
     data_name = config.data.name
     data_path = config.data.path
     data_preprocessed = config.data.preprocessed
+    heatmap_path = config.data.heatmap_path
+    used_heatmap_channel = config.data.used_heatmap_channel
 
     metrics_aggregator_name = config.custom_train.metrics_aggregator
     training_in_2d = config.custom_train.training_in_2d

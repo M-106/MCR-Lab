@@ -1,20 +1,26 @@
 # -----------
 # > Imports <
 # -----------
+import os
+from datetime import datetime
 from functools import partial
+from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+
+from transformers import (Trainer as HFTrainer, 
+                         TrainingArguments as HFTrainingArguments)
 
 from mcrlab.config.config import Config
 # from mcrlab.model_utils import get_model, get_device, get_criterion, \
 #                                TorchModelWrapper, \
 #                                compute_loss, match_with_thresholding, \
 #                                compute_metrics
-from mcrlab.point_cloud.data import get_data_loader, get_basic_transform
 from mcrlab.execution.train import get_model_and_processor, get_segmentation_prediction
 from mcrlab.metrices import compute_metrics
+from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDataset
         
 
 
@@ -81,7 +87,12 @@ def evaluate_hf_pipeline(config):
     print(f"Loading trained model and processor from: {checkpoint_path}")
     model, processor = get_model_and_processor(model_name, checkpoint_path)
 
+    parts = Path(checkpoint_path).parts
+    exp_name = parts[-2]
+
     # Load Test Data
+    heatmap_path = config.data.heatmap_path
+    used_heatmap_channel = config.data.used_heatmap_channel
     pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
     
     test_loader_raw = get_data_loader(
@@ -94,7 +105,7 @@ def evaluate_hf_pipeline(config):
         num_workers=4,
         preprocessed=True, 
         return_train_format=True,
-        return_dataset=True
+        return_dataset=True,
     )
     
     all_test_paths = test_loader_raw.point_cloud_paths
@@ -105,7 +116,9 @@ def evaluate_hf_pipeline(config):
         image_training=True, 
         preprocessor=processor,
         augment=False,
-        pass_label_in_preprocessor=pass_label_in_preprocessor
+        pass_label_in_preprocessor=pass_label_in_preprocessor,
+        heatmap_gt_path=heatmap_path,
+        used_heatmap_channel=used_heatmap_channel
     )
     
     # Filter identical to training to keep metric comparisons fair
@@ -132,7 +145,7 @@ def evaluate_hf_pipeline(config):
             outputs = eval_pred.predictions
             labels = eval_pred.label_ids
             batch_size = outputs[0].shape[0] if isinstance(outputs, tuple) else outputs.shape[0]
-            target_sizes = [(512, 512)] * batch_size
+            target_sizes = [(500, 500)] * batch_size
         else:
             outputs, labels = eval_pred
             target_sizes = None
@@ -164,23 +177,51 @@ def evaluate_hf_pipeline(config):
             processor=processor,
             batch_size=batch_size
         ),
-        preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,
+        preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else logits,
+        # preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,  # only keep class + mask logits
     )
 
     # Run Quantitative Evaluation
     print("Running quantitative evaluation...")
-    results = trainer.predict(test_dataset)
+    # results = trainer.predict(test_dataset)
+    results = trainer.evaluate(test_dataset)
     
-    print("\n" + "="*30)
-    print(f"QUANTITATIVE TEST RESULTS ({model_name.upper()})")
-    print("="*30)
-    for metric_name, value in results.metrics.items():
-        # Clean up string rendering
-        clean_name = metric_name.replace("test_", "")
-        print(f"{clean_name:<25}: {value:.4f}" if isinstance(value, float) else f"{clean_name:<25}: {value}")
-    print("="*30)
+    output_lines = []
+    output_lines.append("="*40)
+    output_lines.append(f"QUANTITATIVE TEST RESULTS ({model_name.upper()})")
+    output_lines.append("="*40)
+    
+    for metric_name, value in results.items():
+        # remove prefix 'test_' or 'eval_'
+        clean_name = metric_name.replace("test_", "").replace("eval_", "")
+        line = f"{clean_name:<30}: {value:.4f}" if isinstance(value, float) else f"{clean_name:<30}: {value}"
+        output_lines.append(line)
+        
+    output_lines.append("="*40)
+    
+    # print
+    text_content = "\n".join(output_lines)
+    print(text_content)
 
-    return results.metrics
+    # save in file
+    # now = datetime.now()
+    # year = now.year
+    # month = now.month
+    # day = now.day
+    # hour = now.hour
+    # minute = now.minute
+
+    save_name = exp_name  # f"{year}_{month:02}_{day:02}_{hour:02}_{minute:02}_{model_name}"
+    
+    os.makedirs(eval_args.output_dir, exist_ok=True)
+    txt_path = os.path.join(eval_args.output_dir, f"test_metrics_{save_name}.txt")
+    
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(text_content)
+        
+    print(f"Metrics successfully saved to: {txt_path}")
+
+    return results
 
 
 def test(config):

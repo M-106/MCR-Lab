@@ -1149,7 +1149,9 @@ class BEVDataset(Dataset):
     def __init__(self, path=None, 
                  file_paths=[], has_labels=False,
                  image_training=False, preprocessor=None,
-                 augment=False, pass_label_in_preprocessor=False):
+                 augment=False, pass_label_in_preprocessor=False,
+                 heatmap_gt_path=None, used_heatmap_channel=2
+                 ):
         """
         path is a list of point cloud file or a list of paths to search the bev images.
 
@@ -1170,6 +1172,10 @@ class BEVDataset(Dataset):
         self.augment = augment
         self.aug_pipeline = get_bev_augmentations() if augment else None
         self.pass_label_in_preprocessor = pass_label_in_preprocessor
+        self.heatmap_gt_path = heatmap_gt_path
+        if self.heatmap_gt_path is not None and self.heatmap_gt_path == "None":
+            self.heatmap_gt_path = None
+        self.used_heatmap_channel = used_heatmap_channel
 
         # find pkl files
         all_bev_paths = []
@@ -1202,6 +1208,8 @@ class BEVDataset(Dataset):
     def __getitem__(self, idx):
         cur_file_path = self.file_paths[idx]
 
+        data_name = "sud" if "sud-road" in cur_file_path.lower() else "whu"
+
         pc_id, x_start, y_start = self.extract_grid_identifier(cur_file_path)
 
         tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
@@ -1210,6 +1218,19 @@ class BEVDataset(Dataset):
 
             x_np = tile[:-1].transpose(1, 2, 0)
             y_np = tile[-1]
+
+            # load additional Heatmap GT
+            if self.heatmap_gt_path is not None:
+                cur_heatmap_gt_path = os.path.join(self.heatmap_gt_path, f"{data_name}_{pc_id}_{x_start}_{y_start}.npy")
+                if os.path.exists(cur_heatmap_gt_path):
+                    gt_2d_map = np.load(cur_heatmap_gt_path)
+                else:
+                    gt_2d_map = np.zeros(shape=(500, 500, 3))
+                # y_np = y_np.reshape((500, 500, 1))
+                # y_np = np.concatenate((y_np, gt_2d_map), axis=-1)
+                target_channel = gt_2d_map[:, :, self.used_heatmap_channel].reshape((500, 500))  # .unsqueeze()
+                target_channel[y_np == 255] = 255
+                y_np = target_channel
 
             if self.augment:
                 augmented = self.aug_pipeline(image=x_np, mask=y_np)
