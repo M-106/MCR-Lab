@@ -260,9 +260,10 @@ def get_scheduler(name, optimizer):
 
 class UnetConfig(PretrainedConfig):
     model_type = "unet"
-    def __init__(self, num_labels=2, **kwargs):
+    def __init__(self, num_labels=2, ignore_index=255, **kwargs):
         super().__init__(**kwargs)
         self.num_labels = num_labels
+        self.ignore_index = ignore_index
 
 class UnetForSemanticSegmentation(PreTrainedModel):
     config_class = UnetConfig
@@ -276,6 +277,8 @@ class UnetForSemanticSegmentation(PreTrainedModel):
             encoder_weights=encoder_weights, 
             classes=config.num_labels
         )
+        self.config = config
+        
         self.dice_loss = smp.losses.DiceLoss(mode="multiclass", ignore_index=255)
         # class_weights = torch.tensor([1.0, 100.0]) 
         # self.ce_loss = nn.CrossEntropyLoss(weight=class_weights, ignore_index=255)
@@ -392,8 +395,8 @@ def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
             num_labels=num_labels,
             ignore_mismatched_sizes=True
         )
-        model.config.ignore_index = 255
-        model.config.num_labels = num_labels
+    model.config.ignore_index = 255
+    model.config.num_labels = num_labels
 
     # PROCESSOR
     # ------------
@@ -565,7 +568,7 @@ def train_hf_pipeline(config):
     checkpoint_path = config.model.check_point_path
     if checkpoint_path == "None":
         checkpoint_path = None
-    model, processor = get_model_and_processor(model_name, checkpoint_path)
+    model, processor = get_model_and_processor(model_name, checkpoint_path, mode="train")
 
     # Load Data
     heatmap_path = config.data.heatmap_path

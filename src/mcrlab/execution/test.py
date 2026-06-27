@@ -161,7 +161,7 @@ def evaluate_hf_pipeline(config):
         raise ValueError("Please provide the path to your trained checkpoint in config.model.check_point_path")
 
     print(f"Loading trained model and processor from: {checkpoint_path}")
-    model, processor = get_model_and_processor(model_name, checkpoint_path)
+    model, processor = get_model_and_processor(model_name, checkpoint_path, mode="test")
 
     parts = Path(checkpoint_path).parts
     exp_name = parts[-2]
