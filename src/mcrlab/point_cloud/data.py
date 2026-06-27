@@ -1219,6 +1219,8 @@ class BEVDataset(Dataset):
             x_np = tile[:-1].transpose(1, 2, 0)
             y_np = tile[-1]
 
+            # print(f"Debugging y shape before preprocessing: {y_np.shape}")
+
             # load additional Heatmap GT
             if self.heatmap_gt_path is not None:
                 cur_heatmap_gt_path = os.path.join(self.heatmap_gt_path, f"{data_name}_{pc_id}_{x_start}_{y_start}.npy")
@@ -1253,11 +1255,15 @@ class BEVDataset(Dataset):
                     x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
                     if self.pass_label_in_preprocessor:
                         y_np = y_np.astype(np.int32)
+                        # print(f"Debugging 2 y shape before preprocessing: {y_np.shape}")
                         processed = self.preprocessor(
                             images=x_np,
                             segmentation_maps=y_np,
                             return_tensors="pt"
                         )
+                        # print(f"Debugging y 3 shape before preprocessing: {y_np.shape}")
+                        # print(f"Debugging mask labels shape before preprocessing: {processed["mask_labels"][0].shape}")
+                        # print(f"Debugging class_labels shape before preprocessing: {processed["class_labels"][0].shape}")
                         x = processed["pixel_values"].squeeze(0)  # (C, H, W)
                         return {
                             "pixel_values": x,

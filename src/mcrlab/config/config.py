@@ -68,6 +68,7 @@ class ModelConfig(BaseModel):
 class DataConfig(BaseModel):
     name: str
     path: str
+    path_2: str
     preprocessed: bool
     type: str
     heatmap_path: Union[str, None]

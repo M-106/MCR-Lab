@@ -6,7 +6,9 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
+import numpy as np
 import torch
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -71,6 +73,80 @@ from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDat
 #         # calc mean
 #         mean_losses = [cur_loss / max(batches, 1) for cur_loss in total_losses]
 #         return mean_losses
+
+
+
+def plot_and_save(iou_thresholds, AR, AP, save_path):
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 7))
+
+    # plot values
+    ax.plot(iou_thresholds, AR, label='Avg Recall (AR)', marker='o', linewidth=2)
+    ax.plot(iou_thresholds, AP, label='Avg Precision (AP)', marker='s', linewidth=2)
+    # ax.plot(iou_thresholds, AF1, label='Avg F1-Score (AF1)', marker='^', linewidth=2)
+    # ax.plot(iou_thresholds, AIOU, label='Avg IoU (AIOU)', marker='d', linewidth=2)
+
+    # set titles and labels
+    ax.set_title('Evaluation metrics vs. IoU Threshold', fontsize=14, fontweight='bold', pad=15)
+    ax.set_xlabel('IoU Threshold', fontsize=12)
+    ax.set_ylabel('Metric Value', fontsize=12)
+
+    # set range for these metrics
+    ax.set_ylim(0, 1.05)
+
+    # add grid and legend
+    ax.grid(True, linestyle='--', alpha=0.6)
+    ax.legend(loc='lower left', fontsize=11)
+
+    # save and close fig
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close(fig)
+
+
+
+def plot_mean_average(object_results, save_path, coco_standard_save_path=None):
+    """
+    object_results: [
+    {
+        "iou_threshold": ...,
+        "avg_obj_recall": ...,
+        "avg_obj_precision": ...,
+        "avg_f1": ...,
+        "avg_obj_iou": ...
+    }, 
+    ...]
+    """
+    # extract values
+    iou_thresholds = np.array([cur_object_result["iou_threshold"] for cur_object_result in object_results])
+    AR = np.array([cur_object_result["avg_obj_recall"] for cur_object_result in object_results])
+    AP = np.array([cur_object_result["avg_obj_precision"] for cur_object_result in object_results])
+    AF1 = np.array([cur_object_result["avg_f1"] for cur_object_result in object_results])
+    AIOU = np.array([cur_object_result["avg_obj_iou"] for cur_object_result in object_results])
+
+    plot_and_save(
+        iou_thresholds=iou_thresholds, 
+        AR=AR, 
+        AP=AP, 
+        save_path=save_path
+    )
+
+
+    if coco_standard_save_path:
+        # also save from 0.5
+        indices = np.where(iou_thresholds > 0.46)[0]
+        iou_thresholds = iou_thresholds[indices]
+        AR = AR[indices]
+        AP = AP[indices]
+        AF1 = AF1[indices]
+        AIOU = AIOU[indices]
+
+        plot_and_save(
+            iou_thresholds=iou_thresholds, 
+            AR=AR, 
+            AP=AP, 
+            save_path=coco_standard_save_path
+        )
+
 
 
 def evaluate_hf_pipeline(config):
@@ -140,22 +216,82 @@ def evaluate_hf_pipeline(config):
                 "labels": torch.stack([x["labels"] for x in batch])
             }
 
+    # def compute_metrics_fn(eval_pred, model_name, processor, batch_size):
+    #     if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
+    #         outputs = eval_pred.predictions
+    #         labels = eval_pred.label_ids
+    #         batch_size = outputs[0].shape[0] if isinstance(outputs, tuple) else outputs.shape[0]
+    #         target_sizes = [(500, 500)] * batch_size
+    #     else:
+    #         outputs, labels = eval_pred
+    #         target_sizes = None
+
+    #     preds = get_segmentation_prediction(
+    #         outputs,
+    #         model_name=model_name,
+    #         processor=processor,
+    #         target_sizes=target_sizes
+    #     )
+    #     return compute_metrics(preds=preds, labels=labels)
+
     def compute_metrics_fn(eval_pred, model_name, processor, batch_size):
         if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
             outputs = eval_pred.predictions
             labels = eval_pred.label_ids
-            batch_size = outputs[0].shape[0] if isinstance(outputs, tuple) else outputs.shape[0]
-            target_sizes = [(500, 500)] * batch_size
+            
+            # dynamic batch size calc
+            aggregated_batch_size = outputs[0].shape[0] if isinstance(outputs, tuple) else outputs.shape[0]
+            target_sizes = [(500, 500)] * aggregated_batch_size
+            
+            # generate prediction
+            preds = get_segmentation_prediction(
+                outputs,
+                model_name=model_name,
+                processor=processor,
+                target_sizes=target_sizes
+            )
+            
+            # --- MASK2FORMER / ONEFORMER SPECIFIC LABEL-PROCESSING ---
+            if model_name in ["mask2former", "oneformer"]:
+                mask_labels_list = labels[0]
+                class_labels_list = labels[1]
+                num_real_images = len(mask_labels_list)
+                
+                # slicing preds if padding-dummies are there
+                # FIXME -> is that right? or do they mean something else?
+                preds = preds[:num_real_images]
+                
+                # retransformation from lists from bianry masks to semantic 2D images
+                # the same as in train
+                semantic_labels = []
+                for masks, classes in zip(mask_labels_list, class_labels_list):
+                    # masks Form: (Obj-Amount, H, W)
+                    H, W = masks.shape[1], masks.shape[2]
+                    sem = np.zeros((H, W), dtype=np.int64)
+                    for mask, cls in zip(masks, classes):
+                        sem[mask > 0.5] = cls
+                    semantic_labels.append(sem)
+                
+                labels = np.stack(semantic_labels)
+                
         else:
+            # Fallback if directly a tuple is given
             outputs, labels = eval_pred
-            target_sizes = None
+            target_sizes = [(500, 500)] * labels.shape[0] if hasattr(labels, "shape") else None
+            
+            preds = get_segmentation_prediction(
+                outputs,
+                model_name=model_name,
+                processor=processor,
+                target_sizes=target_sizes
+            )
 
-        preds = get_segmentation_prediction(
-            outputs,
-            model_name=model_name,
-            processor=processor,
-            target_sizes=target_sizes
-        )
+        # convert to numpy & cpu
+        if isinstance(preds, torch.Tensor):
+            preds = preds.detach().cpu().numpy()
+        if isinstance(labels, torch.Tensor):
+            labels = labels.detach().cpu().numpy()
+
         return compute_metrics(preds=preds, labels=labels)
 
     # Initialize Trainer for Evaluation Only
@@ -178,7 +314,7 @@ def evaluate_hf_pipeline(config):
             batch_size=batch_size
         ),
         preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else logits,
-        # preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,  # only keep class + mask logits
+        # preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,
     )
 
     # Run Quantitative Evaluation
@@ -193,9 +329,18 @@ def evaluate_hf_pipeline(config):
     
     for metric_name, value in results.items():
         # remove prefix 'test_' or 'eval_'
-        clean_name = metric_name.replace("test_", "").replace("eval_", "")
-        line = f"{clean_name:<30}: {value:.4f}" if isinstance(value, float) else f"{clean_name:<30}: {value}"
-        output_lines.append(line)
+        if isinstance(value, list):
+            for cur_obj_result in value:
+                line = f"Object Mean Average Values - IoU Threshold: {cur_obj_result["iou_threshold"]:.2f}"
+                output_lines.append(line)
+                for cur_obj_result_name, cur_obj_result_value in cur_obj_result.items():
+                    clean_name = cur_obj_result_name.replace("test_", "").replace("eval_", "")
+                    line = f"      - {clean_name:<30}: {cur_obj_result_value:.4f}" if isinstance(cur_obj_result_value, float) else f"{clean_name:<30}: {cur_obj_result_value}"
+                    output_lines.append(line)
+        else:
+            clean_name = metric_name.replace("test_", "").replace("eval_", "")
+            line = f"{clean_name:<30}: {value:.4f}" if isinstance(value, float) else f"{clean_name:<30}: {value}"
+            output_lines.append(line)
         
     output_lines.append("="*40)
     
@@ -221,7 +366,13 @@ def evaluate_hf_pipeline(config):
         
     print(f"Metrics successfully saved to: {txt_path}")
 
+    save_path = os.path.join(eval_args.output_dir, f"precision_recall_curve_{save_name}.png")
+    coco_standard_save_path = os.path.join(eval_args.output_dir, f"precision_recall_curve_{save_name}_coco_standard.png")
+    plot_mean_average(results["eval_obj_results"], save_path=save_path, coco_standard_save_path=coco_standard_save_path)
+    print(f"Precision-Recall-Curve successfully saved to: {save_path}")
+
     return results
+
 
 
 def test(config):

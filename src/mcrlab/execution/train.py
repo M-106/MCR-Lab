@@ -17,12 +17,14 @@ from transformers import (Trainer as HFTrainer,
                          AutoImageProcessor,
                          PreTrainedModel, PretrainedConfig)
                          #TrainerCallBack as HFTrainerCallBack
+from transformers import get_cosine_schedule_with_warmup
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import random_split, DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torch.optim import SGD
 
 # for plotting
 import numpy as np
@@ -39,6 +41,7 @@ from mcrlab.metrices import compute_metrics
 # ----------------------
 # > HuggingFace Helper <
 # ----------------------
+
 class ImagePlottingCallback(TrainerCallback):
     def __init__(self, val_dataset, model_name, processor, config, save_name, num_samples=1, pre_name="", clear_path=True, batch_size=5):
         super().__init__()
@@ -305,6 +308,42 @@ class UnetForSemanticSegmentation(PreTrainedModel):
         return SemanticSegmenterOutput(loss=loss, logits=logits)
 
 
+class CustomSegmentationTrainer(HFTrainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Setup Dice + Focal Loss for binary segmentation (sigmoid=True)
+        # focal_weight can be adjusted if you want to balance class weights further
+        # self.loss_fn = DiceFocalLoss(
+        #     sigmoid=True, 
+        #     squared_pred=True, 
+        #     reduction="mean"
+        # )
+
+        self.dice_loss = smp.losses.DiceLoss(mode="multiclass", ignore_index=255)
+        self.focal_loss = smp.losses.FocalLoss(mode="multiclass", ignore_index=255)
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # Forward pass
+        outputs = model(**inputs)
+        
+        # Hugging Face models typically output logits shape: [batch_size, num_classes, height, width]
+        # For binary segmentation, num_classes is usually 1 or 2 depending on your setup.
+        logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+        labels = inputs.get("labels")
+
+        # Ensure labels have the same floating type and shape matches logits
+        # Monai expects shapes like [B, C, H, W]. 
+        # If your labels are [B, H, W], unsqueeze the channel dimension:
+        if len(labels.shape) == 3:
+            labels = labels.unsqueeze(1)
+            
+        loss = 0.5 * self.focal_loss(logits, labels.long()) + \
+               0.5 * self.dice_loss(logits, labels.long())
+
+        return (loss, outputs) if return_outputs else loss
+
+
+
 # Model registry: name -> (model_class, default_checkpoint)
 MODEL_REGISTRY = {
     "segformer":   (SegformerForSemanticSegmentation,        "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"),
@@ -328,7 +367,8 @@ PROCESSOR_SIZE = {
 
 def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
                                 image_mean=[0.485, 0.456, 0.406],
-                                image_std=[0.229, 0.224, 0.225]):
+                                image_std=[0.229, 0.224, 0.225],
+                                mode="train"):
     if model_name not in MODEL_REGISTRY:
         raise ValueError(f"Unsupported model '{model_name}'. Choose from: {list(MODEL_REGISTRY.keys())}")
 
@@ -346,13 +386,14 @@ def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
         config = UnetConfig(num_labels=num_labels)
         model = model_class(config, encoder_weights="imagenet" if not check_point_path else None)
     
-    model = model_class.from_pretrained(
-        checkpoint,
-        num_labels=num_labels,
-        ignore_mismatched_sizes=True
-    )
-    model.config.ignore_index = 255
-    model.config.num_labels = num_labels
+    if not (mode == "train" and model_name == "unet"):
+        model = model_class.from_pretrained(
+            checkpoint,
+            num_labels=num_labels,
+            ignore_mismatched_sizes=True
+        )
+        model.config.ignore_index = 255
+        model.config.num_labels = num_labels
 
     # PROCESSOR
     # ------------
@@ -364,6 +405,7 @@ def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
         processor_source,
         do_resize=True,
         size=PROCESSOR_SIZE[model_name],
+        size_divisibility=0,  # important, else it will round to the next vielfache
         do_rescale=False,
         do_normalize=True,
         image_mean=image_mean,
@@ -415,13 +457,13 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
 
     elif model_name in ["mask2former", "oneformer"]:
 
-        print(f"\noutputs Len: {len(outputs)} Dtype: {type(outputs)}\nSub-Element type: {type(outputs[0])}\nShapes:")
-        for cur_idx, cur_elem in enumerate(outputs):
-            if hasattr(cur_elem, "shape"):
-                shape_str = f"{cur_elem.shape}"
-            else:
-                shape_str = "none"
-            print(f"  - {cur_idx:02}:\n      dtype={type(cur_elem)}\n      shape={shape_str}")
+        # print(f"\noutputs Len: {len(outputs)} Dtype: {type(outputs)}\nSub-Element type: {type(outputs[0])}\nShapes:")
+        # for cur_idx, cur_elem in enumerate(outputs):
+        #     if hasattr(cur_elem, "shape"):
+        #         shape_str = f"{cur_elem.shape}"
+        #     else:
+        #         shape_str = "none"
+        #     print(f"  - {cur_idx:02}:\n      dtype={type(cur_elem)}\n      shape={shape_str}")
         # raise ValueError("DEBUGGING STOP")
 
         if is_numpy_input or is_torch_input:
@@ -530,17 +572,48 @@ def train_hf_pipeline(config):
     used_heatmap_channel = config.data.used_heatmap_channel
 
     pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
-    train_dataset = get_data_loader(config.data.name, 
-                                   config.data.path, 
-                                   type="train", 
-                                   transform=get_basic_transform(),
-                                   batch_size=config.train.batch_size, 
-                                   shuffle=True, 
-                                   num_workers=4,
-                                   preprocessed=True, 
-                                   return_train_format=True,
-                                   return_dataset=True)
-    all_train_paths = train_dataset.point_cloud_paths
+    if config.data.name == "merged_whu_sud":
+        train_dataset = get_data_loader(
+            "whu", 
+            config.data.path, 
+            type="train", 
+            transform=get_basic_transform(),
+            batch_size=config.train.batch_size, 
+            shuffle=True, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=True
+        )
+        all_train_paths = train_dataset.point_cloud_paths
+
+        train_dataset = get_data_loader(
+            "sud", 
+            config.data.path_2, 
+            type="train", 
+            transform=get_basic_transform(),
+            batch_size=config.train.batch_size, 
+            shuffle=True, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=True
+        )
+        all_train_paths.extend(train_dataset.point_cloud_paths)
+    else:
+        train_dataset = get_data_loader(
+            config.data.name, 
+            config.data.path, 
+            type="train", 
+            transform=get_basic_transform(),
+            batch_size=config.train.batch_size, 
+            shuffle=True, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=True
+        )
+        all_train_paths = train_dataset.point_cloud_paths
     train_dataset = BEVDataset(path=all_train_paths, 
                                file_paths=[], 
                                has_labels=True, 
@@ -552,17 +625,46 @@ def train_hf_pipeline(config):
                                used_heatmap_channel=used_heatmap_channel)
     train_dataset.manhole_filter(required_manhole_points=50, amount_non_manhole_samples=10)
     
-    val_dataset = get_data_loader(config.data.name, 
-                                   config.data.path, 
-                                   type="val", 
-                                   transform=get_basic_transform(),
-                                   batch_size=config.train.batch_size, 
-                                   shuffle=False, 
-                                   num_workers=4,
-                                   preprocessed=True, 
-                                   return_train_format=True,
-                                   return_dataset=True)
-    all_val_paths = val_dataset.point_cloud_paths
+    if config.data.name == "merged_whu_sud":
+        val_dataset = get_data_loader(
+            "whu", 
+            config.data.path, 
+            type="val", 
+            transform=get_basic_transform(),
+            batch_size=config.train.batch_size, 
+            shuffle=False, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=True
+        )
+        all_val_paths = val_dataset.point_cloud_paths
+
+        val_dataset = get_data_loader(
+            "sud", 
+            config.data.path_2, 
+            type="val", 
+            transform=get_basic_transform(),
+            batch_size=config.train.batch_size, 
+            shuffle=False, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=True
+        )
+        all_val_paths.extend(val_dataset.point_cloud_paths)
+    else:
+        val_dataset = get_data_loader(config.data.name, 
+                                    config.data.path, 
+                                    type="val", 
+                                    transform=get_basic_transform(),
+                                    batch_size=config.train.batch_size, 
+                                    shuffle=False, 
+                                    num_workers=4,
+                                    preprocessed=True, 
+                                    return_train_format=True,
+                                    return_dataset=True)
+        all_val_paths = val_dataset.point_cloud_paths
     val_dataset = BEVDataset(path=all_val_paths, 
                              file_paths=[], 
                              has_labels=True, 
@@ -666,71 +768,13 @@ def train_hf_pipeline(config):
                 #     len: 32
                 #     - Output 0: (100, 3), dtype=float32
                 #     - Output 1: (100, 3), dtype=float32
-                #     - Output 2: (100, 3), dtype=float32
-                #     - Output 3: (100, 3), dtype=float32
-                #     - Output 4: (100, 3), dtype=float32
-                #     - Output 5: (100, 3), dtype=float32
-                #     - Output 6: (100, 3), dtype=float32
-                #     - Output 7: (100, 3), dtype=float32
-                #     - Output 8: (100, 3), dtype=float32
-                #     - Output 9: (100, 3), dtype=float32
-                #     - Output 10: (100, 3), dtype=float32
-                #     - Output 11: (100, 3), dtype=float32
-                #     - Output 12: (100, 3), dtype=float32
-                #     - Output 13: (100, 3), dtype=float32
-                #     - Output 14: (100, 3), dtype=float32
-                #     - Output 15: (100, 3), dtype=float32
-                #     - Output 16: (100, 3), dtype=float32
-                #     - Output 17: (100, 3), dtype=float32
-                #     - Output 18: (100, 3), dtype=float32
-                #     - Output 19: (100, 3), dtype=float32
-                #     - Output 20: (100, 3), dtype=float32
-                #     - Output 21: (100, 3), dtype=float32
-                #     - Output 22: (100, 3), dtype=float32
-                #     - Output 23: (100, 3), dtype=float32
-                #     - Output 24: (100, 3), dtype=float32
-                #     - Output 25: (100, 3), dtype=float32
-                #     - Output 26: (100, 3), dtype=float32
-                #     - Output 27: (100, 3), dtype=float32
-                #     - Output 28: (100, 3), dtype=float32
-                #     - Output 29: (100, 3), dtype=float32
-                #     - Output 30: (100, 3), dtype=float32
-                #     - Output 31: (100, 3), dtype=float32
+                #     - ...
                 # Pred [1]:
                 # type: <class 'numpy.ndarray'>
                 #     len: 32
                 #     - Output 0: (100, 128, 128), dtype=float32)
                 #     - Output 1: (100, 128, 128), dtype=float32)
-                #     - Output 2: (100, 128, 128), dtype=float32)
-                #     - Output 3: (100, 128, 128), dtype=float32)
-                #     - Output 4: (100, 128, 128), dtype=float32)
-                #     - Output 5: (100, 128, 128), dtype=float32)
-                #     - Output 6: (100, 128, 128), dtype=float32)
-                #     - Output 7: (100, 128, 128), dtype=float32)
-                #     - Output 8: (100, 128, 128), dtype=float32)
-                #     - Output 9: (100, 128, 128), dtype=float32)
-                #     - Output 10: (100, 128, 128), dtype=float32)
-                #     - Output 11: (100, 128, 128), dtype=float32)
-                #     - Output 12: (100, 128, 128), dtype=float32)
-                #     - Output 13: (100, 128, 128), dtype=float32)
-                #     - Output 14: (100, 128, 128), dtype=float32)
-                #     - Output 15: (100, 128, 128), dtype=float32)
-                #     - Output 16: (100, 128, 128), dtype=float32)
-                #     - Output 17: (100, 128, 128), dtype=float32)
-                #     - Output 18: (100, 128, 128), dtype=float32)
-                #     - Output 19: (100, 128, 128), dtype=float32)
-                #     - Output 20: (100, 128, 128), dtype=float32)
-                #     - Output 21: (100, 128, 128), dtype=float32)
-                #     - Output 22: (100, 128, 128), dtype=float32)
-                #     - Output 23: (100, 128, 128), dtype=float32)
-                #     - Output 24: (100, 128, 128), dtype=float32)
-                #     - Output 25: (100, 128, 128), dtype=float32)
-                #     - Output 26: (100, 128, 128), dtype=float32)
-                #     - Output 27: (100, 128, 128), dtype=float32)
-                #     - Output 28: (100, 128, 128), dtype=float32)
-                #     - Output 29: (100, 128, 128), dtype=float32)
-                #     - Output 30: (100, 128, 128), dtype=float32)
-                #     - Output 31: (100, 128, 128), dtype=float32)
+                #     - ...
 
             if model_name in ["segformer", "unet"]:
                 # target_sizes = [labels.shape[-2:]] * labels.shape[0]
@@ -799,18 +843,25 @@ def train_hf_pipeline(config):
         output_dir=f"./output/checkpoints/{save_name}",
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
-        learning_rate=6e-5,           # 6e-5     
+        learning_rate=1e-4,  # 6e-5,           # 6e-5     
         lr_scheduler_type="cosine",   # cosine
         warmup_steps=200,             # 0.1
         fp16=False,                    # faster training
         gradient_accumulation_steps=4,
         num_train_epochs=400,   
         dataloader_num_workers=4,
+
         eval_strategy="steps",
         eval_steps=int( len(train_dataset)/batch_size ),
         save_strategy="steps",
         save_steps=int( len(train_dataset)/batch_size ),
+
         save_total_limit=2,
+
+        load_best_model_at_end=True,  # aadd the end saves the best ckpt
+        metric_for_best_model="eval_iou", # also possible "eval_iou" / "eval_f1"
+        greater_is_better=True,
+
         logging_steps=10,
         remove_unused_columns=False,   # important for SAM
         push_to_hub=False,
@@ -830,7 +881,22 @@ def train_hf_pipeline(config):
     #     use_cpu=True
     # )
 
-    trainer = HFTrainer(
+    optimizer = SGD(
+        model.parameters(), 
+        lr=1e-3, 
+        momentum=0.9, 
+        weight_decay=1e-4
+    )
+
+    total_train_steps = int((len(train_dataset) / batch_size) * training_args.num_train_epochs)
+
+    lr_scheduler = get_cosine_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=200,
+        num_training_steps=total_train_steps
+    )
+
+    trainer = HFTrainer(    # CustomSegmentationTrainer(  # HFTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,  # load bev/meta files and extract in right format -> use BEV Dataset
@@ -838,6 +904,7 @@ def train_hf_pipeline(config):
         # train_dataset=train_dataset.select(range(2)) if hasattr(train_dataset, 'select') else train_dataset,
         # eval_dataset=val_dataset.select(range(2)) if hasattr(val_dataset, 'select') else val_dataset,
         data_collator=partial(collate_fn, model_name=model_name),
+        optimizers=(optimizer, lr_scheduler),
         compute_metrics=partial(
             compute_metrics_fn,
             model_name=model_name,

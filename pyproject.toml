@@ -47,6 +47,9 @@ dependencies = [
     "albumentations",
     "mlflow",
     "tensorboard",
+    "shapely",
+
+    # "monai",
 
     "segmentation_models_pytorch",
 

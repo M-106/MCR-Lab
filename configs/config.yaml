@@ -50,12 +50,23 @@ inference:
 model:
   name: "unet"  # "segformer" "mask2former" "unet"
   check_point_path: "./output/checkpoints/2026_06_22_20_31_unet/checkpoint-1196"
-  # "./output/checkpoints/2026_06_22_20_31_unet/checkpoint-1196"  # None
+  # None
+  # normal
+  # "./output/checkpoints/2026_06_22_20_31_unet/checkpoint-1196"
   # "./output/checkpoints/2026_06_22_19_00_segformer/checkpoint-1196"
+  # "./output/checkpoints/2026_06_25_14_11_mask2former/checkpoint-1196"
+  # higher lr
+  # "./output/checkpoints/2026_06_27_10_44_unet/checkpoint-741"
+  # "./output/checkpoints/2026_06_27_09_04_segformer/checkpoint-988"
+  # "./output/checkpoints/2026_06_26_14_21_mask2former/checkpoint-624"
+  # both train datasets
 
-data:
-  name: whu  # paris, whu, sud
-  path: "/data/whu3d-dataset-wo-test-label" # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"
+
+data: 
+  name: whu  # paris, whu, sud, merged_whu_sud
+  path: "/data/whu3d-dataset-wo-test-label"
+  path_2: "/data/SUD-ROAD"
+  # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"
   # "C:/Users/tippolito/Data/SUD-ROAD"
   # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"  
   # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d",
