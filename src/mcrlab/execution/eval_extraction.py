@@ -201,64 +201,66 @@ def ground_truth_extraction_2d(config):
             )
 
             if original_cluster_pcs is None:
-                continue
+                gt_channels = np.zeros(
+                    (patch_height, patch_width, 3), dtype=np.float32
+                )
+            else:
+                (center_coordinates_square, _, points_square, _, _, _, _) = center_estimation_3d_pipeline_debugging(
+                    None,
+                    method="least_square",
+                    extended_return=True,
+                    should_visualize=False,
+                    clusters=original_cluster_pcs,
+                    label_value=label_value,
+                )
 
-            (center_coordinates_square, _, points_square, _, _, _, _) = center_estimation_3d_pipeline_debugging(
-                None,
-                method="least_square",
-                extended_return=True,
-                should_visualize=False,
-                clusters=original_cluster_pcs,
-                label_value=label_value,
-            )
+                # Init mask (Format HxWxC for the saving/training)
+                # Channel 0: Binary, Channel 1: Heatmap
+                gt_channels = np.zeros(
+                    (patch_height, patch_width, 3), dtype=np.float32
+                )
 
-            # Init mask (Format HxWxC for the saving/training)
-            # Channel 0: Binary, Channel 1: Heatmap
-            gt_channels = np.zeros(
-                (patch_height, patch_width, 3), dtype=np.float32
-            )
+                for cur_manhole_idx in range(len(points_square)):
+                    if config.eval_extraction.center_algorithm == "squares":
+                        cur_center = center_coordinates_square[cur_manhole_idx]
+                    else:
+                        points_ = points_square[cur_manhole_idx]
+                        cur_center = np.array(
+                            [
+                                np.mean(points_[:, 0]),
+                                np.mean(points_[:, 1]),
+                                np.mean(points_[:, 2]),
+                            ]
+                        )
 
-            for cur_manhole_idx in range(len(points_square)):
-                if config.eval_extraction.center_algorithm == "squares":
-                    cur_center = center_coordinates_square[cur_manhole_idx]
-                else:
-                    points_ = points_square[cur_manhole_idx]
-                    cur_center = np.array(
-                        [
-                            np.mean(points_[:, 0]),
-                            np.mean(points_[:, 1]),
-                            np.mean(points_[:, 2]),
-                        ]
+                    # important remapping logic from projection of input images
+                    # use np.floor() exactly like in `bev_projection` function!
+                    pixel_x = int(np.floor((cur_center[0] - xstart) / resolution))
+                    pixel_y = int(np.floor((cur_center[1] - ystart) / resolution))
+
+                    # make sure the values really lay inside of the image/map
+                    pixel_x = np.clip(pixel_x, 0, patch_width - 1)
+                    pixel_y = np.clip(pixel_y, 0, patch_height - 1)
+
+                    # Channel 0: set binary logic (careful: indeces y, x same to Numba prjection)
+                    gt_channels[pixel_y, pixel_x, 0] = 1.0
+
+                    # Channel 1: generate and accumulate Heatmap
+                    # Sigma=3 means at Res=0.01 a radius from round about 3cm around the center
+                    heatmap = generate_gaussian_heatmap(
+                        (patch_height, patch_width), (pixel_y, pixel_x), sigma=5
                     )
-
-                # important remapping logic from projection of input images
-                # use np.floor() exactly like in `bev_projection` function!
-                pixel_x = int(np.floor((cur_center[0] - xstart) / resolution))
-                pixel_y = int(np.floor((cur_center[1] - ystart) / resolution))
-
-                # make sure the values really lay inside of the image/map
-                pixel_x = np.clip(pixel_x, 0, patch_width - 1)
-                pixel_y = np.clip(pixel_y, 0, patch_height - 1)
-
-                # Channel 0: set binary logic (careful: indeces y, x same to Numba prjection)
-                gt_channels[pixel_y, pixel_x, 0] = 1.0
-
-                # Channel 1: generate and accumulate Heatmap
-                # Sigma=3 means at Res=0.01 a radius from round about 3cm around the center
-                heatmap = generate_gaussian_heatmap(
-                    (patch_height, patch_width), (pixel_y, pixel_x), sigma=5
-                )
-                gt_channels[:, :, 1] = np.maximum(
-                    gt_channels[:, :, 1], heatmap
-                )
-                # Channel 2: generate and accumulate Heatmap (but greater -> 60 for 60 cm average size)
-                # Sigma=3 means at Res=0.01 a radius from round about 3cm around the center
-                heatmap = generate_gaussian_heatmap(
-                    (patch_height, patch_width), (pixel_y, pixel_x), sigma=60
-                )
-                gt_channels[:, :, 2] = np.maximum(
-                    gt_channels[:, :, 2], heatmap
-                )
+                    gt_channels[:, :, 1] = np.maximum(
+                        gt_channels[:, :, 1], heatmap
+                    )
+                    # Channel 2: generate and accumulate Heatmap (but greater -> 60 for 60 cm average size)
+                    # Sigma=3 means at Res=0.01 a radius from round about 3cm around the center
+                    heatmap = generate_gaussian_heatmap(
+                        (patch_height, patch_width), (pixel_y, pixel_x), sigma=60
+                    )
+                    gt_channels[:, :, 2] = np.maximum(
+                        gt_channels[:, :, 2], heatmap
+                    )
 
             # save as .npy (Dataset_PCID_X_Y.npy)
             file_name = f"{dataset_name}_{cur_pc_id}_{xstart}_{ystart}.npy"

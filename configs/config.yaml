@@ -1,7 +1,7 @@
-mode: test    # custom_train, train, test, inference, tryout, preprocessing, eval_extraction
+mode: train    # custom_train, train, test, inference, tryout, preprocessing, eval_extraction
 
 
-curstom_train:
+custom_train:
   batch_size: 8 # 12
   epochs: 10
   learning_rate: 0.001
@@ -26,6 +26,7 @@ train:
   checkpoint_best_model: True
   val_steps: 5
   lr_scheduler: None
+  exp_name: "higherLR_SGD"
 
 test:
   metrices: []
@@ -36,10 +37,13 @@ preprocessing:
 
 eval_extraction:
     names: ["whu", "sud"]
-    data_paths: ["C:/Users/tippolito/Data/whu3d-dataset-wo-test-label", "C:/Users/tippolito/Data/SUD-ROAD"]  # ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"] # 
+    data_paths: ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"]
+    # ["C:/Users/tippolito/Data/whu3d-dataset-wo-test-label", "C:/Users/tippolito/Data/SUD-ROAD"]  
+    # ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"] # 
     preprocessed: True
     type: "all"
-    save_path: "./mcr_maps" # "./output/eval_ground_truths_mean.json"
+    save_path: "/data/2d_gt_patches"
+    # "./mcr_maps" # "./output/eval_ground_truths_mean.json"
     center_algorithm: "mean"    # "squares", "mean"
     generate_2d_gt_maps: True
 
@@ -49,17 +53,21 @@ inference:
 
 model:
   name: "unet"  # "segformer" "mask2former" "unet"
-  check_point_path: "./output/checkpoints/2026_06_22_20_31_unet/checkpoint-1196"
+  check_point_path: None
   # None
   # normal
-  # "./output/checkpoints/2026_06_22_20_31_unet/checkpoint-1196"
-  # "./output/checkpoints/2026_06_22_19_00_segformer/checkpoint-1196"
-  # "./output/checkpoints/2026_06_25_14_11_mask2former/checkpoint-1196"
+  # "./output/checkpoints/2026_06_22_20_31_unet_whu/checkpoint-1196"
+  # "./output/checkpoints/2026_06_22_19_00_segformer_whu/checkpoint-1196"
+  # "./output/checkpoints/2026_06_25_14_11_mask2former_whu/checkpoint-1196"
   # higher lr
-  # "./output/checkpoints/2026_06_27_10_44_unet/checkpoint-741"
-  # "./output/checkpoints/2026_06_27_09_04_segformer/checkpoint-988"
-  # "./output/checkpoints/2026_06_26_14_21_mask2former/checkpoint-624"
+  # "./output/checkpoints/2026_06_27_10_44_unet_whu/checkpoint-1196"  # 741
+  # "./output/checkpoints/2026_06_27_09_04_segformer_whu/checkpoint-1196"  # 988
+  # "./output/checkpoints/2026_06_26_14_21_mask2former_whu/checkpoint-1196"  # 624
   # both train datasets
+  # ...
+  # on only SUD
+  # ...
+  # different loss? (custom trainer works now?)
 
 
 data: 
@@ -73,7 +81,7 @@ data:
   # "D:/data/whu3d-dataset-wo-test-label"
   preprocessed: True
   type: all   # train, test, val, all, load_unsplitted (sud special)
-  heatmap_path: None  # "./data/2d_gt_patches"  # None
+  heatmap_path: "/data/2d_gt_patches"  # "./data/2d_gt_patches"  # None
   used_heatmap_channel: 2
 
 device: cpu  # cpu, cuda, cuda:0

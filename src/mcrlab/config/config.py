@@ -45,6 +45,7 @@ class TrainConfig(BaseModel):
     checkpoint_best_model: bool
     val_steps: int
     lr_scheduler: Union[str, None]
+    exp_name: str
 
 
 
@@ -95,7 +96,7 @@ class InferenceConfig(BaseModel):
 
 class Config(BaseModel):
     mode: str
-    curstom_train: CustomTrainConfig
+    custom_train: CustomTrainConfig
     train: TrainConfig
     test: TestConfig
     inference: InferenceConfig

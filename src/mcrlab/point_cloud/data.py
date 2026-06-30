@@ -1,6 +1,8 @@
 # -----------
 # > Imports <
 # -----------
+import matplotlib.pyplot as plt
+
 import os
 import shutil
 import gc
@@ -1224,15 +1226,21 @@ class BEVDataset(Dataset):
             # load additional Heatmap GT
             if self.heatmap_gt_path is not None:
                 cur_heatmap_gt_path = os.path.join(self.heatmap_gt_path, f"{data_name}_{pc_id}_{x_start}_{y_start}.npy")
+                # print(f"Check the path, it is right?: {cur_heatmap_gt_path}")
                 if os.path.exists(cur_heatmap_gt_path):
                     gt_2d_map = np.load(cur_heatmap_gt_path)
+                    # print("Did found Heatmap!")
                 else:
+                    raise ValueError("All Heatmaps should be found!!!")
+                    # print("Did NOT found Heatmap!")
+                    # FIXME -> why can't find heatmaps?
                     gt_2d_map = np.zeros(shape=(500, 500, 3))
                 # y_np = y_np.reshape((500, 500, 1))
                 # y_np = np.concatenate((y_np, gt_2d_map), axis=-1)
                 target_channel = gt_2d_map[:, :, self.used_heatmap_channel].reshape((500, 500))  # .unsqueeze()
-                target_channel[y_np == 255] = 255
-                y_np = target_channel
+                # add missing values?
+                # target_channel[y_np == 255] = 255
+                y_np = target_channel # * 255
 
             if self.augment:
                 augmented = self.aug_pipeline(image=x_np, mask=y_np)
@@ -1254,7 +1262,8 @@ class BEVDataset(Dataset):
                     # HF preprocessors expect numpy (H, W, C) or PIL
                     x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
                     if self.pass_label_in_preprocessor:
-                        y_np = y_np.astype(np.int32)
+                        if self.heatmap_gt_path is None:
+                            y_np = y_np.astype(np.int32)
                         # print(f"Debugging 2 y shape before preprocessing: {y_np.shape}")
                         processed = self.preprocessor(
                             images=x_np,
@@ -1265,11 +1274,15 @@ class BEVDataset(Dataset):
                         # print(f"Debugging mask labels shape before preprocessing: {processed["mask_labels"][0].shape}")
                         # print(f"Debugging class_labels shape before preprocessing: {processed["class_labels"][0].shape}")
                         x = processed["pixel_values"].squeeze(0)  # (C, H, W)
+                        if self.heatmap_gt_path is None:
+                            y = torch.from_numpy(y_np).long()
+                        else:
+                            y = torch.from_numpy(y_np).float()
                         return {
                             "pixel_values": x,
                             "mask_labels": processed["mask_labels"][0],    # squeeze batch dim
                             "class_labels": processed["class_labels"][0],
-                            "labels": torch.from_numpy(y_np).long(),
+                            "labels": y,
                             "meta": meta
                         }
                     else:
@@ -1285,7 +1298,10 @@ class BEVDataset(Dataset):
                     x[:2] = (x[:2] - x[:2].mean()) / (x[:2].std() + 1e-6)
                 assert x.ndim == 3
 
-            y = torch.from_numpy(y_np).long()
+            if self.heatmap_gt_path is None:
+                y = torch.from_numpy(y_np).long()
+            else:
+                y = torch.from_numpy(y_np).float()
             assert y.ndim == 2
 
             return {
@@ -1306,6 +1322,7 @@ class BEVDataset(Dataset):
         new_file_paths = []
 
         all_non_manhole_paths = []
+        plot_amount = 0
 
         for idx in range(len(self.file_paths)):
             cur_file_path = self.file_paths[idx]
@@ -1353,7 +1370,11 @@ class BEVDataset(Dataset):
 
             if self.has_labels:
                 x = torch.from_numpy(tile[:-1]).float()
-                y = torch.from_numpy(tile[-1]).long()
+                if self.heatmap_gt_path is None:
+                    y = torch.from_numpy(tile[-1]).long()
+                else:
+                    y = torch.from_numpy(tile[-1]).float()
+                
                 assert x.ndim == 3
                 assert y.ndim == 2
                 yield {
@@ -1392,7 +1413,10 @@ def bev_gen_wrapper(tiles, metas, has_labels=False):
 
         if has_labels:
             x = torch.from_numpy(tile[:-1]).float()
-            y = torch.from_numpy(tile[-1]).long()
+            if self.heatmap_gt_path is None:
+                y = torch.from_numpy(tile[-1]).long()
+            else:
+                y = torch.from_numpy(tile[-1]).float()
             assert y.ndim == 2
             yield {
                 "pixel_values": x,   # (C, H, W)

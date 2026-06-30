@@ -155,13 +155,24 @@ def evaluate_hf_pipeline(config):
     model_name = config.model.name.lower()
     batch_size = config.test.batch_size  # or maybe set a specific eval_batch_size?
 
+    heatmap_path = config.data.heatmap_path
+    used_heatmap_channel = config.data.used_heatmap_channel
+    using_heatmap_as_gt = not(heatmap_path is None)
+
+    ignore_index = 255
+    num_labels = 2
+    if using_heatmap_as_gt:
+        ignore_index = -999
+        num_labels = 1
+        is_heatmap_gt = True
+
     # Load the TRAINED model checkpoint
     checkpoint_path = config.model.check_point_path
     if not checkpoint_path or checkpoint_path == "None":
         raise ValueError("Please provide the path to your trained checkpoint in config.model.check_point_path")
 
     print(f"Loading trained model and processor from: {checkpoint_path}")
-    model, processor = get_model_and_processor(model_name, checkpoint_path, mode="test")
+    model, processor = get_model_and_processor(model_name, checkpoint_path, mode="test", num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt))
 
     parts = Path(checkpoint_path).parts
     exp_name = parts[-2]
@@ -171,20 +182,50 @@ def evaluate_hf_pipeline(config):
     used_heatmap_channel = config.data.used_heatmap_channel
     pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
     
-    test_loader_raw = get_data_loader(
-        config.data.name, 
-        config.data.path, 
-        type="test",
-        transform=get_basic_transform(),
-        batch_size=batch_size, 
-        shuffle=False, 
-        num_workers=4,
-        preprocessed=True, 
-        return_train_format=True,
-        return_dataset=True,
-    )
-    
-    all_test_paths = test_loader_raw.point_cloud_paths
+    if config.data.name == "merged_whu_sud":
+        test_loader_raw = get_data_loader(
+            "whu", 
+            config.data.path, 
+            type="test",
+            transform=get_basic_transform(),
+            batch_size=batch_size, 
+            shuffle=False, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=True,
+        )
+        all_test_paths = test_loader_raw.point_cloud_paths
+
+        test_loader_raw = get_data_loader(
+            "sud", 
+            config.data.path, 
+            type="test",
+            transform=get_basic_transform(),
+            batch_size=batch_size, 
+            shuffle=False, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=True,
+        )
+        all_test_paths.extend(test_loader_raw.point_cloud_paths)
+    else:
+        test_loader_raw = get_data_loader(
+            config.data.name, 
+            config.data.path, 
+            type="test",
+            transform=get_basic_transform(),
+            batch_size=batch_size, 
+            shuffle=False, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=True,
+        )
+        
+        all_test_paths = test_loader_raw.point_cloud_paths
+
     test_dataset = BEVDataset(
         path=all_test_paths, 
         file_paths=[], 
@@ -234,7 +275,7 @@ def evaluate_hf_pipeline(config):
     #     )
     #     return compute_metrics(preds=preds, labels=labels)
 
-    def compute_metrics_fn(eval_pred, model_name, processor, batch_size):
+    def compute_metrics_fn(eval_pred, model_name, processor, batch_size, ignore_index=255, is_heatmap_gt=False):
         if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
             outputs = eval_pred.predictions
             labels = eval_pred.label_ids
@@ -292,7 +333,7 @@ def evaluate_hf_pipeline(config):
         if isinstance(labels, torch.Tensor):
             labels = labels.detach().cpu().numpy()
 
-        return compute_metrics(preds=preds, labels=labels)
+        return compute_metrics(preds=preds, labels=labels, ignore_index=ignore_index, is_heatmap_gt=is_heatmap_gt)
 
     # Initialize Trainer for Evaluation Only
     eval_args = HFTrainingArguments(
@@ -311,7 +352,9 @@ def evaluate_hf_pipeline(config):
             compute_metrics_fn,
             model_name=model_name,
             processor=processor,
-            batch_size=batch_size
+            batch_size=batch_size,
+            ignore_index=ignore_index, 
+            is_heatmap_gt=is_heatmap_gt
         ),
         preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else logits,
         # preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,
