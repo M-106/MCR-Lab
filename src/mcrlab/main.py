@@ -61,8 +61,8 @@ def main():
     
     elif config.mode == "eval_extraction":
         if config.eval_extraction.generate_2d_gt_maps:
-            from mcrlab.execution.eval_extraction import ground_truth_extraction_2d
-            ground_truth_extraction_2d(config)
+            from mcrlab.execution.eval_extraction import ground_truth_extraction_heatmap
+            ground_truth_extraction_heatmap(config)
         else:
             from mcrlab.execution.eval_extraction import ground_truth_extraction
             ground_truth_extraction(config)

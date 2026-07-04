@@ -157,14 +157,18 @@ def evaluate_hf_pipeline(config):
 
     heatmap_path = config.data.heatmap_path
     used_heatmap_channel = config.data.used_heatmap_channel
-    using_heatmap_as_gt = not(heatmap_path is None)
+    if heatmap_path is None or heatmap_path == "None":
+        using_heatmap_as_gt = False
+        heatmap_path = None
+    else:
+        using_heatmap_as_gt = True
 
     ignore_index = 255
     num_labels = 2
     if using_heatmap_as_gt:
         ignore_index = -999
         num_labels = 1
-        is_heatmap_gt = True
+        using_heatmap_as_gt = True
 
     # Load the TRAINED model checkpoint
     checkpoint_path = config.model.check_point_path
@@ -172,7 +176,7 @@ def evaluate_hf_pipeline(config):
         raise ValueError("Please provide the path to your trained checkpoint in config.model.check_point_path")
 
     print(f"Loading trained model and processor from: {checkpoint_path}")
-    model, processor = get_model_and_processor(model_name, checkpoint_path, mode="test", num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt))
+    model, processor = get_model_and_processor(model_name, checkpoint_path, mode="test", num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt)
 
     parts = Path(checkpoint_path).parts
     exp_name = parts[-2]
@@ -275,7 +279,7 @@ def evaluate_hf_pipeline(config):
     #     )
     #     return compute_metrics(preds=preds, labels=labels)
 
-    def compute_metrics_fn(eval_pred, model_name, processor, batch_size, ignore_index=255, is_heatmap_gt=False):
+    def compute_metrics_fn(eval_pred, model_name, processor, batch_size, ignore_index=255, using_heatmap_as_gt=False):
         if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
             outputs = eval_pred.predictions
             labels = eval_pred.label_ids
@@ -333,7 +337,7 @@ def evaluate_hf_pipeline(config):
         if isinstance(labels, torch.Tensor):
             labels = labels.detach().cpu().numpy()
 
-        return compute_metrics(preds=preds, labels=labels, ignore_index=ignore_index, is_heatmap_gt=is_heatmap_gt)
+        return compute_metrics(preds=preds, labels=labels, ignore_index=ignore_index, using_heatmap_as_gt=using_heatmap_as_gt)
 
     # Initialize Trainer for Evaluation Only
     eval_args = HFTrainingArguments(
@@ -354,7 +358,7 @@ def evaluate_hf_pipeline(config):
             processor=processor,
             batch_size=batch_size,
             ignore_index=ignore_index, 
-            is_heatmap_gt=is_heatmap_gt
+            using_heatmap_as_gt=using_heatmap_as_gt
         ),
         preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else logits,
         # preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,
@@ -416,6 +420,33 @@ def evaluate_hf_pipeline(config):
 
     return results
 
+
+
+def predict_single_sample(model, nodel_name, processor, image, device="cuda"):
+
+    model.to(device)
+    model.eval()
+
+    # Preprocess
+    # Adjust inputs based on your specific model requirements
+    inputs = processor(images=image, return_tensors="pt").to(device)
+
+    # Inference
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    # Post-process (using your existing helper)
+    # The 'target_sizes' is usually the original image size (H, W)
+    target_sizes = [image.size[::-1]] # PIL size is (W, H), need (H, W)
+    
+    prediction = get_segmentation_prediction(
+        outputs, 
+        model_name=model_name,
+        processor=processor, 
+        target_sizes=target_sizes
+    )
+
+    return prediction
 
 
 def test(config):

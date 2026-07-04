@@ -60,10 +60,10 @@ def polygon_iou(poly1, poly2):
 # > Metrices <
 # ------------
 
-def evaluate_object_wise(preds, labels, iou_threshold, ignore_index=255, debug_plot_path=None, is_heatmap_gt=False):
+def evaluate_object_wise(preds, labels, iou_threshold, ignore_index=255, debug_plot_path=None, using_heatmap_as_gt=False):
     valid_mask = (labels != ignore_index)
     
-    if is_heatmap_gt:
+    if using_heatmap_as_gt:
         preds_binary = ((preds >= 0.5) & valid_mask).astype(np.uint8)
         labels_binary = ((labels >= 0.5) & valid_mask).astype(np.uint8)
     else:
@@ -222,7 +222,7 @@ def evaluate_object_wise(preds, labels, iou_threshold, ignore_index=255, debug_p
 
 
 
-def compute_metrics(preds, labels, iou_threshold_start=0.0, iou_threshold_end=0.95, iou_threshold_step=0.05, ignore_index=255, is_heatmap_gt=False):
+def compute_metrics(preds, labels, iou_threshold_start=0.0, iou_threshold_end=0.95, iou_threshold_step=0.05, ignore_index=255, using_heatmap_as_gt=False):
     try:
     # logits = eval_pred.predictions
     # labels = eval_pred.label_ids
@@ -289,7 +289,7 @@ def compute_metrics(preds, labels, iou_threshold_start=0.0, iou_threshold_end=0.
                     iou_threshold=cur_iou_threshold,
                     ignore_index=ignore_index,
                     debug_plot_path=plot_path,
-                    is_heatmap_gt=is_heatmap_gt
+                    using_heatmap_as_gt=using_heatmap_as_gt
                 )
                 total_tp += obj_metrics["tp_objects_count"]
                 total_true += obj_metrics["true_objects_count"]
@@ -326,7 +326,7 @@ def compute_metrics(preds, labels, iou_threshold_start=0.0, iou_threshold_end=0.
         # create mask for ignroe index
         mask = labels != ignore_index
 
-        if is_heatmap_gt:
+        if using_heatmap_as_gt:
             preds_binarized = (preds >= 0.5).astype(np.uint8)
             labels_binarized = (labels >= 0.5).astype(np.uint8)
             

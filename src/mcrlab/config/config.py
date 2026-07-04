@@ -89,6 +89,7 @@ class EvalExtractionConfig(BaseModel):
     save_path: str
     center_algorithm: str
     generate_2d_gt_maps: bool
+    generate_also_3d_gt_maps: bool
 
 class InferenceConfig(BaseModel):
     checkpoint_path: str
@@ -100,7 +101,6 @@ class Config(BaseModel):
     train: TrainConfig
     test: TestConfig
     inference: InferenceConfig
-    # inference: InferenceConfig
     preprocessing: PreprocessingConfig
     eval_extraction: EvalExtractionConfig
     model: ModelConfig

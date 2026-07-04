@@ -47,7 +47,7 @@ from mcrlab.custom_hf.unet import UnetForSemanticSegmentation, UnetConfig
 # ----------------------
 
 class ImagePlottingCallback(TrainerCallback):
-    def __init__(self, val_dataset, model_name, processor, config, save_name, num_samples=1, pre_name="", clear_path=True, batch_size=5, ignore_index=255, is_heatmap_gt=False):
+    def __init__(self, val_dataset, model_name, processor, config, save_name, num_samples=1, pre_name="", clear_path=True, batch_size=5, ignore_index=255, using_heatmap_as_gt=False):
         super().__init__()
         self.val_dataset = val_dataset
         self.model_name = model_name.lower()
@@ -57,7 +57,7 @@ class ImagePlottingCallback(TrainerCallback):
         self.pre_name = pre_name
         self.batch_size = batch_size
         self.ignore_index = ignore_index
-        self.is_heatmap_gt = is_heatmap_gt
+        self.using_heatmap_as_gt = using_heatmap_as_gt
         
         # create folderfor saving
 
@@ -120,7 +120,7 @@ class ImagePlottingCallback(TrainerCallback):
                     model_name=self.model_name,
                     processor=self.processor,
                     target_sizes=target_sizes,
-                    is_heatmap_gt=self.is_heatmap_gt
+                    using_heatmap_as_gt=self.using_heatmap_as_gt
                 )
                 
                 input_img = pixel_values[0].cpu().numpy().transpose(1, 2, 0)
@@ -153,7 +153,7 @@ class ImagePlottingCallback(TrainerCallback):
                 #     print(f"Value: {val:<5} | Pixel Amount: {count:,}")
 
                 heatmap_threshold = 0.5 if gt_mask.max() <= 1.0 else 127.5
-                if self.is_heatmap_gt:
+                if self.using_heatmap_as_gt:
                     heatmap_threshold = 0.5 if gt_mask.max() <= 1.0 else 127.5 # Falls Werte 0-255 sind
                 
                     if np.sum(gt_mask >= heatmap_threshold) < 50:
@@ -189,7 +189,7 @@ class ImagePlottingCallback(TrainerCallback):
                 # pred_mask: (125, 125) 
 
                 # create plot
-                if self.is_heatmap_gt:
+                if self.using_heatmap_as_gt:
                     cols = 5
                 else:
                     cols = 6
@@ -215,7 +215,7 @@ class ImagePlottingCallback(TrainerCallback):
 
                 # Image 4 - Ground Truth
                 cur_idx += 1
-                if self.is_heatmap_gt:
+                if self.using_heatmap_as_gt:
                     vmax = 1  # 255
                 else:
                     vmax = 1
@@ -234,7 +234,7 @@ class ImagePlottingCallback(TrainerCallback):
                 # FIXME -> also difference? -> be careful when substracting because of dtype
 
                 # Image 5 - Difference
-                if not self.is_heatmap_gt:
+                if not self.using_heatmap_as_gt:
                     cur_idx += 1
                     diff = (gt_mask != pred_mask).astype(np.uint8)
                     # diff = np.abs(gt_mask.astype(np.int64) - pred_mask.astype(np.int64))
@@ -412,7 +412,7 @@ def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
 
 
 
-def get_segmentation_prediction(outputs, model_name, processor=None, target_sizes=None, is_heatmap_gt=False):
+def get_segmentation_prediction(outputs, model_name, processor=None, target_sizes=None, using_heatmap_as_gt=False):
     model_name = model_name.lower()
 
     is_numpy_input = isinstance(outputs, np.ndarray)
@@ -438,11 +438,11 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
         
 
         # upscaling because: SegFormer logits are 1/4 of input size
-        if model_name in ["segformer", "unet"] and hasattr(outputs, "logits") and processor is not None and not is_heatmap_gt:
+        if model_name in ["segformer", "unet"] and hasattr(outputs, "logits") and processor is not None and not using_heatmap_as_gt:
             preds_list = processor.post_process_semantic_segmentation(outputs, target_sizes=target_sizes)
             preds = torch.stack(preds_list)
         else:
-            if is_heatmap_gt:
+            if using_heatmap_as_gt:
                 preds = torch.sigmoid(logits_tensor)
             else:
                 preds = logits_tensor.argmax(dim=1) # (B, W, H)
@@ -451,10 +451,10 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
                 size = tuple(int(x) for x in target_sizes[0])
         
                 # Interpolate braucht 4D: (B, 1, H, W)
-                preds = preds if is_heatmap_gt else preds.unsqueeze(1).float()
-                mode = "bilinear" if is_heatmap_gt else "nearest"
+                preds = preds if using_heatmap_as_gt else preds.unsqueeze(1).float()
+                mode = "bilinear" if using_heatmap_as_gt else "nearest"
                 preds = F.interpolate(preds, size=size, mode=mode)
-                if not is_heatmap_gt:
+                if not using_heatmap_as_gt:
                     preds = preds.squeeze(1).long()
                 else:
                     preds = preds.squeeze(1)
@@ -476,17 +476,17 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
             else:
                 logits_tensor = outputs
 
-            if is_heatmap_gt:
+            if using_heatmap_as_gt:
                 preds = torch.sigmoid(logits_tensor)
             else:
                 preds = logits_tensor.argmax(dim=1)
         
             if target_sizes is not None:
                 size = tuple(int(x) for x in target_sizes[0])
-                preds = preds if is_heatmap_gt else preds.unsqueeze(1).float()
-                mode = "bilinear" if is_heatmap_gt else "nearest"
+                preds = preds if using_heatmap_as_gt else preds.unsqueeze(1).float()
+                mode = "bilinear" if using_heatmap_as_gt else "nearest"
                 preds = F.interpolate(preds, size=size, mode=mode)
-                if not is_heatmap_gt:
+                if not using_heatmap_as_gt:
                     preds = preds.squeeze(1).long()
                 else:
                     preds = preds.squeeze(1)
@@ -556,7 +556,11 @@ def train_hf_pipeline(config):
 
     heatmap_path = config.data.heatmap_path
     used_heatmap_channel = config.data.used_heatmap_channel
-    using_heatmap_as_gt = not(heatmap_path is None)
+    if heatmap_path is None or heatmap_path == "None":
+        using_heatmap_as_gt = False
+        heatmap_path = None
+    else:
+        using_heatmap_as_gt = True
 
     ignore_index = 255
     num_labels = 2
@@ -567,7 +571,7 @@ def train_hf_pipeline(config):
         num_labels = 1
         metric_for_best_model = "eval_mae_score"
         greater_is_better = False
-        is_heatmap_gt = True
+        using_heatmap_as_gt = True
 
     now = datetime.now()
     year = now.year
@@ -714,7 +718,7 @@ def train_hf_pipeline(config):
         pre_name="finetuning",
         batch_size=batch_size,
         ignore_index=ignore_index,
-        is_heatmap_gt=using_heatmap_as_gt
+        using_heatmap_as_gt=using_heatmap_as_gt
     )
 
     # Helper Functions
@@ -735,7 +739,7 @@ def train_hf_pipeline(config):
                 "labels": labels
             }
 
-    def compute_metrics_fn(eval_pred, model_name, processor, batch_size, ignore_index=255, is_heatmap_gt=False):
+    def compute_metrics_fn(eval_pred, model_name, processor, batch_size, ignore_index=255, using_heatmap_as_gt=False):
         if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
             # raise ValueError("This path is unexpected might need to revert? or use model name to handle!")
             outputs = eval_pred.predictions
@@ -813,7 +817,7 @@ def train_hf_pipeline(config):
                     model_name=model_name,
                     processor=processor,
                     target_sizes=target_sizes,
-                    is_heatmap_gt=is_heatmap_gt
+                    using_heatmap_as_gt=using_heatmap_as_gt
                 )
             else:
                 # raise ValueError("DEBUGGING STOP: did not expect to go here...")
@@ -838,7 +842,7 @@ def train_hf_pipeline(config):
                     model_name=model_name,
                     processor=processor,
                     target_sizes=target_sizes,
-                    is_heatmap_gt=is_heatmap_gt
+                    using_heatmap_as_gt=using_heatmap_as_gt
                 )
 
                 # drop padded elements, right??
@@ -864,10 +868,10 @@ def train_hf_pipeline(config):
                 model_name=model_name,
                 processor=processor,
                 target_sizes=target_sizes,
-                is_heatmap_gt=is_heatmap_gt
+                using_heatmap_as_gt=using_heatmap_as_gt
             )
 
-        return compute_metrics(preds=preds, labels=labels, ignore_index=ignore_index, is_heatmap_gt=is_heatmap_gt)
+        return compute_metrics(preds=preds, labels=labels, ignore_index=ignore_index, using_heatmap_as_gt=using_heatmap_as_gt)
 
     # FIXME -> make many of the settings adjustable via config
     training_args = HFTrainingArguments(
@@ -900,20 +904,20 @@ def train_hf_pipeline(config):
         use_cpu=False
     )
 
-    optimizer = SGD(
-        model.parameters(), 
-        lr=1e-3, 
-        momentum=0.9, 
-        weight_decay=1e-4
-    )
-
-    # optimizer = AdamW(
+    # optimizer = SGD(
     #     model.parameters(), 
-    #     lr=1e-3,
-    #     betas=(0.9, 0.999),
-    #     eps=1e-8,
-    #     weight_decay=0.01
+    #     lr=1e-4, 
+    #     momentum=0.9, 
+    #     weight_decay=1e-4
     # )
+
+    optimizer = AdamW(
+        model.parameters(), 
+        lr=1e-3,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.01
+    )
 
     total_train_steps = int((len(train_dataset) / batch_size) * training_args.num_train_epochs)
 
@@ -938,7 +942,7 @@ def train_hf_pipeline(config):
             processor=processor,
             batch_size=batch_size,
             ignore_index=ignore_index, 
-            is_heatmap_gt=is_heatmap_gt
+            using_heatmap_as_gt=using_heatmap_as_gt
         ),
         callbacks=[plotting_callback],  # , LogKeysCallback()
         # preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,  # only keep class + mask logits
