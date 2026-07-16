@@ -62,11 +62,11 @@ def add_entry(json_data, cur_point, cur_dataset, cur_pc_id):
 def ground_truth_extraction(config):
     print("\n --- Center Ground Truth Extraction (for Evaluation) ---")
 
-    json_data = list()
-
     label_value = 1
 
     for cur_idx in range(len(config.eval_extraction.data_paths)):
+        json_data = list()
+
         cur_dataset = config.eval_extraction.names[cur_idx]
 
         data_loader = get_data_loader(config.eval_extraction.names[cur_idx], 
@@ -102,15 +102,30 @@ def ground_truth_extraction(config):
 
             print("\n> Least Square Circle Fit Check <\n")
             center_coordinates_square, radius_squares, points_square, cluster_point_clouds, _, error, _ = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=original_cluster_pcs, label_value=label_value)
+            center_coordinates_ransac, _, _, _, _, _, _ = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, should_visualize=False, clusters=original_cluster_pcs, label_value=label_value)
 
             for cur_manhole_idx in range(len(points_square)):
                 # cur_points = points_square[cur_manhole_idx]
                 if config.eval_extraction.center_algorithm == "squares":
                     cur_center = center_coordinates_square[cur_manhole_idx]
-                else:
+                elif config.eval_extraction.center_algorithm == "mean":
                     points_ = points_square[cur_manhole_idx]
                     cur_center = np.array([np.mean(points_[:, 0]), np.mean(points_[:, 1]), np.mean(points_[:, 2])])
+                elif config.eval_extraction.center_algorithm == "ransac":
+                    cur_center = center_coordinates_ransac[cur_manhole_idx]
+                elif config.eval_extraction.center_algorithm == "mesqra":
+                    cur_center_squares = center_coordinates_square[cur_manhole_idx]
+                    
+                    cur_center_ransac = center_coordinates_ransac[cur_manhole_idx]
+                    
+                    points_ = points_square[cur_manhole_idx]
+                    cur_center_mean = np.array([np.mean(points_[:, 0]), np.mean(points_[:, 1]), np.mean(points_[:, 2])])
                 
+                    # cur_center = np.mean(np.concatenate([cur_center_squares, cur_center_ransac, cur_center_mean], axis=0).reshape(3, -1), axis=0)
+                    cur_center = np.mean(np.stack([cur_center_squares, cur_center_ransac, cur_center_mean], axis=0), axis=0)
+                else:
+                    raise ValueError(f"Unknown center extraction algorith: '{config.eval_extraction.center_algorithm}'")
+
                 # cur_radius = radius_squares[cur_manhole_idx]
                 cur_point = {
                     "x": float(cur_center[0]), 
@@ -126,11 +141,12 @@ def ground_truth_extraction(config):
                     cur_pc_id=cur_pc_id
                 )
 
+        save_path = os.path.join(config.eval_extraction.save_path, f"{cur_dataset}_eval_ground_truths_{config.eval_extraction.center_algorithm}.json")
     
-    with open(config.eval_extraction.save_path, "w", encoding="utf-8") as json_file:
-        json.dump(json_data, json_file, indent=4, ensure_ascii=False)
+        with open(save_path, "w", encoding="utf-8") as json_file:
+            json.dump(json_data, json_file, indent=4, ensure_ascii=False)
 
-    print("Successfull finished!")
+        print("Successfull finished!")
 
 
 

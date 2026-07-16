@@ -268,8 +268,111 @@ def fit_circle_ransac_3D(points, use_projection=True):
 # Short explanation: FIXME
 # Cite: FIXME
 
-# FIXME
+def get_manhole_candidates_hough(bev_image, resolution=0.01):
+    """
+    Circle search in BEV via Circular Hough Transform.
+    """
+    # Extract intensity
+    intensity_map = bev_image[2, :, :]
+    intensity_8u = cv2.normalize(intensity_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    
+    # Apply light blur against sensor nois
+    blurred = cv2.medianBlur(intensity_8u, 5)
+    
+    # Dynamic Hough parameters via resolution
+    min_r_px = int(0.25 / resolution)
+    max_r_px = int(0.45 / resolution)
+    min_dist_px = int(1.5 / resolution) # min dist between 2 manholes
+    
+    # Apply Circular Hough Transform from OpenCV
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,              # accumulator-resolution
+        minDist=min_dist_px,
+        param1=50,           # Canny-Edge-Threshold
+        param2=25,           # Accumulator-Threshold (smaller = more false Positive)
+        minRadius=min_r_px,
+        maxRadius=max_r_px
+    )
+    
+    final_manholes = []
+    if circles is not None:
+        circles = np.round(circles[0, :]).astype(int)
+        for (cx, cy, r) in circles:
+            # creates a synthethic "Cluster"
+            diameter_m = 2 * r * resolution
+            
+            final_manholes.append({
+                "cluster": np.array([[cx, cy]]), # Only center
+                "center_px": np.array([cx, cy]),
+                "diameter_m": diameter_m,
+                "circularity": 1.0, # Hough garantees perfect circles
+                "score": 1.0
+            })
+            
+    return final_manholes
 
+
+
+def find_candidates_intensity_ransac_3d(point_cloud, eps=0.20, min_points=15, extract_ground=False):
+    """
+    Pure 3D-Pipeline.
+    (Use CSF Filtering), filter intensity outliers, apply clustering and ransac-circle.
+    """
+    # excract ground (via CSF)
+    if extract_ground:
+        ground_pc = CSFGroundFilterTransform(invert_z=False)(point_cloud)
+    else:
+        ground_pc = point_cloud
+    
+    points = ground_pc.point[get_coordinate_attribute(ground_pc)].numpy()
+    intensities = ground_pc.point[get_intensity_attribute(ground_pc)].numpy().ravel()
+    
+    # intensity filtering
+    lower_threshold = np.percentile(intensities, 10)
+    upper_threshold = np.percentile(intensities, 90)
+    
+    # mask for "not-Asphalt"
+    intensity_mask = (intensities < lower_threshold) | (intensities > upper_threshold)
+    filtered_points = points[intensity_mask]
+    
+    if len(filtered_points) < min_points:
+        return []
+        
+    # DBSCAN on 2D coordinates (X, Y) of the filtered points
+    # ignore Z -> street is flat
+    db = DBSCAN(eps=eps, min_samples=min_points).fit(filtered_points[:, :2])
+    labels = db.labels_
+    
+    detected_manholes = []
+    
+    for label in np.unique(labels):
+        if label == -1:
+            continue
+            
+        cluster_pts = filtered_points[labels == label]
+        
+        # Geometric plausibilty (via size)
+        xy = cluster_pts[:, :2]
+        bbox_size = xy.max(axis=0) - xy.min(axis=0)
+        
+        # filter, because manholes are small
+        if not (0.3 < bbox_size[0] < 1.2 and 0.3 < bbox_size[1] < 1.2):
+            continue
+            
+        # robust circle fitting via RANSAC
+        # FIXME -> maybe use least squares?
+        result = fit_circle_ransac_2d(xy) 
+        if result["success"]:
+            center_2d = result["center"]
+            radius = result["radius"]
+            
+            if 0.25 < radius < 0.45: # plausible radius
+                center_3d = np.array([center_2d[0], center_2d[1], np.median(cluster_pts[:, 2])])
+                detected_manholes.append((center_3d, radius, cluster_pts))
+                
+    return detected_manholes
 
 
 # -------------

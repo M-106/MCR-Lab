@@ -1700,6 +1700,8 @@ def ground_truth_2d_map_test(config):
         shutil.rmtree(path)
     os.makedirs(path, exist_ok=True)
 
+    not_found_files = []
+
     for idx, batch in enumerate(train_dataset):
         
         x = batch["pixel_values"].detach().cpu().permute(1, 2, 0).numpy()
@@ -1711,8 +1713,11 @@ def ground_truth_2d_map_test(config):
         file_name = os.path.split(all_file_paths[idx])[-1]
         pc_id, x_start, y_start = train_dataset.extract_grid_identifier(file_name)
 
-        gt_path = f"./2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}.npy"
+        # gt_path = f"./2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}.npy"
+        gt_path = f"/data/2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}.npy"
+        
         if not os.path.exists(gt_path):
+            not_found_files.append(gt_path)
             continue
 
         gt_2d_map = np.load(gt_path)
@@ -1729,11 +1734,11 @@ def ground_truth_2d_map_test(config):
 
         axes[2].imshow(gt_2d_map[:, :, 0], cmap="viridis")
         axes[2].axis("off")
-        axes[2].set_title("GT Binary Map")
+        axes[2].set_title("GT Heatmap (sigma 10)")
 
         axes[3].imshow(gt_2d_map[:, :, 1], cmap="viridis")
         axes[3].axis("off")
-        axes[3].set_title("GT Heatmap (sigma 5)")
+        axes[3].set_title("GT Heatmap (sigma 20)")
 
         axes[4].imshow(gt_2d_map[:, :, 2], cmap="viridis")
         axes[4].axis("off")
@@ -1743,10 +1748,11 @@ def ground_truth_2d_map_test(config):
 
         current_name = f"comparison_{config.data.name}_{pc_id}_{x_start}_{y_start}.png"
         plt.savefig(os.path.join(path, current_name))
+        # print(f"Saved at {os.path.join(path, current_name)}")
 
         plt.close(fig)
         
-
+    print(f"Did not found {len(not_found_files)} files.")
     print("Successfull finished!")
 
 
@@ -1896,8 +1902,8 @@ def tryout(config):
     # clustering_tryout(config)
     # make_split(config)
 
-    # ground_truth_2d_map_test(config)
-    ground_truth_2d_and_3d_map_test(config)
+    ground_truth_2d_map_test(config)
+    # ground_truth_2d_and_3d_map_test(config)
     
 
 

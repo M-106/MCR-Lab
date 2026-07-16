@@ -16,7 +16,7 @@ custom_train:
 # FIXME -> currently most of the trai args are not connected yet
 train:
   batch_size: 8 # 12
-  epochs: 10
+  epochs: 20
   learning_rate: 0.001
   use_amp: False
   scaler: None
@@ -26,7 +26,7 @@ train:
   checkpoint_best_model: True
   val_steps: 5
   lr_scheduler: None
-  exp_name: "AdamW_without_norm"
+  exp_name: "metrics_test"
 
 test:
   metrices: []
@@ -42,11 +42,12 @@ eval_extraction:
     # ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"] # 
     preprocessed: True
     type: "all"
-    save_path: "./output/eval_ground_truths_mean.json" # "/data/2d_gt_patches"  "./output/eval_ground_truths_mean.json"
+    save_path: "/data/"
+    # "./output/" # "/data/2d_gt_patches"  "./output/"
     # rm -rf ../data/2d_gt_patches && mkdir ../data/2d_gt_patches && chmod -R 777 ../data/2d_gt_patches
     # "./mcr_maps" # "./output/eval_ground_truths_mean.json"
-    center_algorithm: "mean"    # "squares", "mean"
-    generate_2d_gt_maps: False
+    center_algorithm: "mesqra"    # "squares", "mean", "ransac", "mesqra"
+    generate_2d_gt_maps: True
     generate_also_3d_gt_maps: False
 
 inference:
@@ -56,6 +57,7 @@ inference:
 model:
   name: "unet"  # "segformer" "mask2former" "unet"
   check_point_path: "./output/checkpoints/2026_07_01_19_47_unet_whu_AdamW_without_norm/checkpoint-1196"
+  # "./output/checkpoints/2026_07_01_19_47_unet_whu_AdamW_without_norm/checkpoint-1196"
   # None
   # normal
   # "./output/checkpoints/2026_06_22_20_31_unet_whu/checkpoint-1196"

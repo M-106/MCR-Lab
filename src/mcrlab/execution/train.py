@@ -120,7 +120,8 @@ class ImagePlottingCallback(TrainerCallback):
                     model_name=self.model_name,
                     processor=self.processor,
                     target_sizes=target_sizes,
-                    using_heatmap_as_gt=self.using_heatmap_as_gt
+                    using_heatmap_as_gt=self.using_heatmap_as_gt,
+                    as_prob=False
                 )
                 
                 input_img = pixel_values[0].cpu().numpy().transpose(1, 2, 0)
@@ -412,136 +413,240 @@ def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
 
 
 
-def get_segmentation_prediction(outputs, model_name, processor=None, target_sizes=None, using_heatmap_as_gt=False):
+def get_segmentation_prediction(outputs, model_name, processor=None, target_sizes=None, 
+                                using_heatmap_as_gt=False, as_prob=True, manhole_class_idx=1):
     model_name = model_name.lower()
 
     is_numpy_input = isinstance(outputs, np.ndarray)
     is_torch_input = isinstance(outputs, torch.Tensor)
 
+    # --- EXTRACT LOGITS & TRANSFOR IN TENSOR ---
     if model_name in ["segformer", "deeplabv3", "unet"]:
         if not is_numpy_input and hasattr(outputs, "logits"):
             logits = outputs.logits
         else:
             logits = outputs
-        
-        # raise RuntimeError(f"DEBUGGING STOP, logits/pred shape: {logits.shape}\nMin-Max ({logits.min()} - {logits.max()})")
-        # if isinstance(logits, np.ndarray):
-        #     preds = logits.argmax(axis=1)
-        # else:
-        #     preds = logits.argmax(dim=1)
-
+            
         if isinstance(logits, np.ndarray):
             logits_tensor = torch.from_numpy(logits)
         else:
             logits_tensor = logits.detach().cpu()
-
-        
-
-        # upscaling because: SegFormer logits are 1/4 of input size
-        if model_name in ["segformer", "unet"] and hasattr(outputs, "logits") and processor is not None and not using_heatmap_as_gt:
-            preds_list = processor.post_process_semantic_segmentation(outputs, target_sizes=target_sizes)
-            preds = torch.stack(preds_list)
-        else:
-            if using_heatmap_as_gt:
-                preds = torch.sigmoid(logits_tensor)
-            else:
-                preds = logits_tensor.argmax(dim=1) # (B, W, H)
-
-            if target_sizes is not None:
-                size = tuple(int(x) for x in target_sizes[0])
-        
-                # Interpolate braucht 4D: (B, 1, H, W)
-                preds = preds if using_heatmap_as_gt else preds.unsqueeze(1).float()
-                mode = "bilinear" if using_heatmap_as_gt else "nearest"
-                preds = F.interpolate(preds, size=size, mode=mode)
-                if not using_heatmap_as_gt:
-                    preds = preds.squeeze(1).long()
-                else:
-                    preds = preds.squeeze(1)
-
+            
     elif model_name in ["mask2former", "oneformer"]:
-
-        # print(f"\noutputs Len: {len(outputs)} Dtype: {type(outputs)}\nSub-Element type: {type(outputs[0])}\nShapes:")
-        # for cur_idx, cur_elem in enumerate(outputs):
-        #     if hasattr(cur_elem, "shape"):
-        #         shape_str = f"{cur_elem.shape}"
-        #     else:
-        #         shape_str = "none"
-        #     print(f"  - {cur_idx:02}:\n      dtype={type(cur_elem)}\n      shape={shape_str}")
-        # raise ValueError("DEBUGGING STOP")
-
         if is_numpy_input or is_torch_input:
-            if is_numpy_input:
-                logits_tensor = torch.from_numpy(outputs)
-            else:
-                logits_tensor = outputs
-
-            if using_heatmap_as_gt:
-                preds = torch.sigmoid(logits_tensor)
-            else:
-                preds = logits_tensor.argmax(dim=1)
-        
-            if target_sizes is not None:
-                size = tuple(int(x) for x in target_sizes[0])
-                preds = preds if using_heatmap_as_gt else preds.unsqueeze(1).float()
-                mode = "bilinear" if using_heatmap_as_gt else "nearest"
-                preds = F.interpolate(preds, size=size, mode=mode)
-                if not using_heatmap_as_gt:
-                    preds = preds.squeeze(1).long()
-                else:
-                    preds = preds.squeeze(1)
+            logits_tensor = torch.from_numpy(outputs) if is_numpy_input else outputs
         elif isinstance(outputs, tuple):
-            # debugging
-            # print(type(outputs), len(outputs) if isinstance(outputs, tuple) else outputs.shape)
-            # for i, o in enumerate(outputs):
-            #     print(f"  outputs[{i}]: shape={o.shape}, dtype={o.dtype}")
-
-            # raise ValueError("DEBUGING STOP")
-            # <class 'tuple'> 52/3 [00:01<00:00,  1.18it/s]
-            # outputs[0]: shape=(22, 100, 3), dtype=float32
-            # outputs[1]: shape=(22, 100, 128, 128), dtype=float32
-            # outputs[2]: shape=(22, 1536, 16, 16), dtype=float32
-            # outputs[3]: shape=(22, 256, 128, 128), dtype=float32
-            # outputs[4]: shape=(22, 100, 256), dtype=float32
-
             from transformers.models.mask2former.modeling_mask2former import Mask2FormerForUniversalSegmentationOutput
             outputs_obj = Mask2FormerForUniversalSegmentationOutput(
                 class_queries_logits=torch.from_numpy(outputs[0]),
                 masks_queries_logits=torch.from_numpy(outputs[1]),
             )
-
-            # Post-processing liefert eine Liste von PyTorch-Tensoren
-            preds_list = processor.post_process_semantic_segmentation(
-                outputs_obj,
-                target_sizes=target_sizes
-            )
-            preds = torch.stack(preds_list)
+            # for Mask2Former using directly the output-obj
+            logits_tensor = None 
         else:
-            if processor is None:
-                raise ValueError(f"Processor muss für {model_name} übergeben werden! (maybe activate code below)")
-
-            if target_sizes is None or len(target_sizes) != outputs.class_queries_logits.shape[0]:
-                current_batch_size = outputs.class_queries_logits.shape[0]
-                target_sizes = [(500, 500)] * current_batch_size
-
-            preds_list = processor.post_process_semantic_segmentation(
-                outputs,
-                target_sizes=target_sizes
-            )
-            preds = torch.stack(preds_list)
+            logits_tensor = None
     else:
         raise ValueError(f"Unsupported model name: {model_name}")
 
-    # if not right size
-    # pred_mask_resized = cv2.resize(pred_mask, (500, 500), interpolation=cv2.INTER_NEAREST)
+    # --- PROCESSING (PROBABILITY vs. ARGMAX) ---
+    
+    # important: do not use hf processor if probabilities are wanted
+    if processor is not None and not using_heatmap_as_gt and not as_prob and \
+        (model_name not in ["segformer", "deeplabv3", "unet"] or hasattr(outputs, "logits")):
+        # Standard-Pfad für Integer-Klassen-Maps via Hugging Face
+        if model_name in ["mask2former", "oneformer"] and isinstance(outputs, tuple):
+            outputs_to_process = outputs_obj
+        else:
+            outputs_to_process = outputs
+            
+        preds_list = processor.post_process_semantic_segmentation(outputs_to_process, target_sizes=target_sizes)
+        preds = torch.stack(preds_list)
+        
+    else:
+        if logits_tensor is None:
+            # Fallback for Mask2Former structur, if manuel calculation
+            raise ValueError(f"Für {model_name} mit as_prob=True müssen die rohen Logits/Masken-Logits übergeben werden.")
+            
+        if using_heatmap_as_gt:
+            preds = torch.sigmoid(logits_tensor)
+        else:
+            if as_prob:
+                # DEBUG logits_tensor: torch.Size([34, 2, 500, 500])
+                # DEBUG probs: torch.Size([34, 2, 500, 500])
+                # DEBUG preds: torch.Size([34, 500, 500])
+                # print(f"DEBUG logits_tensor: {logits_tensor.shape}")
+                # (B, C, H, W) -> (B, C, H, W)
+                probs = logits_tensor.softmax(dim=1) 
+                # print(f"DEBUG probs: {probs.shape}")
+                # (B, C, H, W) -> (B, H, W)
+                preds = probs[:, manhole_class_idx, :, :] 
+                # print(f"DEBUG preds: {preds.shape}")
+                # class weighting of both classes are already handled by softmax,
+                # so we can pick just the manhole prob, the other class is already influenced in the prob
+            else:
+                preds = logits_tensor.argmax(dim=1) # (B, H, W)
 
-    # preds = torch.argmax(outputs.logits, dim=1)
-    # preds = preds.unsqueeze(1).float() 
-    # preds_upsampled = F.interpolate(preds, size=(500, 500), mode="nearest").long()
-    # pred_mask = preds_upsampled.squeeze().cpu().numpy()
+        # --- UPSAMPLING / INTERPOLATION ---
+        if target_sizes is not None:
+            # print(f"Debug target_size {target_sizes}")
+            size = tuple(int(x) for x in target_sizes[0])
+            # print(f"Debug size {size}")
+            
+            # using bilinear for smooth transitions -> probabilities
+            mode = "bilinear" if (using_heatmap_as_gt or as_prob) else "nearest"
+
+            if mode == "nearest" or as_prob:
+                # Interpolate needs 4D: (B, 1, H, W)
+                preds = preds.unsqueeze(1).float()
+            
+            preds = F.interpolate(preds, size=size, mode=mode)
+            
+            if not using_heatmap_as_gt and not as_prob:
+                preds = preds.squeeze(1).long()
+            else:
+                preds = preds.squeeze(1)
 
     return preds
-    # return preds if is_numpy_input else preds.numpy()
+
+
+# def get_segmentation_prediction(outputs, model_name, processor=None, target_sizes=None, using_heatmap_as_gt=False, as_prob=True):
+#     model_name = model_name.lower()
+
+#     is_numpy_input = isinstance(outputs, np.ndarray)
+#     is_torch_input = isinstance(outputs, torch.Tensor)
+
+#     if model_name in ["segformer", "deeplabv3", "unet"]:
+#         if not is_numpy_input and hasattr(outputs, "logits"):
+#             logits = outputs.logits
+#         else:
+#             logits = outputs
+        
+#         # raise RuntimeError(f"DEBUGGING STOP, logits/pred shape: {logits.shape}\nMin-Max ({logits.min()} - {logits.max()})")
+#         # if isinstance(logits, np.ndarray):
+#         #     preds = logits.argmax(axis=1)
+#         # else:
+#         #     preds = logits.argmax(dim=1)
+
+#         if isinstance(logits, np.ndarray):
+#             logits_tensor = torch.from_numpy(logits)
+#         else:
+#             logits_tensor = logits.detach().cpu()
+
+        
+
+#         # upscaling because: SegFormer logits are 1/4 of input size
+#         if model_name in ["segformer", "unet"]:
+#             # and hasattr(outputs, "logits") and processor is not None and not using_heatmap_as_gt
+#             preds_list = processor.post_process_semantic_segmentation(outputs, target_sizes=target_sizes)
+#             preds = torch.stack(preds_list)
+#         else:
+#             if using_heatmap_as_gt:
+#                 preds = torch.sigmoid(logits_tensor)
+#             else:
+#                 if as_prob:
+#                     # FIXME -> still have to apply softmax?
+#                     preds = logits_tensor.softmax(dim=1) # (B ,W, H) also?
+#                 else:
+#                     preds = logits_tensor.argmax(dim=1) # (B, W, H)
+
+#             if target_sizes is not None:
+#                 size = tuple(int(x) for x in target_sizes[0])
+        
+#                 # Interpolate braucht 4D: (B, 1, H, W)
+#                 preds = preds if using_heatmap_as_gt else preds.unsqueeze(1).float()
+#                 mode = "bilinear" if using_heatmap_as_gt else "nearest"
+#                 preds = F.interpolate(preds, size=size, mode=mode)
+#                 if not using_heatmap_as_gt and not as_prob:
+#                     preds = preds.squeeze(1).long()
+#                 else:
+#                     preds = preds.squeeze(1)
+
+#     elif model_name in ["mask2former", "oneformer"]:
+
+#         # print(f"\noutputs Len: {len(outputs)} Dtype: {type(outputs)}\nSub-Element type: {type(outputs[0])}\nShapes:")
+#         # for cur_idx, cur_elem in enumerate(outputs):
+#         #     if hasattr(cur_elem, "shape"):
+#         #         shape_str = f"{cur_elem.shape}"
+#         #     else:
+#         #         shape_str = "none"
+#         #     print(f"  - {cur_idx:02}:\n      dtype={type(cur_elem)}\n      shape={shape_str}")
+#         # raise ValueError("DEBUGGING STOP")
+
+#         if is_numpy_input or is_torch_input:
+#             if is_numpy_input:
+#                 logits_tensor = torch.from_numpy(outputs)
+#             else:
+#                 logits_tensor = outputs
+
+#             if using_heatmap_as_gt:
+#                 preds = torch.sigmoid(logits_tensor)
+#             else:
+#                 if as_prob:
+#                     preds = logits_tensor.softmax(dim=1) # (B ,W, H) also?
+#                 else:
+#                     preds = logits_tensor.argmax(dim=1) # (B, W, H)
+        
+#             if target_sizes is not None:
+#                 size = tuple(int(x) for x in target_sizes[0])
+#                 preds = preds if using_heatmap_as_gt else preds.unsqueeze(1).float()
+#                 mode = "bilinear" if using_heatmap_as_gt else "nearest"
+#                 preds = F.interpolate(preds, size=size, mode=mode)
+#                 if not using_heatmap_as_gt and not as_prob:
+#                     preds = preds.squeeze(1).long()
+#                 else:
+#                     preds = preds.squeeze(1)
+#         elif isinstance(outputs, tuple):
+#             # debugging
+#             # print(type(outputs), len(outputs) if isinstance(outputs, tuple) else outputs.shape)
+#             # for i, o in enumerate(outputs):
+#             #     print(f"  outputs[{i}]: shape={o.shape}, dtype={o.dtype}")
+
+#             # raise ValueError("DEBUGING STOP")
+#             # <class 'tuple'> 52/3 [00:01<00:00,  1.18it/s]
+#             # outputs[0]: shape=(22, 100, 3), dtype=float32
+#             # outputs[1]: shape=(22, 100, 128, 128), dtype=float32
+#             # outputs[2]: shape=(22, 1536, 16, 16), dtype=float32
+#             # outputs[3]: shape=(22, 256, 128, 128), dtype=float32
+#             # outputs[4]: shape=(22, 100, 256), dtype=float32
+
+#             from transformers.models.mask2former.modeling_mask2former import Mask2FormerForUniversalSegmentationOutput
+#             outputs_obj = Mask2FormerForUniversalSegmentationOutput(
+#                 class_queries_logits=torch.from_numpy(outputs[0]),
+#                 masks_queries_logits=torch.from_numpy(outputs[1]),
+#             )
+
+#             # Post-processing liefert eine Liste von PyTorch-Tensoren
+#             preds_list = processor.post_process_semantic_segmentation(
+#                 outputs_obj,
+#                 target_sizes=target_sizes
+#             )
+#             preds = torch.stack(preds_list)
+#         else:
+#             if processor is None:
+#                 raise ValueError(f"Processor muss für {model_name} übergeben werden! (maybe activate code below)")
+
+#             if target_sizes is None or len(target_sizes) != outputs.class_queries_logits.shape[0]:
+#                 current_batch_size = outputs.class_queries_logits.shape[0]
+#                 target_sizes = [(500, 500)] * current_batch_size
+
+#             preds_list = processor.post_process_semantic_segmentation(
+#                 outputs,
+#                 target_sizes=target_sizes
+#             )
+#             preds = torch.stack(preds_list)
+#     else:
+#         raise ValueError(f"Unsupported model name: {model_name}")
+
+#     # if not right size
+#     # pred_mask_resized = cv2.resize(pred_mask, (500, 500), interpolation=cv2.INTER_NEAREST)
+
+#     # preds = torch.argmax(outputs.logits, dim=1)
+#     # preds = preds.unsqueeze(1).float() 
+#     # preds_upsampled = F.interpolate(preds, size=(500, 500), mode="nearest").long()
+#     # pred_mask = preds_upsampled.squeeze().cpu().numpy()
+
+#     return preds
+#     # return preds if is_numpy_input else preds.numpy()
 
 
 def train_hf_pipeline(config):
@@ -553,6 +658,7 @@ def train_hf_pipeline(config):
     batch_size = config.train.batch_size
 
     model_name = config.model.name.lower()
+    epochs = config.train.epochs
 
     heatmap_path = config.data.heatmap_path
     used_heatmap_channel = config.data.used_heatmap_channel
@@ -739,7 +845,7 @@ def train_hf_pipeline(config):
                 "labels": labels
             }
 
-    def compute_metrics_fn(eval_pred, model_name, processor, batch_size, ignore_index=255, using_heatmap_as_gt=False):
+    def compute_metrics_fn(eval_pred, model_name, processor, batch_size, ignore_index=255, using_heatmap_as_gt=False, as_prob=True):
         if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
             # raise ValueError("This path is unexpected might need to revert? or use model name to handle!")
             outputs = eval_pred.predictions
@@ -817,7 +923,8 @@ def train_hf_pipeline(config):
                     model_name=model_name,
                     processor=processor,
                     target_sizes=target_sizes,
-                    using_heatmap_as_gt=using_heatmap_as_gt
+                    using_heatmap_as_gt=using_heatmap_as_gt,
+                    as_prob=as_prob
                 )
             else:
                 # raise ValueError("DEBUGGING STOP: did not expect to go here...")
@@ -842,7 +949,8 @@ def train_hf_pipeline(config):
                     model_name=model_name,
                     processor=processor,
                     target_sizes=target_sizes,
-                    using_heatmap_as_gt=using_heatmap_as_gt
+                    using_heatmap_as_gt=using_heatmap_as_gt,
+                    as_prob=as_prob
                 )
 
                 # drop padded elements, right??
@@ -853,6 +961,9 @@ def train_hf_pipeline(config):
                     H, W = masks.shape[1], masks.shape[2]
                     sem = np.zeros((H, W), dtype=np.int64)
                     for mask, cls in zip(masks, classes):
+                        # if cls == 1:
+                        #     sem = mask
+                        # originally: 
                         sem[mask > 0.5] = cls
                     semantic_labels.append(sem)
                 labels = np.stack(semantic_labels)
@@ -868,10 +979,24 @@ def train_hf_pipeline(config):
                 model_name=model_name,
                 processor=processor,
                 target_sizes=target_sizes,
-                using_heatmap_as_gt=using_heatmap_as_gt
+                using_heatmap_as_gt=using_heatmap_as_gt,
+                as_prob=as_prob
             )
 
-        return compute_metrics(preds=preds, labels=labels, ignore_index=ignore_index, using_heatmap_as_gt=using_heatmap_as_gt)
+        # convert to numpy & cpu
+        if isinstance(preds, torch.Tensor):
+            preds = preds.detach().cpu().numpy()
+        if isinstance(labels, torch.Tensor):
+            labels = labels.detach().cpu().numpy()
+
+        return compute_metrics(
+            preds=preds, 
+            labels=labels, 
+            ignore_index=ignore_index, 
+            using_heatmap_as_gt=using_heatmap_as_gt,
+            confident_threshold_start=0.5, confident_threshold_end=0.55, confident_threshold_step=0.05, 
+            iou_threshold_start=0.5, iou_threshold_end=0.55, iou_threshold_step=0.05,
+        )
 
     # FIXME -> make many of the settings adjustable via config
     training_args = HFTrainingArguments(
@@ -883,7 +1008,7 @@ def train_hf_pipeline(config):
         warmup_steps=200,             # 0.1
         fp16=False,                    # faster training
         gradient_accumulation_steps=4,
-        num_train_epochs=400,   
+        num_train_epochs=epochs,   
         dataloader_num_workers=4,
 
         eval_strategy="steps",
@@ -942,7 +1067,8 @@ def train_hf_pipeline(config):
             processor=processor,
             batch_size=batch_size,
             ignore_index=ignore_index, 
-            using_heatmap_as_gt=using_heatmap_as_gt
+            using_heatmap_as_gt=using_heatmap_as_gt,
+            as_prob=True
         ),
         callbacks=[plotting_callback],  # , LogKeysCallback()
         # preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,  # only keep class + mask logits

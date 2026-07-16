@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 # import evaluate
 import numpy as np
 from sklearn.metrics import f1_score, precision_score, recall_score, jaccard_score
+from sklearn.metrics import auc
 from scipy.ndimage import label, binary_closing, generate_binary_structure
 from scipy.optimize import linear_sum_assignment
 import torch
@@ -60,15 +61,20 @@ def polygon_iou(poly1, poly2):
 # > Metrices <
 # ------------
 
-def evaluate_object_wise(preds, labels, iou_threshold, ignore_index=255, debug_plot_path=None, using_heatmap_as_gt=False):
+def evaluate_object_wise(preds, labels, confident_threshold, iou_threshold, ignore_index=255, debug_plot_path=None, using_heatmap_as_gt=False):
     valid_mask = (labels != ignore_index)
+
+    # add here confidence threshold? -> at binarization?
     
     if using_heatmap_as_gt:
-        preds_binary = ((preds >= 0.5) & valid_mask).astype(np.uint8)
+        preds_binary = ((preds >= confident_threshold) & valid_mask).astype(np.uint8)
         labels_binary = ((labels >= 0.5) & valid_mask).astype(np.uint8)
     else:
-        preds_binary = ((preds == 1) & valid_mask).astype(np.uint8)
-        labels_binary = ((labels == 1) & valid_mask).astype(np.uint8)
+        # preds_binary = ((preds == 1) & valid_mask).astype(np.uint8)
+        # labels_binary = ((labels == 1) & valid_mask).astype(np.uint8)
+        # FIXME -> preds müssen nicht binarisiert übergeben werden!
+        preds_binary = ((preds >= confident_threshold) & valid_mask).astype(np.uint8)
+        labels_binary = ((labels >= 0.5) & valid_mask).astype(np.uint8)
 
     struct = generate_binary_structure(2, 2)  # 8-Nachbarschaft
     preds_closed = binary_closing(preds_binary, structure=struct, iterations=4).astype(np.uint8)
@@ -116,19 +122,48 @@ def evaluate_object_wise(preds, labels, iou_threshold, ignore_index=255, debug_p
 
     # make iou calc
     tp_objects = 0
-    all_obj_ious = []
     
     # if no obj exist, break
     if num_true_objects == 0 and num_pred_objects == 0:
-        return {"tp_objects_count": 0, "true_objects_count": 0, "pred_objects_count": 0, "object_mean_iou": 0.0}
-    
-    if num_true_objects == 0 or num_pred_objects == 0:
+        return {
+            # "object_precision": 1.0,
+            # "object_recall": 1.0,
+            "tp_objects_count": 0,
+            "fp_objects_count": 0,
+            "fn_objects_count": 0, 
+            "true_objects_count": 0, 
+            "pred_objects_count": 0, 
+            # "object_mean_iou": 1.0,
+            # "object_pred_mean_iou": None
+            "summed_object_iou": 0.0
+        }
+    elif num_true_objects == 0 and num_pred_objects >= 1:
         # every pred is false positive and IoU 0
         return {
+            # "object_precision": 0.0,  # TP / (TP+FP) = 0/1
+            # "object_recall": 1.0,    # TP / (TP+FN) -> 0/0 = 1.0
             "tp_objects_count": 0,
+            "fp_objects_count": num_pred_objects,
+            "fn_objects_count": 0,
             "true_objects_count": num_true_objects,
             "pred_objects_count": num_pred_objects,
-            "object_mean_iou": 0.0
+            # "object_mean_iou": 0.0,
+            # "object_pred_mean_iou": 0.0
+            "summed_object_iou": 0.0
+        }
+    elif num_true_objects >= 1 and num_pred_objects == 0:
+        # every pred is false negative and IoU 0
+        return {
+            # "object_precision": 1.0,  # TP / (TP+FP) -> 0/0 = 1.0
+            # "object_recall": 0.0,     # TP / (TP+FN) -> 0/1 = 0.0
+            "tp_objects_count": 0,
+            "fp_objects_count": 0,
+            "fn_objects_count": num_true_objects,
+            "true_objects_count": num_true_objects,
+            "pred_objects_count": num_pred_objects,
+            # "object_mean_iou": 0.0,
+            # "object_pred_mean_iou": 1.0  # not found FN, does not influence only prediction iou
+            "summed_object_iou": 0.0
         }
 
     # 1. create IoU costmatrix (form: True Objects x Pred objects)
@@ -190,125 +225,179 @@ def evaluate_object_wise(preds, labels, iou_threshold, ignore_index=255, debug_p
     # 3. evaluate the matched pairs
     matched_preds = set()
     matched_gts = set()
-
+    # all_obj_ious = []
+    # pred_ious = []
+    summed_object_iou = 0.0
+    
     for t_i, p_i in zip(true_ind, pred_ind):
         iou = 1.0 - cost_matrix[t_i, p_i]
 
         # a real amtching only makes sense if there is any overlap
-        if iou > 0:
-            all_obj_ious.append(iou)
+        if iou > iou_threshold:  # NEW -> add also match threshold?
+            # all_obj_ious.append(iou)
             matched_gts.add(t_i + 1)
             matched_preds.add(p_i + 1)
             
-            if iou >= iou_threshold:
-                tp_objects += 1
+            # if iou >= iou_tp_threshold:
+            tp_objects += 1
+            # pred_ious.append(iou)
+            summed_object_iou += iou
 
     # 4. unmachted GTs (False NEgatives= gets 0 IoU)
     num_fn_objects = num_true_objects - len(matched_gts)
-    all_obj_ious.extend([0.0] * num_fn_objects)
+    # FIXME -> is that right?? Or should be removed? -> IoU is localization not Detection!
+    # all_obj_ious.extend([0.0] * num_fn_objects)
 
     # 5. Unmachted Preds (False Positives = gets 0 IoU)
     num_fp_objects = num_pred_objects - len(matched_preds)
-    all_obj_ious.extend([0.0] * num_fp_objects)
+    # all_obj_ious.extend([0.0] * num_fp_objects)
+    # pred_ious.extend([0.0] * num_fp_objects)
 
-    mean_obj_iou = np.mean(all_obj_ious) if len(all_obj_ious) > 0 else 0.0
+    # mean_obj_iou = np.mean(all_obj_ious) if len(all_obj_ious) > 0 else 0.0
+    # mean_obj_pred_iou = np.mean(pred_ious) if len(pred_ious) > 0 else 0.0
+
+    # obj_precision = tp_objects / max(tp_objects+num_fp_objects, 1)
+    # obj_recall = tp_objects / max(tp_objects+num_fn_objects, 1)
 
     return {
+        # "object_precision": obj_precision,
+        # "object_recall": obj_recall,
         "tp_objects_count": tp_objects,
+        "fp_objects_count": num_fp_objects,
+        "fn_objects_count": num_fn_objects,
         "true_objects_count": num_true_objects,
         "pred_objects_count": num_pred_objects,
-        "object_mean_iou": float(mean_obj_iou)
+        "summed_object_iou": summed_object_iou
+        # "object_mean_iou": float(mean_obj_iou),
+        # "object_pred_mean_iou": float(mean_obj_pred_iou)
     }
 
 
+def get_mean_from_multiple_results(value_name, obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5):
+    
+    # create accumulation vars
+    acc_tp = 0
+    acc_fp = 0
+    acc_fn = 0
+    
+    acc_matches_for_iou = 0
+    acc_summed_iou = 0
 
-def compute_metrics(preds, labels, iou_threshold_start=0.0, iou_threshold_end=0.95, iou_threshold_step=0.05, ignore_index=255, using_heatmap_as_gt=False):
-    try:
+    acc_other_metrics = []
+
+    # fill the accumulator
+    for cur_obj_result in obj_results:
+        iou_threshold = cur_obj_result["iou_threshold"]
+        confident_threshold = cur_obj_result["confident_threshold"]
+        total_iou_sum = cur_obj_result["total_iou_sum"]
+        total_tp = cur_obj_result["total_tp"]
+        total_fp = cur_obj_result["total_fp"]
+        total_fn = cur_obj_result["total_fn"]
+
+        if iou_threshold == choosen_iou_threshold and confident_threshold >= confident_threshold_min:
+            acc_tp += total_tp
+            acc_fp += total_fp
+            acc_fn += total_fn
+
+            if total_tp > 0:
+                acc_summed_iou += total_iou_sum
+                acc_matches_for_iou += total_tp
+                
+            if value_name not in ["avg_obj_precision", "avg_obj_recall", "avg_obj_iou", "avg_f1"]:
+                acc_other_metrics.append(cur_obj_result[value_name])
+
+    # return result
+    if value_name == "avg_obj_precision":
+        return acc_tp / max(acc_tp + acc_fp, 1)
+    elif value_name == "avg_obj_recall":
+        return acc_tp / max(acc_tp + acc_fn, 1)
+    elif value_name == "avg_f1":
+        precision = acc_tp / max(acc_tp + acc_fp, 1)
+        recall = acc_tp / max(acc_tp + acc_fn, 1)
+        return (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    elif value_name == "avg_obj_iou":
+        if acc_matches_for_iou == 0:
+            return np.nan
+        return acc_summed_iou / acc_matches_for_iou
+        
+    else:
+        return np.nanmean(np.array(other_metrics, dtype=np.float32))
+
+
+def compute_metrics(preds, labels, 
+                    confident_threshold_start=0.0, confident_threshold_end=0.95, confident_threshold_step=0.05, 
+                    iou_threshold_start=0.5, iou_threshold_end=0.55, iou_threshold_step=0.05, 
+                    ignore_index=255, using_heatmap_as_gt=False):
     # logits = eval_pred.predictions
     # labels = eval_pred.label_ids
 
-        # convert to numpy
-        if isinstance(preds, torch.Tensor):
-            preds = preds.detach().cpu().numpy()
-        if isinstance(labels, torch.Tensor):
-            labels = labels.detach().cpu().numpy()
+    # convert to numpy
+    if isinstance(preds, torch.Tensor):
+        preds = preds.detach().cpu().numpy()
+    if isinstance(labels, torch.Tensor):
+        labels = labels.detach().cpu().numpy()
 
-        # print("DEBUGGING PRINT:")
-        # print(f"labels: labels\nDtype: {type(labels)}, len: {len(labels)}")
-        # print(f"Shape: {labels.shape}") if hasattr(labels, "shape") else ""
+    # print("DEBUGGING PRINT:")
+    # print(f"labels: labels\nDtype: {type(labels)}, len: {len(labels)}")
+    # print(f"Shape: {labels.shape}") if hasattr(labels, "shape") else ""
 
-        # print(f"labels: {type(labels)}, len: {len(labels)}")
-        # for i_, x in enumerate(labels):
-        #     if isinstance(x, (list, tuple)):
-        #         print(f"    - {i_}: {type(x)}, len: {len(x)}")
-        #         for i_2, x_2 in enumerate(x):
-        #             print(f"        - {i_2} shape: {x_2.shape}")
-        #     else:
-        #         print(f"  - {i_} shape: {x.shape}")
+    # print(f"labels: {type(labels)}, len: {len(labels)}")
+    # for i_, x in enumerate(labels):
+    #     if isinstance(x, (list, tuple)):
+    #         print(f"    - {i_}: {type(x)}, len: {len(x)}")
+    #         for i_2, x_2 in enumerate(x):
+    #             print(f"        - {i_2} shape: {x_2.shape}")
+    #     else:
+    #         print(f"  - {i_} shape: {x.shape}")
 
-        if preds.shape != labels.shape:
-            raise ValueError(f"Shape mismatch! Preds shape is {preds.shape}, but Labels shape is {labels.shape}.")
+    if preds.shape != labels.shape:
+        raise ValueError(f"Shape mismatch! Preds shape is {preds.shape}, but Labels shape is {labels.shape}.")
 
-        # print(f"\nDEBUG INFO:\n  - preds shape (eval): {preds.shape}\n  - labels shape: {labels.shape}")
+    # print(f"\nDEBUG INFO:\n  - preds shape (eval): {preds.shape}\n  - labels shape: {labels.shape}")
 
-        batch_size = preds.shape[0]
+    batch_size = preds.shape[0]
 
-        obj_results = []
-        avg_true_objects_per_img = 0.0  # float(total_true / batch_size),
-        avg_pred_objects_per_img = 0.0  # float(total_pred / batch_size)
+    obj_results = []
+    avg_true_objects_per_img = 0.0
+    avg_pred_objects_per_img = 0.0
 
+    for cur_confident_threshold in np.arange(confident_threshold_start, confident_threshold_end+confident_threshold_step, confident_threshold_step):
         for cur_iou_threshold in np.arange(iou_threshold_start, iou_threshold_end+iou_threshold_step, iou_threshold_step):
-
             total_tp = 0
+            total_fp = 0
+            total_fn = 0
             total_true = 0
             total_pred = 0
-            total_obj_iou = 0.0
-
-            # aggregated_obj_metrics = {
-            #     "true_objects_count": 0, "pred_objects_count": 0,
-            #     "object_recall": 0.0, "object_precision": 0.0,
-            #     "object_f1": 0.0, "object_mean_iou": 0.0
-            # }
+            total_iou_sum = 0
 
             for batch_idx in range(batch_size):
-
-                # if 0.46 < cur_iou_threshold < 0.54:
-                #     metrics_idx = 0
-                #     plot_path = f"./debug_outputs/{metrics_idx:04}_batch_{batch_idx}.png"
-                #     while os.path.exists(plot_path):
-                #         metrics_idx += 1
-                #         plot_path = f"./debug_outputs/{metrics_idx:04}_batch_{batch_idx}.png"
-                # else:
-                #     plot_path = None
                 plot_path = None
 
                 # >>> compute object metrics <<<
                 obj_metrics = evaluate_object_wise(
                     preds=preds[batch_idx], 
                     labels=labels[batch_idx], 
+                    confident_threshold=cur_confident_threshold,
                     iou_threshold=cur_iou_threshold,
                     ignore_index=ignore_index,
                     debug_plot_path=plot_path,
                     using_heatmap_as_gt=using_heatmap_as_gt
                 )
+                
                 total_tp += obj_metrics["tp_objects_count"]
+                total_fp += obj_metrics["fp_objects_count"]
+                total_fn += obj_metrics["fn_objects_count"]
                 total_true += obj_metrics["true_objects_count"]
                 total_pred += obj_metrics["pred_objects_count"]
-                total_obj_iou += obj_metrics["object_mean_iou"]
-                # for key in aggregated_obj_metrics:
-                #     aggregated_obj_metrics[key] += obj_metrics[key]
-
-            obj_recall = total_tp / total_true if total_true > 0 else 0.0
-            obj_precision = total_tp / total_pred if total_pred > 0 else 0.0
-            obj_f1 = (2 * obj_precision * obj_recall) / (obj_precision + obj_recall) if (obj_precision + obj_recall) > 0 else 0.0
-            avg_obj_iou = total_obj_iou / batch_size
-
+                total_iou_sum += obj_metrics["summed_object_iou"]
+            
             obj_results.append({
+                "confident_threshold": cur_confident_threshold,
                 "iou_threshold": cur_iou_threshold,
-                "avg_obj_recall": float(obj_recall),
-                "avg_obj_precision": float(obj_precision),
-                "avg_f1": float(obj_f1),
-                "avg_obj_iou": float(avg_obj_iou)
+                "total_iou_sum": total_iou_sum,
+                "total_tp": total_tp,
+                "total_fp": total_fp,
+                "total_fn": total_fn
             })
 
             if len(obj_results) == 1:
@@ -316,73 +405,59 @@ def compute_metrics(preds, labels, iou_threshold_start=0.0, iou_threshold_end=0.
                 avg_true_objects_per_img += float(total_true / batch_size)  
                 avg_pred_objects_per_img += float(total_pred / batch_size) 
 
-        # get mA results
-        mAP = np.array([cur_obj_result["avg_obj_precision"] for cur_obj_result in obj_results], dtype=np.float32).mean()
-        mAR = np.array([cur_obj_result["avg_obj_recall"] for cur_obj_result in obj_results], dtype=np.float32).mean()
-        mAF1 = np.array([cur_obj_result["avg_f1"] for cur_obj_result in obj_results], dtype=np.float32).mean()
-        mAIOU = np.array([cur_obj_result["avg_obj_iou"] for cur_obj_result in obj_results], dtype=np.float32).mean()
+    # get mA results
+    mAP = get_mean_from_multiple_results("avg_obj_precision", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
+    mAR = get_mean_from_multiple_results("avg_obj_recall", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
+    mAF1 = get_mean_from_multiple_results("avg_f1", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
+    mAIOU = get_mean_from_multiple_results("avg_obj_iou", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
 
-        # >>> compute pixel metrics <<<
-        # create mask for ignroe index
-        mask = labels != ignore_index
+    # >>> compute pixel metrics <<<
+    # create mask for ignroe index
+    mask = labels != ignore_index
 
-        if using_heatmap_as_gt:
-            preds_binarized = (preds >= 0.5).astype(np.uint8)
-            labels_binarized = (labels >= 0.5).astype(np.uint8)
-            
-            preds_flat = preds_binarized[mask].flatten()
-            labels_flat = labels_binarized[mask].flatten()
-        else:
-            preds_flat = preds[mask].flatten()
-            labels_flat = labels[mask].flatten()
-        # -> Flatten for sklearn metrics (exclude ignore_index)
+    print(f"Debug preds shape: {preds.shape}")
+    print(f"Debug labels shape: {labels.shape}")
 
-        f1 = f1_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
-        precision = precision_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
-        recall = recall_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
+    preds_binarized = (preds >= 0.5).astype(np.uint8)
+    labels_binarized = (labels >= 0.5).astype(np.uint8)
+    # if using_heatmap_as_gt:
+    preds_flat = preds_binarized[mask].flatten()
+    labels_flat = labels_binarized[mask].flatten()
+    # else:
+    #     preds_flat = preds[mask].flatten()
+    #     labels_flat = labels[mask].flatten()
+    # -> Flatten for sklearn metrics (exclude ignore_index)
 
-        # calc iou via sklearn
-        per_class_iou = jaccard_score(labels_flat, preds_flat, average=None, labels=[0, 1], zero_division=0)
-        manhole_iou = per_class_iou[1]
-        mean_iou = np.mean(per_class_iou)
-        # # IoU
-        # iou_result = mean_iou_metric.compute(
-        #     predictions=preds,
-        #     references=labels,
-        #     num_labels=2,
-        #     ignore_index=ignore_index,
-        # )
-        # manhole_iou = iou_result["per_category_iou"][1]  # class 1 = manhole
+    print(f"Debug preds_flat shape: {preds_flat.shape}")
+    print(f"Debug labels_flat shape: {labels_flat.shape}")
 
-        # most likely for heatmap - mean absolute error
-        mae_score = np.abs(preds[mask] - labels[mask]).mean()
+    f1 = f1_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
+    precision = precision_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
+    recall = recall_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
 
-        return {
-            "mae_score": float(mae_score),
-            "manhole_iou": float(manhole_iou),
-            "f1": float(f1),
-            "precision": float(precision),
-            "recall": float(recall),
-            "mean_iou": float(mean_iou),
-            "obj_mA_f1": float(mAF1),
-            "obj_mA_recall": float(mAR),
-            "obj_mA_precision": float(mAP),
-            "obj_mA_iou": float(mAIOU),
-            "obj_results": obj_results,
-            "avg_true_objects_per_img": float(total_true / batch_size),
-            "avg_pred_objects_per_img": float(total_pred / batch_size)
-        }
-    except Exception as e:
-        print("\n" + "🚨" * 30)
-        print("CRASH IN COMPUTE_METRICS DETECTED!")
-        print(f"Error Type: {type(e).__name__}")
-        print(f"Error Message: {e}")
-        print("\n--- FULL TRACEBACK ---")
-        traceback.print_exc(file=sys.stdout)
-        print("🚨" * 30 + "\n")
-        
-        # Kill den Prozess sofort, damit Hugging Face den Fehler nicht verschluckt
-        sys.exit(1)
+    # calc iou via sklearn
+    per_class_iou = jaccard_score(labels_flat, preds_flat, average=None, labels=[0, 1], zero_division=0)
+    manhole_iou = per_class_iou[1] if len(per_class_iou) > 1 else per_class_iou[0]
+    mean_iou = np.mean(per_class_iou)
+
+    # most likely for heatmap - mean absolute error
+    mae_score = np.abs(preds[mask] - labels[mask]).mean()
+
+    return {
+        "mae_score": float(mae_score),
+        "manhole_iou": float(manhole_iou),
+        "f1": float(f1),
+        "precision": float(precision),
+        "recall": float(recall),
+        "mean_iou": float(mean_iou),
+        "obj_mA_f1": float(mAF1),
+        "obj_mA_recall": float(mAR),
+        "obj_mA_precision": float(mAP),
+        "obj_mA_iou": float(mAIOU),
+        "obj_results": obj_results,
+        "avg_true_objects_per_img": avg_true_objects_per_img,
+        "avg_pred_objects_per_img": avg_pred_objects_per_img
+    }
 
 
 

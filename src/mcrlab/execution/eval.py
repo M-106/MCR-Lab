@@ -102,7 +102,7 @@ def center_eval(config):
             used_heatmap_channel=used_heatmap_channel
         )
 
-        for idx, cur_data_path in enumerate(all_test_paths():
+        for idx, cur_data_path in enumerate(all_test_paths()):
             pc_id, x_start, y_start = test_bev_dataset.extract_grid_identifier(cur_data_path)
 
             # get data
@@ -113,71 +113,114 @@ def center_eval(config):
 
             pc = test_3d_dataset[idx]
 
-            # make center prediction
-            prediction = predict_single_sample(model, processor, pixel_values)
-            print(f"DEBUGGING 1, shape: {prediction.shape}")
-
-            # apply closing + clustering
-            if isinstance(prediction, torch.Tensor):
-                prediction = preds.detach().cpu().numpy()
-            valid_mask = (labels != ignore_index)
-    
-            if using_heatmap_as_gt:
-                preds_binary = ((preds >= 0.5) & valid_mask).astype(np.uint8)
+            # --- Manhole Search ---
+            if model_name == "traditional":
+                print(f"Shape check, should be [C, W, H]: {pixel_values.shape}")
+                centers = get_manhole_candidates_hough(bev_image=pixel_values, resolution=0.01)
+                for_range = centers
             else:
-                preds_binary = ((preds == 1) & valid_mask).astype(np.uint8)
+                # make center prediction
+                prediction = predict_single_sample(model, processor, pixel_values)
+                print(f"DEBUGGING 1, shape: {prediction.shape}")
+                raise ValueError("DEBUGGING STOP")
 
-            struct = generate_binary_structure(2, 2)  # 8-Nachbarschaft
-            preds_closed = binary_closing(preds_binary, structure=struct, iterations=4).astype(np.uint8)
-            # FIXME -> custering
+                # apply closing + clustering
+                if isinstance(prediction, torch.Tensor):
+                    prediction = preds.detach().cpu().numpy()
+                valid_mask = (labels != ignore_index)
+        
+                # FIXME -> set confidence
+                if using_heatmap_as_gt:
+                    preds_binary = ((preds >= 0.5) & valid_mask).astype(np.uint8)
+                else:
+                    preds_binary = ((preds >= 0.5) & valid_mask).astype(np.uint8)
 
-            # go thrpugh every cluster:
-            # could also transform everything into 3D
-            a, b, abs(r), mean_distance_error, loss = fit_circle_least_squares(x, y)
+                struct = generate_binary_structure(2, 2)  # 8-Nachbarschaft
+                preds_closed = binary_closing(preds_binary, structure=struct, iterations=4).astype(np.uint8)
+                labeled_preds, num_pred_objects = label(preds_closed)
 
-            # transform to 3d
-            cluster_in_3d = bev_pixel_to_3d(
-                patch_points=pc,
-                pixel_x=,
-                pixel_y=,
-                origin_x=meta["origin_x"],    # in meta
-                origin_y=meta["origin_y"],    # in meta
-                resolution=meta["resolution"],  # in meta
-                search_radius=None
-            )
-            
+                for_range = range(1, num_pred_objects + 1)
 
-            # shape check
-            is_circle_, _ = circle_shape_check(points_square[cur_vis], save_path=None, should_plot=False, threshold=0.6)
+            for elem in for_range:
+                if model_name == "traditional":
+                    center_x = elem["center_px"][0]
+                    center_y = elem["center_px"][1]
+                else:
+                    p_idx = elem
+                    pred_mask = (labeled_preds == p_idx)
+                    pred_poly = mask_to_polygon(pred_mask)
 
-            # get center i 3D
-            center = bev_pixel_to_3d(
-                patch_points=pc,
-                pixel_x=a,
-                pixel_y=b,
-                origin_x=meta["origin_x"],    # in meta
-                origin_y=meta["origin_y"],    # in meta
-                resolution=meta["resolution"],  # in meta
-                search_radius=None
-            )
+                    if pred_poly is None:
+                        continue
 
-            # 
-            cur_center_point = {
-                "x": ...,
-                "y": ...,
-                "z": ...
-            }
-            # cur_point = None
+                    if true:
+                        center_x = pred_poly.centroid.x
+                        center_y = pred_poly.centroid.y
+                    else:
+                        polys_to_plot = pred_poly.geoms if hasattr(pred_poly, 'geoms') else [pred_poly]
+                        cur_manhole_pred_x = []
+                        cur_manhole_pred_y = []
+                        for p in polys_to_plot:
+                            x, y = p.exterior.xy
+                            cur_manhole_pred_x.append(x)
+                            cur_manhole_pred_y.append(y)
+                        cur_manhole_pred_x = np.array(cur_manhole_pred_x)
+                        cur_manhole_pred_y = np.array(cur_manhole_pred_y)
+                        # cur_manhole_pred_xy = zip(cur_manhole_pred_x, cur_manhole_pred_y)
 
-            # add result
-            result = add_to_result(result, cur_dataset, pc_id, cur_center_point)
+                        # shape check
+                        # FIXME
 
-    with open(f"./output/eval_{exp_name}.json", "w") as file_:
-        json.dump(result, indent=4)
+                        # go thrpugh every cluster:
+                        # could also transform everything into 3D
+                        center_x, center_y, abs(r), mean_distance_error, loss = fit_circle_least_squares(cur_manhole_pred_x, cur_manhole_pred_y)
+
+
+
+                #for x, y in cur_manhole_pred_xy:
+                    
+
+                    # # transform to 3d
+                    # cluster_in_3d = bev_pixel_to_3d(
+                    #     patch_points=pc,
+                    #     pixel_x=,
+                    #     pixel_y=,
+                    #     origin_x=meta["origin_x"],    # in meta
+                    #     origin_y=meta["origin_y"],    # in meta
+                    #     resolution=meta["resolution"],  # in meta
+                    #     search_radius=None
+                    # )
+                
+                # get center i 3D
+                center = bev_pixel_to_3d(
+                    patch_points=pc,
+                    pixel_x=center_x,
+                    pixel_y=center_y,
+                    origin_x=meta["origin_x"],    # in meta
+                    origin_y=meta["origin_y"],    # in meta
+                    resolution=meta["resolution"],  # in meta
+                    search_radius=None
+                )
+
+                print(f"Center: {center.shape}")
+
+                # 
+                cur_center_point = {
+                    "x": center[0],
+                    "y": center[1],
+                    "z": center[2]
+                }
+                # cur_point = None
+
+                # add result
+                result = add_to_result(result, cur_dataset, pc_id, cur_center_point)
+
+        with open(f"./output/{cur_dataset}_eval_{exp_name}.json", "w") as file_:
+            json.dump(result, indent=4)
 
 
 def main(config):
-    model 
+    # model 
     center_eval(config)
 
 

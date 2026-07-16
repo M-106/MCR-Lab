@@ -76,18 +76,89 @@ from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDat
 
 
 
-def plot_and_save(iou_thresholds, AR, AP, save_path):
+def get_data_for_plot(obj_results, 
+                      fix_metric_name="iou_threshold", fix_value=0.5, 
+                      variable_metric_name="confident_threshold"):
+    """
+    Filtert die Daten so, dass eine Metrik fixiert bleibt (z.B. iou_threshold = 0.5)
+    und die andere Metrik über die X-Achse läuft.
+    """
+    # filter after threshols
+    filtered = [r for r in obj_results if r[fix_metric_name] == fix_value]
+
+    # sort for clean line
+    filtered.sort(key=lambda x: x[variable_metric_name])
+
+    x_thresholds = [r[variable_metric_name] for r in filtered]
+    
+    # directly calc here, we only have the micro aggregations here
+    AP = []
+    AR = []
+    AIOU = []
+
+    for r in filtered:
+        tp, fp, fn = r["total_tp"], r["total_fp"], r["total_fn"]
+        
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + fn, 1)
+        iou = r["total_iou_sum"] / max(tp, 1) if tp > 0 else 0.0
+        
+        AP.append(precision)
+        AR.append(recall)
+        AIOU.append(iou)
+
+    return np.array(x_thresholds), np.array(AP), np.array(AR), np.array(AIOU)
+
+
+
+# def get_data_for_plot(obj_results, 
+#                       match_threshold=0.5, match_is_min=False, 
+#                       tp_threshold=0.5, tp_is_min=True,
+#                       obj_iou_as_pred=False):
+#     # filter all results, so that we get onyl the results which got calculated with math_thresh=0.5 (coco standard) 
+#     if match_is_min:
+#         match_compare = lambda x, y: x >= y
+#     else:
+#         match_compare = lambda x, y: x == y
+#     filtered = [r for r in obj_results if match_compare(r["iou_match_threshold"], match_threshold)]
+
+#     # filter again but this time towards the tp threshold which need a min value
+#     if tp_is_min:
+#         tp_compare = lambda x, y: x >= y
+#     else:
+#         tp_compare = lambda x, y: x == y
+#     filtered = [r for r in filtered if tp_compare(r["iou_tp_threshold"], tp_threshold)]
+
+#     # sort data for good plots
+#     if tp_is_min:
+#         filtered.sort(key=lambda x: x["iou_tp_threshold"])
+#     else:
+#         filtered.sort(key=lambda x: x["iou_match_threshold"])
+
+#     tp_thresholds = [r["iou_tp_threshold"] for r in filtered]
+#     match_thresholds = [r["iou_match_threshold"] for r in filtered]
+#     AP = [r["avg_obj_precision"] for r in filtered]
+#     AR = [r["avg_obj_recall"] for r in filtered]
+#     iou_key = "avg_obj_pred_iou" if obj_iou_as_pred else "avg_obj_iou"
+#     AIOU = [r[iou_key] for r in filtered]
+
+#     return np.array(tp_thresholds), np.array(match_thresholds), np.array(AP), np.array(AR), np.array(AIOU)
+
+
+
+def plot_and_save(iou_thresholds, AR, AP, AIOU, title, xlabel, save_path):
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 7))
 
     # plot values
     ax.plot(iou_thresholds, AR, label='Avg Recall (AR)', marker='o', linewidth=2)
     ax.plot(iou_thresholds, AP, label='Avg Precision (AP)', marker='s', linewidth=2)
     # ax.plot(iou_thresholds, AF1, label='Avg F1-Score (AF1)', marker='^', linewidth=2)
-    # ax.plot(iou_thresholds, AIOU, label='Avg IoU (AIOU)', marker='d', linewidth=2)
+    if AIOU is not None:
+        ax.plot(iou_thresholds, AIOU, label='Avg Object IoU', marker='d', linewidth=2)
 
     # set titles and labels
-    ax.set_title('Evaluation metrics vs. IoU Threshold', fontsize=14, fontweight='bold', pad=15)
-    ax.set_xlabel('IoU Threshold', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+    ax.set_xlabel(xlabel, fontsize=12)
     ax.set_ylabel('Metric Value', fontsize=12)
 
     # set range for these metrics
@@ -104,48 +175,171 @@ def plot_and_save(iou_thresholds, AR, AP, save_path):
 
 
 
-def plot_mean_average(object_results, save_path, coco_standard_save_path=None):
-    """
-    object_results: [
-    {
-        "iou_threshold": ...,
-        "avg_obj_recall": ...,
-        "avg_obj_precision": ...,
-        "avg_f1": ...,
-        "avg_obj_iou": ...
-    }, 
-    ...]
-    """
-    # extract values
-    iou_thresholds = np.array([cur_object_result["iou_threshold"] for cur_object_result in object_results])
-    AR = np.array([cur_object_result["avg_obj_recall"] for cur_object_result in object_results])
-    AP = np.array([cur_object_result["avg_obj_precision"] for cur_object_result in object_results])
-    AF1 = np.array([cur_object_result["avg_f1"] for cur_object_result in object_results])
-    AIOU = np.array([cur_object_result["avg_obj_iou"] for cur_object_result in object_results])
+def plot_mean_average(object_results, root_save_path, save_name):
+    # 1. Confidence Curve (Fixed IoU Threshold on 0.5, variable Confident Threshold)
+    save_path1 = os.path.join(root_save_path, f"confidence_curve_{save_name}.png")
+    
+    conf_thresholds, AP, AR, AIOU = get_data_for_plot(
+        object_results, 
+        fix_metric_name="iou_threshold", 
+        fix_value=0.5, 
+        variable_metric_name="confident_threshold"
+    )
+
+    plot_and_save(
+        iou_thresholds=conf_thresholds, 
+        AR=AR, 
+        AP=AP, 
+        AIOU=AIOU,
+        title="Metrics vs. Confidence Threshold (Fix IoU @ 0.5)",
+        xlabel='Confidence Threshold',
+        save_path=save_path1
+    )
+
+    # 2. IoU Matching Sensitivity Curve (Fixed Confident Threshold on 0.5, variable IoU Threshold)
+    save_path2 = os.path.join(root_save_path, f"matching_sensitivity_curve_{save_name}.png")
+    
+    iou_thresholds, AP, AR, AIOU = get_data_for_plot(
+        object_results, 
+        fix_metric_name="confident_threshold", 
+        fix_value=0.5, 
+        variable_metric_name="iou_threshold"
+    )
 
     plot_and_save(
         iou_thresholds=iou_thresholds, 
         AR=AR, 
         AP=AP, 
-        save_path=save_path
+        AIOU=AIOU,
+        title="Metrics vs. IoU Matching Threshold (Fix Conf @ 0.5)",
+        xlabel='IoU Matching Threshold',
+        save_path=save_path2
     )
 
 
-    if coco_standard_save_path:
-        # also save from 0.5
-        indices = np.where(iou_thresholds > 0.46)[0]
-        iou_thresholds = iou_thresholds[indices]
-        AR = AR[indices]
-        AP = AP[indices]
-        AF1 = AF1[indices]
-        AIOU = AIOU[indices]
+# def plot_mean_average(object_results, root_save_path, save_name, root_coco_standard_save_path=None):
+#     """
+#     object_results: [
+#     {
+#         "confident_threshold": ...,
+#         "iou_threshold": ...,
+#         "avg_obj_recall": ...,
+#         "avg_obj_precision": ...,
+#         "avg_f1": ...,
+#         "avg_obj_iou": ...
+#     }, 
+#     ...]
+#     """
 
-        plot_and_save(
-            iou_thresholds=iou_thresholds, 
-            AR=AR, 
-            AP=AP, 
-            save_path=coco_standard_save_path
-        )
+#     # 1. Precision TP Curve
+#     # Shows: Stability of the Model
+#     # Fix Match IoU Threshold, flexible TP IoU Threshold
+#     # -> How does the model detection (mAP/mAR) and precision (mIoU) changes if  threshold of when a object is a TP changes
+#     # -> If the requirements on precision changes, how does change the results
+#     save_path = os.path.join(root_save_path, f"precision_tp_curve_{save_name}.png")
+#     coco_standard_save_path = os.path.join(root_coco_standard_save_path, f"precision_tp_curve_{save_name}_coco_standard.png")
+#     print(f"Precision-TP-Curve successfully saved to: {save_path}")
+
+#     # extract values
+#     tp_thresholds, match_thresholds, AP, AR, AIOU = get_data_for_plot(
+#         object_results, 
+#         match_threshold=0.5, 
+#         match_is_min=False,
+#         tp_threshold=0.0,
+#         tp_is_min=True,
+#         obj_iou_as_pred=True
+#     )
+
+#     plot_and_save(
+#         iou_thresholds=tp_thresholds, 
+#         AR=AR, 
+#         AP=AP, 
+#         AIOU=AIOU,
+#         title="Precision TP Curve",
+#         xlabel='IoU Threshold for TP',
+#         iou_label='Avg True Pred IoU (AIOU)',
+#         save_path=save_path
+#     )
+
+
+#     if coco_standard_save_path:
+#         # also save from 0.5
+#         # indices = np.where(iou_thresholds > 0.46)[0]
+#         # iou_thresholds = iou_thresholds[indices]
+#         # AR = AR[indices]
+#         # AP = AP[indices]
+#         # AF1 = AF1[indices]
+#         # AIOU = AIOU[indices]
+
+#         tp_thresholds, match_thresholds, AP, AR, AIOU = get_data_for_plot(
+#             object_results, 
+#             match_threshold=0.5, 
+#             match_is_min=False,
+#             tp_threshold=0.5,
+#             tp_is_min=True,
+#             obj_iou_as_pred=False
+#         )
+
+#         plot_and_save(
+#             iou_thresholds=tp_thresholds, 
+#             AR=AR, 
+#             AP=AP,
+#             AIOU=AIOU, 
+#             title="Precision TP Curve",
+#             xlabel='IoU Threshold for TP',
+#             iou_label='Avg True Pred IoU (AIOU)',
+#             save_path=coco_standard_save_path
+#         )
+
+#     # 2. mAP/mAR/mIoU Matching Sensity Curve
+#     # Shows: Sensity of Matching
+#     # Flexible Match IoU Threshold, fix TP IoU Threshold
+#     # -> How does the model detection (mAP/mAR) and precision (mIoU) changes if threshold of when a object is a considered a match changes
+#     # -> If the requirements on recall changes, how does change the results
+#     save_path = os.path.join(root_save_path, f"matching_sensity_curve_{save_name}.png")
+#     coco_standard_save_path = os.path.join(root_coco_standard_save_path, f"matching_sensity_curve_{save_name}_coco_standard.png")
+#     print(f"Matching Sensity-Curve successfully saved to: {save_path}")
+
+#     # extract values
+#     tp_thresholds, match_thresholds, AP, AR, AIOU = get_data_for_plot(
+#         object_results, 
+#         match_threshold=0.0, 
+#         match_is_min=True,
+#         tp_threshold=0.5,
+#         tp_is_min=False
+#     )
+
+#     plot_and_save(
+#         iou_thresholds=match_thresholds, 
+#         AR=AR, 
+#         AP=AP, 
+#         AIOU=AIOU,
+#         title="Matching Sensity Plot",
+#         xlabel='IoU Threshold for Matching',
+#         iou_label='Avg Matching IoU (AIOU)',
+#         save_path=save_path
+#     )
+
+
+#     if coco_standard_save_path:
+#         tp_thresholds, match_thresholds, AP, AR, AIOU = get_data_for_plot(
+#             object_results, 
+#             match_threshold=0.5, 
+#             match_is_min=True,
+#             tp_threshold=0.5,
+#             tp_is_min=False
+#         )
+
+#         plot_and_save(
+#             iou_thresholds=match_thresholds, 
+#             AR=AR, 
+#             AP=AP,
+#             AIOU=AIOU, 
+#             title="Matching Sensity Plot",
+#             xlabel='IoU Threshold for Matching',
+#             iou_label='Avg Matching IoU (AIOU)',
+#             save_path=coco_standard_save_path
+#         )
 
 
 
@@ -279,7 +473,7 @@ def evaluate_hf_pipeline(config):
     #     )
     #     return compute_metrics(preds=preds, labels=labels)
 
-    def compute_metrics_fn(eval_pred, model_name, processor, batch_size, ignore_index=255, using_heatmap_as_gt=False):
+    def compute_metrics_fn(eval_pred, model_name, processor, batch_size, ignore_index=255, using_heatmap_as_gt=False, as_prob=True):
         if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
             outputs = eval_pred.predictions
             labels = eval_pred.label_ids
@@ -293,7 +487,8 @@ def evaluate_hf_pipeline(config):
                 outputs,
                 model_name=model_name,
                 processor=processor,
-                target_sizes=target_sizes
+                target_sizes=target_sizes,
+                as_prob=as_prob
             )
             
             # --- MASK2FORMER / ONEFORMER SPECIFIC LABEL-PROCESSING ---
@@ -314,6 +509,10 @@ def evaluate_hf_pipeline(config):
                     H, W = masks.shape[1], masks.shape[2]
                     sem = np.zeros((H, W), dtype=np.int64)
                     for mask, cls in zip(masks, classes):
+                        # if as_prob:
+                        #     # FIXME -> how to do?
+                        #     sem[mask > 0.5] = mask
+                        # else:
                         sem[mask > 0.5] = cls
                     semantic_labels.append(sem)
                 
@@ -328,7 +527,8 @@ def evaluate_hf_pipeline(config):
                 outputs,
                 model_name=model_name,
                 processor=processor,
-                target_sizes=target_sizes
+                target_sizes=target_sizes,
+                as_prob=as_prob
             )
 
         # convert to numpy & cpu
@@ -378,11 +578,11 @@ def evaluate_hf_pipeline(config):
         # remove prefix 'test_' or 'eval_'
         if isinstance(value, list):
             for cur_obj_result in value:
-                line = f"Object Mean Average Values - IoU Threshold: {cur_obj_result["iou_threshold"]:.2f}"
+                line = f"Object Mean Average Values - IoU Threshold: {cur_obj_result["iou_threshold"]:.2f} & Confident Threshold: {cur_obj_result["confident_threshold"]:.2f}"
                 output_lines.append(line)
                 for cur_obj_result_name, cur_obj_result_value in cur_obj_result.items():
                     clean_name = cur_obj_result_name.replace("test_", "").replace("eval_", "")
-                    line = f"      - {clean_name:<30}: {cur_obj_result_value:.4f}" if isinstance(cur_obj_result_value, float) else f"{clean_name:<30}: {cur_obj_result_value}"
+                    line = f"      - {clean_name:<30}: {cur_obj_result_value:.4f}" if isinstance(cur_obj_result_value, float) else f"      - {clean_name:<30}: {cur_obj_result_value}"
                     output_lines.append(line)
         else:
             clean_name = metric_name.replace("test_", "").replace("eval_", "")
@@ -413,11 +613,8 @@ def evaluate_hf_pipeline(config):
         
     print(f"Metrics successfully saved to: {txt_path}")
 
-    save_path = os.path.join(eval_args.output_dir, f"precision_recall_curve_{save_name}.png")
-    coco_standard_save_path = os.path.join(eval_args.output_dir, f"precision_recall_curve_{save_name}_coco_standard.png")
-    plot_mean_average(results["eval_obj_results"], save_path=save_path, coco_standard_save_path=coco_standard_save_path)
-    print(f"Precision-Recall-Curve successfully saved to: {save_path}")
-
+    plot_mean_average(results["eval_obj_results"], root_save_path=eval_args.output_dir, save_name=save_name)
+    
     return results
 
 
