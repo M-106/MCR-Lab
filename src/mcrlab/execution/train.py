@@ -5,6 +5,7 @@ import os
 import shutil
 from datetime import datetime
 from functools import partial
+import yaml
 
 from tqdm import tqdm
 from transformers import (Trainer as HFTrainer, 
@@ -38,7 +39,9 @@ from mcrlab.log import get_logger, LoggerPrinter
 from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDataset
 from mcrlab.model_utils import get_model, get_device, get_criterion
 from mcrlab.metrices import compute_metrics
-from mcrlab.custom_hf.unet import UnetForSemanticSegmentation, UnetConfig
+# from mcrlab.custom_hf.unet import UnetForSemanticSegmentation, UnetConfig
+# from mcrlab.custom_hf.deeplabv3 import DeepLabV3Wrapper, DeepLabV3Config
+from mcrlab.custom_hf.smp_model import ModelForSemanticSegmentation, ModelConfig
 
 
 
@@ -340,14 +343,15 @@ class CustomSegmentationTrainer(HFTrainer):
 
 
 # Model registry: name -> (model_class, default_checkpoint)
-MODEL_REGISTRY = {
-    "segformer":   (SegformerForSemanticSegmentation,        "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"),
-    "mask2former": (Mask2FormerForUniversalSegmentation,     "facebook/mask2former-swin-large-cityscapes-semantic"),
-    "oneformer":   (OneFormerForUniversalSegmentation,       "shi-labs/oneformer_cityscapes_swin-l_160k"),
-    "unet":        (UnetForSemanticSegmentation,             "resnet34"),
-    # "deeplabv3":   (DeepLabV3ForSemanticSegmentation,        "microsoft/deeplabv3-resnet-101"),
-    # -> model = deeplabv3_resnet50(weights=DeepLabV3_ResNet50_Weights.DEFAULT)
-}
+# MODEL_REGISTRY = {
+#     "segformer":   (SegformerForSemanticSegmentation,        "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"),
+#     "mask2former": (Mask2FormerForUniversalSegmentation,     "facebook/mask2former-swin-large-cityscapes-semantic"),
+#     "oneformer":   (OneFormerForUniversalSegmentation,       "shi-labs/oneformer_cityscapes_swin-l_160k"),
+#     "unet":        (UnetForSemanticSegmentation,             "resnet34"),
+#     "deeplabv3":   (DeepLabV3Wrapper,                        None),
+#     # "deeplabv3":   (DeepLabV3ForSemanticSegmentation,        "microsoft/deeplabv3-resnet-101"),
+#     # -> model = deeplabv3_resnet50(weights=DeepLabV3_ResNet50_Weights.DEFAULT)
+# }
 
 # processor size config per model
 PROCESSOR_SIZE = {
@@ -355,35 +359,54 @@ PROCESSOR_SIZE = {
     "mask2former": {"height": 500, "width": 500},  # {"shortest_edge": 500},
     "oneformer":   {"height": 500, "width": 500},  # {"shortest_edge": 500},
     "unet":        {"height": 500, "width": 500},
-    # "deeplabv3":   {"height": 500, "width": 500},
+    "deeplabv3":   {"height": 500, "width": 500},
 }
 
 
 
-def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
+def get_model_and_processor(model_name, encoder_name, 
+                                check_point_path=None, num_labels=2,
                                 image_mean=[0.485, 0.456, 0.406],
                                 image_std=[0.229, 0.224, 0.225],
                                 mode="train",
                                 ignore_index=255,
                                 heatmap_is_gt=False):
-    if model_name not in MODEL_REGISTRY:
-        raise ValueError(f"Unsupported model '{model_name}'. Choose from: {list(MODEL_REGISTRY.keys())}")
+    # if model_name not in MODEL_REGISTRY:
+    #     raise ValueError(f"Unsupported model '{model_name}'. Choose from: {list(MODEL_REGISTRY.keys())}")
 
     # MODEL EXTRACTION
     # ------------
     # extract model class and checkpoitn/default loading
-    model_class, default_checkpoint = MODEL_REGISTRY[model_name]
+    # model_class, default_checkpoint = MODEL_REGISTRY[model_name]
     # checkpoint = check_point_path or default_checkpoint
-    checkpoint = check_point_path if check_point_path is not None else default_checkpoint
+    checkpoint = check_point_path if check_point_path is not None else "imagenet"
+    # if checkpoint == "None":
+    #     checkpoint = None
 
     # MODEL LOADING
     # ------------
-    if model_name == "unet":
-        # use wrapper
-        config = UnetConfig(num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=heatmap_is_gt)
-        model = model_class(config, encoder_weights="imagenet" if not check_point_path else None)
+    # if model_name == "unet":
+    #     # use wrapper
+    #     config = UnetConfig(num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=heatmap_is_gt)
+    #     model = model_class(config, encoder_weights="imagenet" if not check_point_path else None)
+    # elif model_name == "deeplabv3":
+    #     # use wrapper
+    #     config = DeepLabV3Config(num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=heatmap_is_gt)
+    #     model = model_class(config)
+
+    config = ModelConfig(
+        num_labels=num_labels, 
+        ignore_index=ignore_index, 
+        heatmap_is_gt=heatmap_is_gt, 
+        model_name=model_name, 
+        encoder_name=encoder_name
+    )
+    model = ModelForSemanticSegmentation(config, checkpoint)
     
-    if not (mode == "train" and model_name == "unet"):
+    # if not (mode == "train" and model_name == "unet") and \
+    #    not (mode == "train" and model_name == "deeplabv3") \
+    #    and checkpoint is not None:
+    if mode != "train" and checkpoint is not None:
         model = model_class.from_pretrained(
             checkpoint,
             num_labels=num_labels,
@@ -394,10 +417,10 @@ def get_model_and_processor(model_name, check_point_path=None, num_labels=2,
 
     # PROCESSOR
     # ------------
-    if model_name == "unet":
-        processor_source = "nvidia/mit-b0"
-    else:
-        processor_source = default_checkpoint if check_point_path else checkpoint
+    # if model_name == "unet" or model_name == "deeplabv3":
+    processor_source = "nvidia/mit-b0"
+    # else:
+    #     processor_source = default_checkpoint if check_point_path else checkpoint
     processor = AutoImageProcessor.from_pretrained(
         processor_source,
         do_resize=True,
@@ -421,43 +444,45 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
     is_torch_input = isinstance(outputs, torch.Tensor)
 
     # --- EXTRACT LOGITS & TRANSFOR IN TENSOR ---
-    if model_name in ["segformer", "deeplabv3", "unet"]:
-        if not is_numpy_input and hasattr(outputs, "logits"):
-            logits = outputs.logits
-        else:
-            logits = outputs
-            
-        if isinstance(logits, np.ndarray):
-            logits_tensor = torch.from_numpy(logits)
-        else:
-            logits_tensor = logits.detach().cpu()
-            
-    elif model_name in ["mask2former", "oneformer"]:
-        if is_numpy_input or is_torch_input:
-            logits_tensor = torch.from_numpy(outputs) if is_numpy_input else outputs
-        elif isinstance(outputs, tuple):
-            from transformers.models.mask2former.modeling_mask2former import Mask2FormerForUniversalSegmentationOutput
-            outputs_obj = Mask2FormerForUniversalSegmentationOutput(
-                class_queries_logits=torch.from_numpy(outputs[0]),
-                masks_queries_logits=torch.from_numpy(outputs[1]),
-            )
-            # for Mask2Former using directly the output-obj
-            logits_tensor = None 
-        else:
-            logits_tensor = None
+    # if model_name in ["segformer", "deeplabv3", "unet"]:
+    if not is_numpy_input and hasattr(outputs, "logits"):
+        logits = outputs.logits
     else:
-        raise ValueError(f"Unsupported model name: {model_name}")
+        logits = outputs
+        
+    if isinstance(logits, np.ndarray):
+        logits_tensor = torch.from_numpy(logits)
+    else:
+        logits_tensor = logits.detach().cpu()
+            
+    # elif model_name in ["mask2former", "oneformer"]:
+    #     if is_numpy_input or is_torch_input:
+    #         logits_tensor = torch.from_numpy(outputs) if is_numpy_input else outputs
+    #     elif isinstance(outputs, tuple):
+    #         from transformers.models.mask2former.modeling_mask2former import Mask2FormerForUniversalSegmentationOutput
+    #         outputs_obj = Mask2FormerForUniversalSegmentationOutput(
+    #             class_queries_logits=torch.from_numpy(outputs[0]),
+    #             masks_queries_logits=torch.from_numpy(outputs[1]),
+    #         )
+    #         # for Mask2Former using directly the output-obj
+    #         logits_tensor = None 
+    #     else:
+    #         logits_tensor = None
+    # else:
+    #     raise ValueError(f"Unsupported model name: {model_name}")
 
     # --- PROCESSING (PROBABILITY vs. ARGMAX) ---
     
     # important: do not use hf processor if probabilities are wanted
     if processor is not None and not using_heatmap_as_gt and not as_prob and \
-        (model_name not in ["segformer", "deeplabv3", "unet"] or hasattr(outputs, "logits")):
+       hasattr(outputs, "logits"):
+    # if processor is not None and not using_heatmap_as_gt and not as_prob and \
+    #     (model_name not in ["segformer", "deeplabv3", "unet"] or hasattr(outputs, "logits")):
         # Standard-Pfad für Integer-Klassen-Maps via Hugging Face
-        if model_name in ["mask2former", "oneformer"] and isinstance(outputs, tuple):
-            outputs_to_process = outputs_obj
-        else:
-            outputs_to_process = outputs
+        # if model_name in ["mask2former", "oneformer"] and isinstance(outputs, tuple):
+        #     outputs_to_process = outputs_obj
+        # else:
+        outputs_to_process = outputs
             
         preds_list = processor.post_process_semantic_segmentation(outputs_to_process, target_sizes=target_sizes)
         preds = torch.stack(preds_list)
@@ -658,6 +683,7 @@ def train_hf_pipeline(config):
     batch_size = config.train.batch_size
 
     model_name = config.model.name.lower()
+    encoder_name = config.model.encoder
     epochs = config.train.epochs
 
     heatmap_path = config.data.heatmap_path
@@ -703,7 +729,7 @@ def train_hf_pipeline(config):
     checkpoint_path = config.model.check_point_path
     if checkpoint_path == "None":
         checkpoint_path = None
-    model, processor = get_model_and_processor(model_name, checkpoint_path, num_labels=num_labels, mode="train", ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt)
+    model, processor = get_model_and_processor(model_name, encoder_name, checkpoint_path, num_labels=num_labels, mode="train", ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt)
 
     # Load Data
 
@@ -914,7 +940,7 @@ def train_hf_pipeline(config):
                 #     - Output 1: (100, 128, 128), dtype=float32)
                 #     - ...
 
-            if model_name in ["segformer", "unet"]:
+            if model_name in ["segformer", "unet", "deeplabv3"]:
                 # target_sizes = [labels.shape[-2:]] * labels.shape[0]
                 target_sizes = [(500, 500)] * labels.shape[0]  # batch_size  # [label.shape[-2:] for label in labels]
 
@@ -1074,6 +1100,10 @@ def train_hf_pipeline(config):
         # preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else None,  # only keep class + mask logits
         preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else logits,
     )
+
+    os.makedirs(f"./output/checkpoints/{save_name}", exist_ok=True)
+    with open(f"./output/checkpoints/{save_name}/config.txt", "w") as file_:
+        yaml.dump(config.dict(), file_)
 
     trainer.train()
     print("Success! Your Training is finish and your pipeline works.")

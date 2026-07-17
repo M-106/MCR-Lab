@@ -62,6 +62,7 @@ class TestConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     name: str
+    encoder: str
     check_point_path: Union[str, None]
 
 
