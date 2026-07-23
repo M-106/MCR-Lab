@@ -1,8 +1,8 @@
-mode: train    # custom_train, train, test, inference, tryout, preprocessing, eval_extraction
+mode: test    # custom_train, train, test, inference, tryout, preprocessing, eval_extraction
 
 
 custom_train:
-  batch_size: 8 # 12
+  batch_size: 2 # 12
   epochs: 10
   learning_rate: 0.001
   criterion: "bce"  # FIXME
@@ -13,9 +13,9 @@ custom_train:
   # add more
 
 
-# FIXME -> currently most of the trai args are not connected yet
+# FIXME -> currently most of the train args are not connected yet
 train:
-  batch_size: 8 # 12
+  batch_size: 6 # 8, 6 12
   epochs: 400
   learning_rate: 0.0005
   use_amp: False
@@ -26,7 +26,11 @@ train:
   checkpoint_best_model: True
   val_steps: 5
   lr_scheduler: None
-  exp_name: "comparison_1_teb7"
+  exp_name: "comparison_1_tblp16512"  # teb7, mb5, r101, r101_32x32d, d161, mos4
+  # tshp16s
+  # tmxt512 tu-maxvit_xlarge_tf_512
+  # ts2lw12t24 tu-swinv2_large_window12to24_192to384
+  # tblp16512 tu-beit_large_patch16_512.in22k_ft_in22k_in1k
 
 test:
   metrices: []
@@ -55,23 +59,27 @@ inference:
   save_path: "./output/inference/eval_preds.json"
 
 model:
-  name: "unet"  # "unet" "unetplusplus" "fpn" "pspnet" "deeplabv3" "deeplabv3plus" "linknet" "manet" "pan" "upernet" "segformer" "dpt"
-  encoder: "timm-efficientnet-b7"  # resnet34, resnet50, resnet101, efficientnet-b7, mit_b5, densenet161, vgg19
+  name: "unet"  # "unet" "unetplusplus" "fpn" "deeplabv3" "deeplabv3plus" dpt"
+  # not used: "pspnet"  "linknet" "manet" "pan" "upernet" "segformer" "
+  encoder: "tu-beit_large_patch16_512.in22k_ft_in22k_in1k"  # resnet34, resnet50, resnet101, efficientnet-b7, mit_b5, densenet161, vgg19
   # for others:
-  #    timm-efficientnet-b5/6/7
-  #    mit_b4/5
-  #    resnet101_32x16d
+  #    timm-efficientnet-b7 (5/6)
+  #    mit_b5
+  #    resnet101
+  #    resnext101_32x32d 
   #    densenet161
   #    mobileone_s4
   # for dpt: 
   #    tu-samvit_huge_patch16.sa1b
-  #    tu-maxvit_xlarge_tf_512.in22k_ft_in1k
-  #    tu-swinv2_large_window12to24_192to384.ms_in22k_ft_in1k
-  #    tu-vit_base_patch8_224.dino
-  #    tu-beitv2_large_patch16_224.in1k_ft_in22k_in1k
-  check_point_path: None
-  # "./output/checkpoints/2026_07_01_19_47_unet_whu_AdamW_without_norm/checkpoint-1196"
+  #    tu-maxvit_xlarge_tf_512
+  #    # tu-swinv2_large_window12to24_192to384   .ms_in22k_ft_in1k
+  #    # tu-vit_base_patch8_224.dino
+  #    tu-beit_large_patch16_512.in22k_ft_in22k_in1k
+  check_point_path: "./output/checkpoints/2026_07_17_22_10_unet_whu_comparison_1_teb7/checkpoint-702"
   # None
+  # final ablation study:
+  # "./output/checkpoints/2026_07_17_22_10_unet_whu_comparison_1_teb7/checkpoint-702"
+
   # normal
   # "./output/checkpoints/2026_06_22_20_31_unet_whu/checkpoint-1196"
   # "./output/checkpoints/2026_06_22_19_00_segformer_whu/checkpoint-1196"

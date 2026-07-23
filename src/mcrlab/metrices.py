@@ -361,8 +361,16 @@ def compute_metrics(preds, labels,
     avg_true_objects_per_img = 0.0
     avg_pred_objects_per_img = 0.0
 
-    for cur_confident_threshold in np.arange(confident_threshold_start, confident_threshold_end+confident_threshold_step, confident_threshold_step):
-        for cur_iou_threshold in np.arange(iou_threshold_start, iou_threshold_end+iou_threshold_step, iou_threshold_step):
+    # np.vectorize(lambda x: round(x, 2))(np.linspace(0.0, 0.5, 20))
+    confident_thresholds = np.vectorize(lambda x: round(x, 2))(\
+        np.arange(confident_threshold_start, \
+                  confident_threshold_end+confident_threshold_step, \
+                  confident_threshold_step))
+    iou_thresholds = np.vectorize(lambda x: round(x, 2))(\
+        np.arange(iou_threshold_start, iou_threshold_end+iou_threshold_step, iou_threshold_step))
+
+    for cur_confident_threshold in confident_thresholds:
+        for cur_iou_threshold in iou_thresholds:
             total_tp = 0
             total_fp = 0
             total_fn = 0

@@ -35,6 +35,7 @@ from mcrlab.classic.shape_fit import use_label_candidates_and_extract_center_poi
 from mcrlab.classic.utils import visualize_circle_fit, visualize_circle_shape_and_center_prediction, \
                                  visualize_ransac_inliers
 from mcrlab.point_cloud.shape_check import circle_shape_check
+from mcrlab.point_cloud.monte_carlo_simulation import eval_center_robustness, eval_ellipse_precision
 
 
 
@@ -1862,6 +1863,35 @@ def ground_truth_2d_and_3d_map_test(config):
     print("Successfull finished!")
 
 
+def eval_center_gt(config):
+    
+    def center_func():
+        pass  # as in eval gt creation
+
+    eval_center_robustness(
+        center_func,
+        n_samples_per_test=10000,
+        n_points_min=5000, 
+        n_points_max=100000,
+        center_min=-1000.0,
+        center_max=1000.0,
+        radius_min=0.2,
+        radius_max=1.2, 
+    )
+
+    eval_ellipse_precision(
+        center_func,
+        n_samples_per_test=10000,
+        n_points_min=50000, 
+        n_points_max=50000,
+        center_min=-1000.0,
+        center_max=1000.0,
+        radius_min=0.2,
+        radius_max=1.2, 
+        sigma=0.2
+    )
+
+
 # --------------
 # > Playground <
 # --------------
@@ -1902,8 +1932,10 @@ def tryout(config):
     # clustering_tryout(config)
     # make_split(config)
 
-    ground_truth_2d_map_test(config)
+    # ground_truth_2d_map_test(config)
     # ground_truth_2d_and_3d_map_test(config)
+
+    eval_center_gt(config)
     
 
 

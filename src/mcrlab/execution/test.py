@@ -347,6 +347,7 @@ def evaluate_hf_pipeline(config):
     print("Evaluating on device:", "GPU" if torch.cuda.is_available() else "CPU")
     
     model_name = config.model.name.lower()
+    encoder_name = config.model.encoder
     batch_size = config.test.batch_size  # or maybe set a specific eval_batch_size?
 
     heatmap_path = config.data.heatmap_path
@@ -370,7 +371,7 @@ def evaluate_hf_pipeline(config):
         raise ValueError("Please provide the path to your trained checkpoint in config.model.check_point_path")
 
     print(f"Loading trained model and processor from: {checkpoint_path}")
-    model, processor = get_model_and_processor(model_name, checkpoint_path, mode="test", num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt)
+    model, processor = get_model_and_processor(model_name, encoder_name, checkpoint_path, mode="test", num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt)
 
     parts = Path(checkpoint_path).parts
     exp_name = parts[-2]
@@ -537,7 +538,14 @@ def evaluate_hf_pipeline(config):
         if isinstance(labels, torch.Tensor):
             labels = labels.detach().cpu().numpy()
 
-        return compute_metrics(preds=preds, labels=labels, ignore_index=ignore_index, using_heatmap_as_gt=using_heatmap_as_gt)
+        return compute_metrics(
+            preds=preds, 
+            labels=labels, 
+            ignore_index=ignore_index, 
+            using_heatmap_as_gt=using_heatmap_as_gt,
+            confident_threshold_start=0.0, confident_threshold_end=0.96, confident_threshold_step=0.05, 
+            iou_threshold_start=0.0, iou_threshold_end=0.96, iou_threshold_step=0.05, 
+        )
 
     # Initialize Trainer for Evaluation Only
     eval_args = HFTrainingArguments(

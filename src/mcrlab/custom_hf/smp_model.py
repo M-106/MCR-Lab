@@ -3,6 +3,7 @@
 # -----------
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers import PreTrainedModel, PretrainedConfig
@@ -115,7 +116,7 @@ def get_smp_model_builder(model_name, encoder_name, encoder_weights, num_labels,
             classes=num_labels,
             activation=None,
             in_channels=3,
-            dynamic_img_size=True
+            #dynamic_img_size=True
         )
     else:
         raise ValueError(f"Unknown SMP Model Name '{model_name}'")
@@ -141,9 +142,22 @@ class ModelConfig(PretrainedConfig):
 
 class ModelForSemanticSegmentation(PreTrainedModel):
     config_class = ModelConfig
+    models_with_512_io = [
+        "unetplusplus", 
+        "fpn", 
+        "deeplabv3", 
+        "deeplabv3plus", 
+        "dpt"
+    ]
     
     def __init__(self, config, encoder_weights="imagenet"):
         super().__init__(config)
+
+        if encoder_weights is None:
+            if config.encoder_name in ['resnext101_32x48d']:
+                encoder_name = 'instagram'
+            else:
+                encoder_name = 'imagenet'
 
         self.model = get_smp_model_builder(
             model_name=config.model_name, 
@@ -157,7 +171,6 @@ class ModelForSemanticSegmentation(PreTrainedModel):
 
         self.config = config
 
-
         if self.config.heatmap_is_gt:
             self.heatmap_loss = torch.nn.MSELoss()
         else:
@@ -167,7 +180,12 @@ class ModelForSemanticSegmentation(PreTrainedModel):
             self.focal_loss = smp.losses.FocalLoss(mode="multiclass", ignore_index=self.config.ignore_index)
         
     def forward(self, pixel_values, labels=None, **kwargs):
+        if self.config.model_name in ModelForSemanticSegmentation.models_with_512_io:
+            pixel_values = F.pad(pixel_values, (0, 12, 0, 12))
         logits = self.model(pixel_values)
+        if self.config.model_name in ModelForSemanticSegmentation.models_with_512_io:
+            logits = logits[:, :, :500, :500]
+        # logits = F.interpolate(logits, size=(500, 500), mode='bilinear', align_corners=False)
         
         loss = None
         if labels is not None:

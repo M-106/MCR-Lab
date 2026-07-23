@@ -15,9 +15,9 @@ from transformers import (Trainer as HFTrainer,
                          OneFormerForUniversalSegmentation,
                          # DeepLabV3ForSemanticSegmentation,
                          SegformerImageProcessor,
-                         AutoImageProcessor)
-                         #TrainerCallBack as HFTrainerCallBack
-from transformers import get_cosine_schedule_with_warmup
+                         AutoImageProcessor,
+                         AutoConfig,
+                         get_cosine_schedule_with_warmup)
 from transformers.modeling_outputs import SemanticSegmenterOutput
 
 import segmentation_models_pytorch as smp
@@ -379,7 +379,7 @@ def get_model_and_processor(model_name, encoder_name,
     # extract model class and checkpoitn/default loading
     # model_class, default_checkpoint = MODEL_REGISTRY[model_name]
     # checkpoint = check_point_path or default_checkpoint
-    checkpoint = check_point_path if check_point_path is not None else "imagenet"
+    checkpoint = check_point_path if check_point_path is not None else None
     # if checkpoint == "None":
     #     checkpoint = None
 
@@ -394,26 +394,27 @@ def get_model_and_processor(model_name, encoder_name,
     #     config = DeepLabV3Config(num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=heatmap_is_gt)
     #     model = model_class(config)
 
-    config = ModelConfig(
-        num_labels=num_labels, 
-        ignore_index=ignore_index, 
-        heatmap_is_gt=heatmap_is_gt, 
-        model_name=model_name, 
-        encoder_name=encoder_name
-    )
-    model = ModelForSemanticSegmentation(config, checkpoint)
-    
-    # if not (mode == "train" and model_name == "unet") and \
-    #    not (mode == "train" and model_name == "deeplabv3") \
-    #    and checkpoint is not None:
-    if mode != "train" and checkpoint is not None:
-        model = model_class.from_pretrained(
-            checkpoint,
-            num_labels=num_labels,
-            ignore_mismatched_sizes=True
+    if mode == "train" or mode == "val":
+        config = ModelConfig(
+            num_labels=num_labels, 
+            ignore_index=ignore_index, 
+            heatmap_is_gt=heatmap_is_gt, 
+            model_name=model_name, 
+            encoder_name=encoder_name
         )
-    model.config.ignore_index = ignore_index
-    model.config.num_labels = num_labels
+        model = ModelForSemanticSegmentation(config, encoder_weights=None)  # checkpoint
+    else:
+        # config = AutoConfig.from_pretrained(checkpoint)
+        config = ModelConfig.from_pretrained(checkpoint)
+    
+        if mode != "train" and checkpoint is not None:
+            model = ModelForSemanticSegmentation.from_pretrained(
+                checkpoint,
+                config=config,
+                ignore_mismatched_sizes=True
+            )
+        # model.config.ignore_index = ignore_index
+        # model.config.num_labels = num_labels
 
     # PROCESSOR
     # ------------
@@ -424,7 +425,7 @@ def get_model_and_processor(model_name, encoder_name,
     processor = AutoImageProcessor.from_pretrained(
         processor_source,
         do_resize=True,
-        size=PROCESSOR_SIZE[model_name],
+        size={"height": 500, "width": 500},  # PROCESSOR_SIZE[model_name],
         size_divisibility=0,  # important, else it will round to the next vielfache
         do_rescale=False,
         do_normalize=False,  # FIXME check if that change something
@@ -940,59 +941,59 @@ def train_hf_pipeline(config):
                 #     - Output 1: (100, 128, 128), dtype=float32)
                 #     - ...
 
-            if model_name in ["segformer", "unet", "deeplabv3"]:
-                # target_sizes = [labels.shape[-2:]] * labels.shape[0]
-                target_sizes = [(500, 500)] * labels.shape[0]  # batch_size  # [label.shape[-2:] for label in labels]
+            # if model_name in ["segformer", "unet", "deeplabv3"]:
+            # target_sizes = [labels.shape[-2:]] * labels.shape[0]
+            target_sizes = [(500, 500)] * labels.shape[0]  # batch_size  # [label.shape[-2:] for label in labels]
 
-                preds = get_segmentation_prediction(
-                    outputs,
-                    model_name=model_name,
-                    processor=processor,
-                    target_sizes=target_sizes,
-                    using_heatmap_as_gt=using_heatmap_as_gt,
-                    as_prob=as_prob
-                )
-            else:
-                # raise ValueError("DEBUGGING STOP: did not expect to go here...")
-                # unpack labels and get true number of pictures
-                mask_labels_list = labels[0]
-                class_labels_list = labels[1]
-                num_real_images = len(mask_labels_list)
+            preds = get_segmentation_prediction(
+                outputs,
+                model_name=model_name,
+                processor=processor,
+                target_sizes=target_sizes,
+                using_heatmap_as_gt=using_heatmap_as_gt,
+                as_prob=as_prob
+            )
+            # else:
+            #     # raise ValueError("DEBUGGING STOP: did not expect to go here...")
+            #     # unpack labels and get true number of pictures
+            #     mask_labels_list = labels[0]
+            #     class_labels_list = labels[1]
+            #     num_real_images = len(mask_labels_list)
 
-                aggregated_batch_size = outputs[0].shape[0] if isinstance(outputs, tuple) else outputs.shape[0]
-                target_sizes = [(500, 500)] * aggregated_batch_size
+            #     aggregated_batch_size = outputs[0].shape[0] if isinstance(outputs, tuple) else outputs.shape[0]
+            #     target_sizes = [(500, 500)] * aggregated_batch_size
 
-                # slicing preds to match labels
-                # if isinstance(outputs, (list, tuple)):
-                #     cls_logits = outputs[0][:num_images]
-                #     mask_logits = outputs[1][:num_images]
-                #     outputs = (cls_logits, mask_logits)
-                # else:
-                #     outputs = outputs[:num_images]
+            #     # slicing preds to match labels
+            #     # if isinstance(outputs, (list, tuple)):
+            #     #     cls_logits = outputs[0][:num_images]
+            #     #     mask_logits = outputs[1][:num_images]
+            #     #     outputs = (cls_logits, mask_logits)
+            #     # else:
+            #     #     outputs = outputs[:num_images]
 
-                preds = get_segmentation_prediction(
-                    outputs,
-                    model_name=model_name,
-                    processor=processor,
-                    target_sizes=target_sizes,
-                    using_heatmap_as_gt=using_heatmap_as_gt,
-                    as_prob=as_prob
-                )
+            #     preds = get_segmentation_prediction(
+            #         outputs,
+            #         model_name=model_name,
+            #         processor=processor,
+            #         target_sizes=target_sizes,
+            #         using_heatmap_as_gt=using_heatmap_as_gt,
+            #         as_prob=as_prob
+            #     )
 
-                # drop padded elements, right??
-                preds = preds[:num_real_images]
+            #     # drop padded elements, right??
+            #     preds = preds[:num_real_images]
 
-                semantic_labels = []
-                for masks, classes in zip(mask_labels_list, class_labels_list):
-                    H, W = masks.shape[1], masks.shape[2]
-                    sem = np.zeros((H, W), dtype=np.int64)
-                    for mask, cls in zip(masks, classes):
-                        # if cls == 1:
-                        #     sem = mask
-                        # originally: 
-                        sem[mask > 0.5] = cls
-                    semantic_labels.append(sem)
-                labels = np.stack(semantic_labels)
+            #     semantic_labels = []
+            #     for masks, classes in zip(mask_labels_list, class_labels_list):
+            #         H, W = masks.shape[1], masks.shape[2]
+            #         sem = np.zeros((H, W), dtype=np.int64)
+            #         for mask, cls in zip(masks, classes):
+            #             # if cls == 1:
+            #             #     sem = mask
+            #             # originally: 
+            #             sem[mask > 0.5] = cls
+            #         semantic_labels.append(sem)
+            #     labels = np.stack(semantic_labels)
 
         else:
             outputs, labels = eval_pred
