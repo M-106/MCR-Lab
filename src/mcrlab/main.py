@@ -66,7 +66,10 @@ def main():
         else:
             from mcrlab.execution.eval_extraction import ground_truth_extraction
             ground_truth_extraction(config)
-        
+
+    elif config.mode == "center_eval":
+        from mcrlab.execution.eval import center_eval
+        center_eval(config)
     else:
         raise ValueError(f"'{config.mode}' is not an available mode for mcrlab.")
 

@@ -467,10 +467,16 @@ def bev_pixel_to_3d(
     """
     Converts a BEV pixel coordinate into 3D world coordinate.
     """
+    if isinstance(patch_points, (tuple, list)):
+        patch_points = patch_points[0]  # Adjust index if the point cloud is at a specific position
+
     if isinstance(patch_points, o3d.t.geometry.PointCloud):
         patch_points = patch_points.point[get_coordinate_attribute(patch_points)].cpu().numpy()
     elif isinstance(patch_points, PointCloudTensor):
         patch_points = patch_points.to_numpy(as_copy=True).coordinates
+
+    # Ensure it is definitively a numpy array
+    patch_points = np.asarray(patch_points)
 
     # pixel center to world xy
     world_x = origin_x + (pixel_x + 0.5) * resolution

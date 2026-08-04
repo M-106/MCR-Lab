@@ -1,4 +1,4 @@
-mode: test    # custom_train, train, test, inference, tryout, preprocessing, eval_extraction
+mode: tryout    # custom_train, train, test, inference, tryout, preprocessing, eval_extraction, center_eval
 
 
 custom_train:
@@ -54,14 +54,18 @@ eval_extraction:
     generate_2d_gt_maps: True
     generate_also_3d_gt_maps: False
 
+center_eval:
+    center_extraction_method: "polygon_centroid"
+    # "polygon_centroid", "circle_least_squares", "peak_maxima"
+
 inference:
   checkpoint_path: "./output/checkpoint/2026_06_22_20_31_unet/checkpoint-1196/model.safetensors"
   save_path: "./output/inference/eval_preds.json"
 
 model:
   name: "unet"  # "unet" "unetplusplus" "fpn" "deeplabv3" "deeplabv3plus" dpt"
-  # not used: "pspnet"  "linknet" "manet" "pan" "upernet" "segformer" "
-  encoder: "tu-beit_large_patch16_512.in22k_ft_in22k_in1k"  # resnet34, resnet50, resnet101, efficientnet-b7, mit_b5, densenet161, vgg19
+  # not used: "pspnet"  "linknet" "manet" "pan" "upernet" "segformer"
+  encoder: "timm-efficientnet-b7"  # resnet34, resnet50, resnet101, efficientnet-b7, mit_b5, densenet161, vgg19
   # for others:
   #    timm-efficientnet-b7 (5/6)
   #    mit_b5
@@ -79,6 +83,8 @@ model:
   # None
   # final ablation study:
   # "./output/checkpoints/2026_07_17_22_10_unet_whu_comparison_1_teb7/checkpoint-702"
+  # "./output/checkpoints/2026_07_18_09_01_unet_whu_comparison_1_mb5/checkpoint-481"
+  # "./output/checkpoints/2026_07_18_20_12_unetplusplus_whu_comparison_1_teb7/1079"
 
   # normal
   # "./output/checkpoints/2026_06_22_20_31_unet_whu/checkpoint-1196"
@@ -105,6 +111,7 @@ model:
 data: 
   name: whu  # paris, whu, sud, merged_whu_sud
   path: "/data/whu3d-dataset-wo-test-label"
+  name_2: "sud"
   path_2: "/data/SUD-ROAD"
   # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"
   # "C:/Users/tippolito/Data/SUD-ROAD"

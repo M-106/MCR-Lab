@@ -150,11 +150,11 @@ class ModelForSemanticSegmentation(PreTrainedModel):
         "dpt"
     ]
     
-    def __init__(self, config, encoder_weights="imagenet"):
+    def __init__(self, config, encoder_weights=None):
         super().__init__(config)
 
         if encoder_weights is None:
-            if config.encoder_name in ['resnext101_32x48d']:
+            if config.encoder_name in ['resnext101_32x48d', 'resnext101_32x32d']:
                 encoder_name = 'instagram'
             else:
                 encoder_name = 'imagenet'

@@ -884,6 +884,129 @@ def manhole_density_test(config):
 
 
 
+def manhole_3d_and_2d_density_test(config):
+    """
+    Manhole Density per Sample Check (2D & 3D)
+
+    3D:
+        - Mean: 590.67
+        - Median: 406.00
+        - Max: 3261.00
+        - Min: 1.00
+        - 5% Percentile: 20.00 (= 5% are under this value)
+        - 10% Percentile: 56.50
+        - 25% Percentile: 153.75
+        - 50% Percentile: 406.00
+        - 95% Percentile: 1562.50
+
+    2D:
+        - Mean: 550.23
+        - Median: 406.00
+        - Max: 2711.00
+        - Min: 1.00
+        - 5% Percentile: 19.00 (= 5% are under this value)
+        - 10% Percentile: 55.50
+        - 25% Percentile: 153.00
+        - 50% Percentile: 406.00
+        - 95% Percentile: 1368.50
+
+    The 10% percentile serves as an empirical threshold to exclude 
+    samples that have been so heavily decimated by sensors or 
+    edge sections that they can no longer be reliably 
+    considered 'complete' topologically.
+
+    If you had taken the 5% percentile (~20 points), you would have kept even more samples, but you risk heavily noisy or extremely garbled edge objects distorting your evaluation.
+
+    If you had taken the 25% percentile (~150 points), you would have already thrown away a quarter of your real test data (survivorship bias - you then only test on the "best" 75% of the data).
+
+    The 10% percentile is the classic statistical standard for capping the bottom 10% (the obvious outliers/errors) without pruning the majority of the dataset.
+    """
+    if config.data.name == "sud":
+        # label_value = (1, 255) if config.data.preprocessed else 3
+        label_value = 1 if config.data.preprocessed else 3
+    else:
+        # label_value = (1, 255) if config.data.preprocessed else 104002
+        label_value = 1 if config.data.preprocessed else 104002
+    
+    print("\n --- Intensity 3D and 2D Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader("whu", config.data.path, 
+                                    type="train", 
+                                    transform=get_basic_transform(),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    n_manhole_pixels = []
+    n_manhole_points = []
+
+    cur_pc = 0
+    for batch in data_loader:
+        cur_pc += 1
+        point_cloud = batch[0]
+        # point_cloud = point_cloud.get_as_o3d()
+        print_pc(point_cloud)
+
+        # get BEV images
+        print("Starting BEV projection...")
+        if point_cloud.bev_data is None:
+            raise ValueError("Preprocessed BEVs did not loaded.")
+            print("Starting BEV projection...")
+            tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+            bev_gen = bev_gen_wrapper(tiles, metas)
+        else:
+            print("Loaded Bevs from file...")
+            bev_gen = point_cloud.get_bev()
+
+        for idx, bev_item in enumerate(bev_gen):
+            img = bev_item["pixel_values"].detach().cpu().numpy()
+            labels = bev_item["labels"].detach().cpu().numpy()
+            meta = bev_item["meta"] 
+
+            # extracting manholes? -> get all manhole points + clustering
+
+            # print(labels.shape)
+            if not isinstance(label_value, (tuple, list)):
+                label_value = [label_value]
+
+            if np.any(np.isin(labels, label_value)):
+                pc_numpy = point_cloud.to_numpy(as_copy=True)
+                points = pc_numpy.labels
+
+                n_manhole_pixels.append(np.sum(labels == 1))
+                n_manhole_points.append(np.sum(points == 1))
+                
+    n_manhole_pixels = np.array(n_manhole_pixels)
+    n_manhole_points = np.array(n_manhole_points)
+
+    result = "Manhole Density per Sample Check (2D & 3D)"
+    result += f"\n\n3D:"
+    result += f"\n    - Mean: {np.mean(n_manhole_points):.2f}"
+    result += f"\n    - Median: {np.median(n_manhole_points):.2f}"
+    result += f"\n    - Max: {np.max(n_manhole_points):.2f}"
+    result += f"\n    - Min: {np.min(n_manhole_points):.2f}"
+    result += f"\n    - 5% Percentile: {np.percentile(n_manhole_points, 5):.2f} (= 5% are under this value)"
+    result += f"\n    - 10% Percentile: {np.percentile(n_manhole_points, 10):.2f}"
+    result += f"\n    - 25% Percentile: {np.percentile(n_manhole_points, 25):.2f}"
+    result += f"\n    - 50% Percentile: {np.percentile(n_manhole_points, 50):.2f}"
+    result += f"\n    - 95% Percentile: {np.percentile(n_manhole_points, 95):.2f}"
+
+    result += f"\n\n2D:"
+    result += f"\n    - Mean: {np.mean(n_manhole_pixels):.2f}"
+    result += f"\n    - Median: {np.median(n_manhole_pixels):.2f}"
+    result += f"\n    - Max: {np.max(n_manhole_pixels):.2f}"
+    result += f"\n    - Min: {np.min(n_manhole_pixels):.2f}"
+    result += f"\n    - 5% Percentile: {np.percentile(n_manhole_pixels, 5):.2f} (= 5% are under this value)"
+    result += f"\n    - 10% Percentile: {np.percentile(n_manhole_pixels, 10):.2f}"
+    result += f"\n    - 25% Percentile: {np.percentile(n_manhole_pixels, 25):.2f}"
+    result += f"\n    - 50% Percentile: {np.percentile(n_manhole_pixels, 50):.2f}"
+    result += f"\n    - 95% Percentile: {np.percentile(n_manhole_pixels, 95):.2f}"
+
+    print(result)
+    return result
+
+
+
 def preprocessing_speed_test(config):
     pass
 
@@ -1865,31 +1988,388 @@ def ground_truth_2d_and_3d_map_test(config):
 
 def eval_center_gt(config):
     
-    def center_func():
-        pass  # as in eval gt creation
+    def center_func(manhole_point_cloud, method="mesqra"):
+        # (center_coordinates_square, _, points_square, _, _, _, _) = center_estimation_3d_pipeline_debugging(
+        #     None,
+        #     method="least_square",
+        #     extended_return=True,
+        #     should_visualize=False,
+        #     clusters=manhole_point_cloud,
+        #     label_value=1,
+        # )
+        results = use_points_and_extract_center_point(
+            clusters=[manhole_point_cloud], 
+            method=method, 
+            use_projection=True,
+            apply_downsampling=False
+        )
 
-    eval_center_robustness(
-        center_func,
-        n_samples_per_test=10000,
-        n_points_min=5000, 
-        n_points_max=100000,
-        center_min=-1000.0,
-        center_max=1000.0,
-        radius_min=0.2,
-        radius_max=1.2, 
+        center_points = []
+        for result in results:
+            center, radius, cluster, inliers, error, loss, input_points = result
+            center_points.append(center)
+
+        # print(f"Debugging Type: {type(center_points)}")
+        # if isinstance(center_points, (list, tuple)):
+        #     print(f"Amount: {len(center_points)}")
+        #     (print(f"  - {sub_array.shape}") for sub_array in center_points)
+        # else:
+        #     print(f"Debugging Shape: {center_points.shape}")
+        return center_points
+
+
+    methods = ["mesqra", "mean", "ransac", "least_square"]
+    # sigmas = [0.00, 0.01, 0.02, 0.05, 0.10]
+    sigmas = [0.00, 0.05, 0.5]
+    point_amounts = [50, 100, 1000]
+    first_run = True
+
+    summary_fig, summary_axes = plt.subplots(nrows=len(methods), ncols=1, figsize=(15, 10))
+    summary_axes = np.atleast_1d(summary_axes)
+    summary_points_fig, summary_points_axes = plt.subplots(nrows=len(methods), ncols=1, figsize=(15, 10))
+    sigma_samples_fig, sigma_samples_axes = plt.subplots(nrows=len(methods), ncols=len(sigmas), figsize=(4 * len(sigmas), 3 * len(methods)))
+    n_points_samples_fig, n_points_samples_axes = plt.subplots(nrows=len(methods), ncols=len(point_amounts), figsize=(4 * len(point_amounts), 3 * len(methods)))
+
+    summary_fig.suptitle("Center GT Noise Robustness", fontsize=14)
+    summary_points_fig.suptitle("Center GT Points Robustness", fontsize=14)
+
+    summary_fig.subplots_adjust(hspace=0.5)
+    summary_points_fig.subplots_adjust(hspace=0.5)
+
+    sigma_samples_fig.subplots_adjust(
+        hspace=0.7,   # vertical spacing
+        wspace=0.3    # horizontal spacing
     )
 
-    eval_ellipse_precision(
-        center_func,
-        n_samples_per_test=10000,
-        n_points_min=50000, 
-        n_points_max=50000,
-        center_min=-1000.0,
-        center_max=1000.0,
-        radius_min=0.2,
-        radius_max=1.2, 
-        sigma=0.2
+    n_points_samples_fig.subplots_adjust(
+        hspace=0.7,   # vertical spacing
+        wspace=0.3    # horizontal spacing
     )
+
+    for i, method in enumerate(methods):
+        eval_center_robustness(
+            center_func,
+            n_samples_per_test=1000,
+            n_points_min=56,   # 10 percentile
+            n_points_max=1562, # 90 percentile
+            n_points=point_amounts,
+            center_min=0.0,
+            center_max=0.0,
+            radius_min=0.2,
+            radius_max=1.2, 
+            sigma_min=0.0,
+            sigma_max=0.5,
+            sigmas=sigmas,
+            sigma_n_values=3,
+            reset_dir=first_run,
+            method=method,
+            summary_sigma_ax=summary_axes[i],
+            summary_points_ax=summary_points_axes[i],
+            single_sigma_sample_ax=sigma_samples_axes[i],
+            single_n_points_sample_ax=n_points_samples_axes[i]
+        )
+
+        first_run = False
+
+        # eval_ellipse_precision(
+        #     center_func,
+        #     n_samples_per_test=1000,
+        #     n_points_min=56,   # 10 percentile
+        #     n_points_max=1562, # 90 percentile
+        #     center_min=0.0,
+        #     center_max=0.0,
+        #     radius_min=0.2,
+        #     radius_max=1.2, 
+        #     sigma=0.2,
+        #     method=method
+        # )
+
+    # summary_fig.tight_layout()
+    # sigma_samples_fig.tight_layout()
+
+    for i, method in enumerate(methods):
+        sigma_samples_axes[i, 0].set_ylabel(
+            method.upper(),
+            fontsize=14,
+            rotation=90,
+            labelpad=25
+        )
+    for i, sigma in enumerate(sigmas):
+        # sigma_samples_axes[0, i].set_xlabel(
+        #     f"δ {sigma}".upper(),
+        #     fontsize=14,
+        #     rotation=0,
+        #     labelpad=25
+        # )
+        sigma_samples_axes[0, i].set_title(
+            f"\u03C3 = {sigma}",  # \u03C3
+            fontsize=14,
+            pad=25
+        )
+
+    handles, labels = sigma_samples_axes[0, 0].get_legend_handles_labels()
+    sigma_samples_fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, 1.00)
+    )
+
+    for i, method in enumerate(methods):
+        n_points_samples_axes[i, 0].set_ylabel(
+            method.upper(),
+            fontsize=14,
+            rotation=90,
+            labelpad=25
+        )
+    for i, n_point in enumerate(point_amounts):
+        # n_points_samples_axes[0, i].set_ylabel(
+        #     f"{n_point} Points".upper(),
+        #     fontsize=14,
+        #     rotation=0,
+        #     labelpad=25
+        # )
+        n_points_samples_axes[0, i].set_title(
+            f"{n_point} Points".upper(),
+            fontsize=14,
+            pad=25
+        )
+
+    handles, labels = n_points_samples_axes[0, 0].get_legend_handles_labels()
+    n_points_samples_fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, 1.00)
+    )
+
+    # Sigma - setting equal aspect and autoscale
+    for ax in summary_axes.flat:
+        ax.set_aspect('equal', adjustable='box')
+
+    for ax in summary_axes:
+        ax.relim()
+        ax.autoscale_view()
+
+    xlim = summary_axes[0].get_xlim()
+    ylim = summary_axes[0].get_ylim()
+
+    for ax in summary_axes:
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+
+    # N-Points - setting equal aspect and autoscale
+    for ax in summary_points_axes.flat:
+        ax.set_aspect('equal', adjustable='box')
+
+    for ax in summary_points_axes:
+        ax.relim()
+        ax.autoscale_view()
+
+    xlim = summary_points_axes[0].get_xlim()
+    ylim = summary_points_axes[0].get_ylim()
+
+    for ax in summary_points_axes:
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+
+    
+    summary_fig.savefig(os.path.join("./output/monte-carlo-gt-check", f"center_summary_sigma.png"), dpi=300)  # , bbox_inches='tight'
+    summary_points_fig.savefig(os.path.join("./output/monte-carlo-gt-check", f"center_summary_points.png"), dpi=300)
+    sigma_samples_fig.savefig(os.path.join("./output/monte-carlo-gt-check", f"center_sigma_samples.png"), dpi=300)  # , bbox_inches='tight'
+    n_points_samples_fig.savefig(os.path.join("./output/monte-carlo-gt-check", f"center_n_points_samples.png"), dpi=300)
+
+    plt.close(summary_fig)
+    plt.close(summary_points_fig)
+    plt.close(sigma_samples_fig)
+    plt.close(n_points_samples_fig)
+
+
+def manhole_intensity_range_test(config):
+    label_value = 1
+    
+    print("\n --- Intensity Range Check ---")
+
+    def get_intensity_values(data_loader):
+        intensities = []
+
+        cur_pc = 0
+        for batch in data_loader:
+            cur_pc += 1
+            point_cloud = batch[0]
+            print_pc(point_cloud)
+
+            # get BEV images
+            print("Starting BEV projection...")
+            if point_cloud.bev_data is None:
+                raise ValueError("Preprocessed BEVs did not loaded.")
+                print("Starting BEV projection...")
+                tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)  #  tile_size=100.0/50.0, resolution=0.2/0.1
+                bev_gen = bev_gen_wrapper(tiles, metas)
+            else:
+                print("Loaded Bevs from file...")
+                bev_gen = point_cloud.get_bev()
+
+            for idx, bev_item in enumerate(bev_gen):
+                img = bev_item["pixel_values"].detach().cpu().numpy()
+                labels = bev_item["labels"].detach().cpu().numpy()
+                meta = bev_item["meta"] 
+
+                print(f"Image Shape: {img.shape}")
+
+                intensity_channel = img[3]
+
+                intensities += [intensity_channel.flatten()]
+
+        return np.array(intensities)
+                    
+
+    print("Loading Data...")
+    
+    data_loader = get_data_loader("whu", config.data.path, 
+                                    type="train", 
+                                    transform=get_basic_transform(),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    whu_intensities = get_intensity_values(data_loader)
+
+    data_loader = get_data_loader("sud", config.data.path_2, 
+                                    type="train", 
+                                    transform=get_basic_transform(),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    sud_intensities = get_intensity_values(data_loader)
+
+    print(f"Intensities Shape: {sud_intensities.shape}")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    def mean_histogram(dataset, bins=256, value_range=None):
+        hists = []
+        for img in dataset:
+            h, bin_edges = np.histogram(np.ravel(img), bins=bins, range=value_range, density=True)
+            hists.append(h)
+        hists = np.array(hists)
+        centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        return centers, hists.mean(axis=0), hists.std(axis=0)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for dataset, label, color in zip((whu_intensities, sud_intensities), ('WHU', 'SUD'), ('tab:blue', 'tab:orange')):
+        centers, mean_h, std_h = mean_histogram(dataset, bins=256)
+        ax.plot(centers, mean_h, label=label, color=color)
+        ax.fill_between(centers, mean_h - std_h, mean_h + std_h, alpha=0.2, color=color)
+    ax.set_xlabel('Intensity')
+    ax.set_ylabel('Density')
+    ax.set_yscale('log')
+    ax.legend()
+    plt.savefig(f"./output/intensity_range.png", dpi=300)
+    # plt.tight_layout()
+    # plt.show()
+
+
+    # def pooled_histogram(dataset, bins=256, value_range=None):
+    #     all_pixels = np.concatenate([np.ravel(img) for img in dataset])
+    #     hist, bin_edges = np.histogram(all_pixels, bins=bins, range=value_range, density=True)
+    #     centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    #     return centers, hist
+
+    # fig, ax = plt.subplots(figsize=(8, 5))
+    # for dataset, label in zip((whu_intensities, sud_intensities), ('WHU', 'SUD')):
+    #     centers, hist = pooled_histogram(dataset, bins=256)
+    #     ax.plot(centers, hist, label=label, linewidth=1.5)
+    # ax.set_xlabel('Intensity')
+    # ax.set_ylabel('Density')
+    # ax.legend()
+    # plt.tight_layout()
+    # plt.show()
+
+
+def manhole_sample_counting(config):
+    """
+     --- Manhole Sample Counting ---
+    Loading Data...
+    Found 11260 bev images (orthogonal images).
+    Found 11260 point clouds.
+    Found 11260 bev images (orthogonal images).
+    Reduced from 11260 to 106 (filtered by manhole points -> min manhole points: 50).
+    Found 1531 bev images (orthogonal images).
+    Found 1531 point clouds.
+    Found 1531 bev images (orthogonal images).
+    Reduced from 1531 to 32 (filtered by manhole points -> min manhole points: 50).
+    Found 2907 bev images (orthogonal images).
+    Found 2907 point clouds.
+    Found 2907 bev images (orthogonal images).
+    Reduced from 2907 to 34 (filtered by manhole points -> min manhole points: 50).
+    Found 982 bev images (orthogonal images).
+    Found 982 point clouds.
+    Found 982 bev images (orthogonal images).
+    Reduced from 982 to 172 (filtered by manhole points -> min manhole points: 50).
+    Found 37 bev images (orthogonal images).
+    Found 37 point clouds.
+    Found 37 bev images (orthogonal images).
+    Reduced from 37 to 11 (filtered by manhole points -> min manhole points: 50).
+    Found 160 bev images (orthogonal images).
+    Found 160 point clouds.
+    Found 160 bev images (orthogonal images).
+    Reduced from 160 to 44 (filtered by manhole points -> min manhole points: 50).
+
+    WHU:
+        - train: 106
+        - val: 32
+        - test: 34
+
+    SUD:
+        - train: 172
+        - val: 11
+        - test: 44
+    --- Finish ---
+    """
+
+    if config.data.name == "sud":
+        # label_value = (1, 255) if config.data.preprocessed else 3
+        label_value = 1 if config.data.preprocessed else 3
+    else:
+        # label_value = (1, 255) if config.data.preprocessed else 104002
+        label_value = 1 if config.data.preprocessed else 104002
+    
+    print("\n --- Manhole Sample Counting ---")
+
+    print("Loading Data...")
+    result = {}
+    for dataset_name in ["whu", "sud"]:
+        result[dataset_name] = {}
+        for mode in ["train", "val", "test"]:
+            result[dataset_name][mode] = 0
+            dataset = get_data_loader(dataset_name, config.data.path if dataset_name == "whu" else config.data.path_2, 
+                                            type=mode, 
+                                            transform=get_basic_transform(),
+                                            batch_size=1, shuffle=False, num_workers=0,
+                                            preprocessed=config.data.preprocessed, 
+                                            return_train_format=False,
+                                            return_dataset=True)
+            all_paths = dataset.point_cloud_paths
+            dataset = BEVDataset(path=all_paths, 
+                                    file_paths=[], 
+                                    has_labels=True, 
+                                    image_training=True, 
+                                    preprocessor=None,
+                                    augment=False,
+                                    pass_label_in_preprocessor=False,
+                                    heatmap_gt_path=False,
+                                    used_heatmap_channel=False)
+            dataset.manhole_filter(required_manhole_points=50, amount_non_manhole_samples=10)
+            
+            result[dataset_name][mode] += len(dataset)
+                
+    for dataset_name, modes in result.items():
+        print(f"\n{dataset_name.upper()}:")
+        for mode_name, sample_amount in modes.items():
+            print(f"    - {mode_name}: {sample_amount}")
+
 
 
 # --------------
@@ -1936,6 +2416,11 @@ def tryout(config):
     # ground_truth_2d_and_3d_map_test(config)
 
     eval_center_gt(config)
+
+    # manhole_3d_and_2d_density_test(config)
+    # manhole_intensity_range_test(config)
+
+    # manhole_sample_counting(config)
     
 
 

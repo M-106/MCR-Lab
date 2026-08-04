@@ -343,7 +343,7 @@ def plot_mean_average(object_results, root_save_path, save_name):
 
 
 
-def evaluate_hf_pipeline(config):
+def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_out_results=True):
     print("Evaluating on device:", "GPU" if torch.cuda.is_available() else "CPU")
     
     model_name = config.model.name.lower()
@@ -373,8 +373,18 @@ def evaluate_hf_pipeline(config):
     print(f"Loading trained model and processor from: {checkpoint_path}")
     model, processor = get_model_and_processor(model_name, encoder_name, checkpoint_path, mode="test", num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt)
 
+    if use_testset_1:
+        data_name = config.data.name
+        data_path = config.data.path
+    else:
+        data_name = config.data.name_2
+        data_path = config.data.path_2
+
     parts = Path(checkpoint_path).parts
     exp_name = parts[-2]
+    exp_name += f"_on_{data_name}"
+    if use_all_test_data:
+        exp_name += "_all"
 
     # Load Test Data
     heatmap_path = config.data.heatmap_path
@@ -397,8 +407,8 @@ def evaluate_hf_pipeline(config):
         all_test_paths = test_loader_raw.point_cloud_paths
 
         test_loader_raw = get_data_loader(
-            "sud", 
-            config.data.path, 
+            config.data.name_2, 
+            config.data.path_2, 
             type="test",
             transform=get_basic_transform(),
             batch_size=batch_size, 
@@ -411,8 +421,8 @@ def evaluate_hf_pipeline(config):
         all_test_paths.extend(test_loader_raw.point_cloud_paths)
     else:
         test_loader_raw = get_data_loader(
-            config.data.name, 
-            config.data.path, 
+            data_name, 
+            data_path, 
             type="test",
             transform=get_basic_transform(),
             batch_size=batch_size, 
@@ -438,7 +448,8 @@ def evaluate_hf_pipeline(config):
     )
     
     # Filter identical to training to keep metric comparisons fair
-    test_dataset.manhole_filter(required_manhole_points=50)
+    if not use_all_test_data:
+        test_dataset.manhole_filter(required_manhole_points=55.5)
     print(f"Loaded {len(test_dataset)} testing samples.")
 
     # Define Helper Functions (reused from your training codebase)
@@ -601,7 +612,8 @@ def evaluate_hf_pipeline(config):
     
     # print
     text_content = "\n".join(output_lines)
-    print(text_content)
+    if print_out_results:
+        print(text_content)
 
     # save in file
     # now = datetime.now()
@@ -627,23 +639,43 @@ def evaluate_hf_pipeline(config):
 
 
 
-def predict_single_sample(model, nodel_name, processor, image, device="cuda"):
+def predict_single_sample(model, model_name, processor, image, device="cuda"):
 
     model.to(device)
     model.eval()
 
+    # if isinstance(image, np.ndarray):
+    #     image = torch.from_numpy(image)
+    
+    # if isinstance(image, torch.Tensor):
+    #     image = image.float()
+    #     # Add batch dimension if missing (e.g., [C, H, W] -> [1, C, H, W])
+    #     if image.ndim == 3:
+    #         image = image.unsqueeze(0)
+    #     image = image.to(model.device)
+
+    # print(f"Input Image Type: {image.dtype}")
+
     # Preprocess
     # Adjust inputs based on your specific model requirements
-    inputs = processor(images=image, return_tensors="pt").to(device)
+    if processor is not None:
+        inputs = processor(images=image, return_tensors="pt").to(device)
+    else:
+        inputs = image.to(device)
+
+    # print(f"Input Processed Image Type: {inputs.dtype}")
 
     # Inference
     with torch.no_grad():
-        outputs = model(**inputs)
+        outputs = model(inputs)
 
     # Post-process (using your existing helper)
-    # The 'target_sizes' is usually the original image size (H, W)
-    target_sizes = [image.size[::-1]] # PIL size is (W, H), need (H, W)
-    
+    if isinstance(image, torch.Tensor):
+        h, w = image.shape[-2], image.shape[-1]
+        target_sizes = [(h, w)]
+    else:
+        target_sizes = [image.size[::-1]]
+
     prediction = get_segmentation_prediction(
         outputs, 
         model_name=model_name,
@@ -656,7 +688,87 @@ def predict_single_sample(model, nodel_name, processor, image, device="cuda"):
 
 def test(config):
 
-    evaluate_hf_pipeline(config)
+    encoder_to_short = {
+        "timm-efficientnet-b7": "teb7", 
+        "mit_b5": "mb5", 
+        "resnet101": "r101", 
+        "resnext101_32x32d": "r101_32x32d", 
+        "densenet161": "d161", 
+        "mobileone_s4": "mos4",
+        "tu-samvit_huge_patch16.sa1b": "tshp16s", 
+        "tu-maxvit_xlarge_tf_512": "tmxt512", 
+        "tu-beit_large_patch16_512.in22k_ft_in22k_in1k": "tblp16512"
+    }
+
+    names = [
+        "unet",
+        # "fpn", 
+        # "deeplabv3", 
+        # "deeplabv3plus", 
+        "dpt"]
+    encoders = [
+        ["resnext101_32x32d"], 
+        # ["timm-efficientnet-b7", "mit_b5", "resnet101", "resnext101_32x32d", "densenet161", "mobileone_s4"], 
+        # ["timm-efficientnet-b7", "resnet101", "resnext101_32x32d", "mobileone_s4"],
+        # ["timm-efficientnet-b7", "mit_b5", "resnet101", "resnext101_32x32d", "mobileone_s4"],
+        ["tu-samvit_huge_patch16.sa1b", "tu-maxvit_xlarge_tf_512", "tu-beit_large_patch16_512.in22k_ft_in22k_in1k"]
+    ]
+    checkpoint_paths = [
+        ["./output/checkpoints/2026_07_18_11_59_unet_whu_comparison_1_r101_32x32d/checkpoint-962"],
+        # ["./output/checkpoints/2026_07_19_12_06_fpn_whu_comparison_1_teb7/checkpoint-819",
+        #  "./output/checkpoints/2026_07_19_13_13_fpn_whu_comparison_1_mb5/checkpoint-546",
+        #  "./output/checkpoints/2026_07_19_14_44_fpn_whu_comparison_1_r101/checkpoint-637",
+        #  "./output/checkpoints/2026_07_19_15_28_fpn_whu_comparison_1_r101_32x32d/checkpoint-1027",
+        #  "./output/checkpoints/2026_07_19_18_11_fpn_whu_comparison_1_d161/checkpoint-1066",
+        #  "./output/checkpoints/2026_07_19_19_07_fpn_whu_comparison_1_mos4/checkpoint-1066"],
+        # ["./output/checkpoints/2026_07_19_20_08_deeplabv3_whu_comparison_1_teb7/checkpoint-5141",
+        #  "./output/checkpoints/2026_07_20_05_37_deeplabv3_whu_comparison_1_r101/checkpoint-1479",
+        #  "./output/checkpoints/2026_07_20_10_43_deeplabv3_whu_comparison_1_r101_32x32d/checkpoint-3869",
+        #  "./output/checkpoints/2026_07_20_17_59_deeplabv3_whu_comparison_1_mos4/checkpoint-1428"],
+        #  ["./output/checkpoints/2026_07_20_20_23_deeplabv3plus_whu_comparison_1_teb7/checkpoint-4240",
+        #  "./output/checkpoints/2026_07_21_04_34_deeplabv3plus_whu_comparison_1_mb5/checkpoint-1190",
+        #  "./output/checkpoints/2026_07_21_06_33_deeplabv3plus_whu_comparison_1_r101/checkpoint-1003",
+        #  "./output/checkpoints/2026_07_21_08_27_deeplabv3plus_whu_comparison_1_r101_32x32d/checkpoint-1898",
+        #  "./output/checkpoints/2026_07_21_12_16_deeplabv3plus_whu_comparison_1_mos4/checkpoint-663"],
+         ["./output/checkpoints/2026_07_21_13_59_dpt_whu_comparison_1_tshp16s/checkpoint-1248",
+         "./output/checkpoints/2026_07_22_16_38_dpt_whu_comparison_1_tmxt512/checkpoint-4134",
+         "./output/checkpoints/2026_07_23_07_15_dpt_whu_comparison_1_tblp16512/checkpoint-510"],
+    ]
+
+    model_entries = zip(names, encoders, checkpoint_paths)
+
+    # first check, if every configuration is right
+    print("Start Testing")
+    for name, encoders, ckpt_paths in model_entries:
+        backbone_and_weights = zip(encoders, ckpt_paths)
+        for encoder, path in backbone_and_weights:
+
+            # sanity check
+            if name not in path:
+                raise ValueError(f"Model-Name ('{name}') not in ckpt path ('{path}') ")
+
+            if encoder_to_short[encoder] not in path:
+                raise ValueError(f"Encoder-Name ('{encoder_to_short[encoder]}') not in ckpt path ('{path}') ")
+
+            if not os.path.exists(path):
+                raise ValueError(f"Path does not exists: {path}")
+    print("Passed all Tests. Start Evaluating now.")
+
+    model_entries = zip(names, encoders, checkpoint_paths)
+    for name, encoders, ckpt_paths in model_entries:
+        backbone_and_weights = zip(encoders, ckpt_paths)
+        for encoder, path in backbone_and_weights:
+
+            config.model.name = name
+            config.model.encoder = encoder
+            config.model.check_point_path = path
+
+
+            evaluate_hf_pipeline(config, use_all_test_data=False, use_testset_1=True, print_out_results=False)
+            # evaluate_hf_pipeline(config, use_all_test_data=True, use_testset_1=True)
+
+            evaluate_hf_pipeline(config, use_all_test_data=False, use_testset_1=False, print_out_results=False)
+            # evaluate_hf_pipeline(config, use_all_test_data=True, use_testset_1=False)
 
     # # load model
     # model = get_model(config.model.name)

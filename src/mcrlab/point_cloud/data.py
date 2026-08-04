@@ -1210,113 +1210,115 @@ class BEVDataset(Dataset):
     def __getitem__(self, idx):
         cur_file_path = self.file_paths[idx]
 
-        data_name = "sud" if "sud-road" in cur_file_path.lower() else "whu"
+        return self._process_item_by_path(cur_file_path)
 
-        pc_id, x_start, y_start = self.extract_grid_identifier(cur_file_path)
+        # data_name = "sud" if "sud-road" in cur_file_path.lower() else "whu"
 
-        tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
+        # pc_id, x_start, y_start = self.extract_grid_identifier(cur_file_path)
 
-        if self.has_labels:
+        # tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
 
-            x_np = tile[:-1].transpose(1, 2, 0)
-            y_np = tile[-1]
+        # if self.has_labels:
 
-            # print(f"Debugging y shape before preprocessing: {y_np.shape}")
+        #     x_np = tile[:-1].transpose(1, 2, 0)
+        #     y_np = tile[-1]
 
-            # load additional Heatmap GT
-            if self.heatmap_gt_path is not None:
-                cur_heatmap_gt_path = os.path.join(self.heatmap_gt_path, f"{data_name}_{pc_id}_{x_start}_{y_start}.npy")
-                # print(f"Check the path, it is right?: {cur_heatmap_gt_path}")
-                if os.path.exists(cur_heatmap_gt_path):
-                    gt_2d_map = np.load(cur_heatmap_gt_path)
-                    # print("Did found Heatmap!")
-                else:
-                    raise ValueError("All Heatmaps should be found!!!")
-                    # print("Did NOT found Heatmap!")
-                    # FIXME -> why can't find heatmaps?
-                    gt_2d_map = np.zeros(shape=(500, 500, 3))
-                # y_np = y_np.reshape((500, 500, 1))
-                # y_np = np.concatenate((y_np, gt_2d_map), axis=-1)
-                target_channel = gt_2d_map[:, :, self.used_heatmap_channel].reshape((500, 500))  # .unsqueeze()
-                # add missing values?
-                # target_channel[y_np == 255] = 255
-                y_np = target_channel # * 255
+        #     # print(f"Debugging y shape before preprocessing: {y_np.shape}")
 
-            if self.augment:
-                augmented = self.aug_pipeline(image=x_np, mask=y_np)
-                x_np = augmented['image']
-                y_np = augmented['mask']
+        #     # load additional Heatmap GT
+        #     if self.heatmap_gt_path is not None:
+        #         cur_heatmap_gt_path = os.path.join(self.heatmap_gt_path, f"{data_name}_{pc_id}_{x_start}_{y_start}.npy")
+        #         # print(f"Check the path, it is right?: {cur_heatmap_gt_path}")
+        #         if os.path.exists(cur_heatmap_gt_path):
+        #             gt_2d_map = np.load(cur_heatmap_gt_path)
+        #             # print("Did found Heatmap!")
+        #         else:
+        #             raise ValueError("All Heatmaps should be found!!!")
+        #             # print("Did NOT found Heatmap!")
+        #             # FIXME -> why can't find heatmaps?
+        #             gt_2d_map = np.zeros(shape=(500, 500, 3))
+        #         # y_np = y_np.reshape((500, 500, 1))
+        #         # y_np = np.concatenate((y_np, gt_2d_map), axis=-1)
+        #         target_channel = gt_2d_map[:, :, self.used_heatmap_channel].reshape((500, 500))  # .unsqueeze()
+        #         # add missing values?
+        #         # target_channel[y_np == 255] = 255
+        #         y_np = target_channel # * 255
 
-            # point_exist_mask = np.where(y_np == 255, 0.0, 1.0).astype(np.float32)
+        #     if self.augment:
+        #         augmented = self.aug_pipeline(image=x_np, mask=y_np)
+        #         x_np = augmented['image']
+        #         y_np = augmented['mask']
 
-            x = normalize_bev(x_np.transpose(2, 0, 1))
-            x = torch.from_numpy(x).float()
-            if self.image_training:
-                x = x[[0,2,3]]     # drop channel
-                # x = x[[1,2,3]]
-                # x[2] = torch.from_numpy(point_exist_mask)
+        #     # point_exist_mask = np.where(y_np == 255, 0.0, 1.0).astype(np.float32)
 
-                # raise ValueError(f"DEBUGGING STOP -> Shape x: {x_np.shape} -> Shape y: {y_np.shape}")
+        #     x = normalize_bev(x_np.transpose(2, 0, 1))
+        #     x = torch.from_numpy(x).float()
+        #     if self.image_training:
+        #         x = x[[0,2,3]]     # drop channel
+        #         # x = x[[1,2,3]]
+        #         # x[2] = torch.from_numpy(point_exist_mask)
 
-                if self.preprocessor is not None:
-                    # HF preprocessors expect numpy (H, W, C) or PIL
-                    x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
-                    if self.pass_label_in_preprocessor:
-                        if self.heatmap_gt_path is None:
-                            y_np = y_np.astype(np.int32)
-                        # print(f"Debugging 2 y shape before preprocessing: {y_np.shape}")
-                        processed = self.preprocessor(
-                            images=x_np,
-                            segmentation_maps=y_np,
-                            return_tensors="pt"
-                        )
-                        # print(f"Debugging y 3 shape before preprocessing: {y_np.shape}")
-                        # print(f"Debugging mask labels shape before preprocessing: {processed["mask_labels"][0].shape}")
-                        # print(f"Debugging class_labels shape before preprocessing: {processed["class_labels"][0].shape}")
-                        x = processed["pixel_values"].squeeze(0)  # (C, H, W)
-                        if self.heatmap_gt_path is None:
-                            y = torch.from_numpy(y_np).long()
-                        else:
-                            y = torch.from_numpy(y_np).float()
-                        return {
-                            "pixel_values": x,
-                            "mask_labels": processed["mask_labels"][0],    # squeeze batch dim
-                            "class_labels": processed["class_labels"][0],
-                            "labels": y,
-                            "meta": meta
-                        }
-                    else:
-                        processed = self.preprocessor(
-                            images=x_np,
-                            return_tensors="pt"
-                        )
-                    # FIXME, OneFromer need: task_inputs=["semantic"]?
-                    x = processed["pixel_values"].squeeze(0)  # (C, H, W)
-                else:
-                    # x = (x - x.mean()) / (x.std() + 1e-6)
-                    # Update me!
-                    x[:2] = (x[:2] - x[:2].mean()) / (x[:2].std() + 1e-6)
-                assert x.ndim == 3
+        #         # raise ValueError(f"DEBUGGING STOP -> Shape x: {x_np.shape} -> Shape y: {y_np.shape}")
 
-            if self.heatmap_gt_path is None:
-                y = torch.from_numpy(y_np).long()
-            else:
-                y = torch.from_numpy(y_np).float()
-            assert y.ndim == 2
+        #         if self.preprocessor is not None:
+        #             # HF preprocessors expect numpy (H, W, C) or PIL
+        #             x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
+        #             if self.pass_label_in_preprocessor:
+        #                 if self.heatmap_gt_path is None:
+        #                     y_np = y_np.astype(np.int32)
+        #                 # print(f"Debugging 2 y shape before preprocessing: {y_np.shape}")
+        #                 processed = self.preprocessor(
+        #                     images=x_np,
+        #                     segmentation_maps=y_np,
+        #                     return_tensors="pt"
+        #                 )
+        #                 # print(f"Debugging y 3 shape before preprocessing: {y_np.shape}")
+        #                 # print(f"Debugging mask labels shape before preprocessing: {processed["mask_labels"][0].shape}")
+        #                 # print(f"Debugging class_labels shape before preprocessing: {processed["class_labels"][0].shape}")
+        #                 x = processed["pixel_values"].squeeze(0)  # (C, H, W)
+        #                 if self.heatmap_gt_path is None:
+        #                     y = torch.from_numpy(y_np).long()
+        #                 else:
+        #                     y = torch.from_numpy(y_np).float()
+        #                 return {
+        #                     "pixel_values": x,
+        #                     "mask_labels": processed["mask_labels"][0],    # squeeze batch dim
+        #                     "class_labels": processed["class_labels"][0],
+        #                     "labels": y,
+        #                     "meta": meta
+        #                 }
+        #             else:
+        #                 processed = self.preprocessor(
+        #                     images=x_np,
+        #                     return_tensors="pt"
+        #                 )
+        #             # FIXME, OneFromer need: task_inputs=["semantic"]?
+        #             x = processed["pixel_values"].squeeze(0)  # (C, H, W)
+        #         else:
+        #             # x = (x - x.mean()) / (x.std() + 1e-6)
+        #             # Update me!
+        #             x[:2] = (x[:2] - x[:2].mean()) / (x[:2].std() + 1e-6)
+        #         assert x.ndim == 3
 
-            return {
-                "pixel_values": x,   # (C, H, W)
-                "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
-                "meta": meta
-            }
-        else:
-            x = normalize_bev(tile)
-            x = torch.from_numpy(x).float()
-            return {
-                "pixel_values": x,   # (C, H, W)
-                "labels": None,
-                "meta": meta
-            }
+        #     if self.heatmap_gt_path is None:
+        #         y = torch.from_numpy(y_np).long()
+        #     else:
+        #         y = torch.from_numpy(y_np).float()
+        #     assert y.ndim == 2
+
+        #     return {
+        #         "pixel_values": x,   # (C, H, W)
+        #         "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
+        #         "meta": meta
+        #     }
+        # else:
+        #     x = normalize_bev(tile)
+        #     x = torch.from_numpy(x).float()
+        #     return {
+        #         "pixel_values": x,   # (C, H, W)
+        #         "labels": None,
+        #         "meta": meta
+        #     }
 
     def manhole_filter(self, required_manhole_points=200, amount_non_manhole_samples=10):
         new_file_paths = []
@@ -1366,29 +1368,107 @@ class BEVDataset(Dataset):
                 file_paths = self.file_paths
 
         for cur_file_path in file_paths:
-            tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
+            yield self._process_item_by_path(cur_file_path)
 
-            if self.has_labels:
-                x = torch.from_numpy(tile[:-1]).float()
-                if self.heatmap_gt_path is None:
-                    y = torch.from_numpy(tile[-1]).long()
-                else:
-                    y = torch.from_numpy(tile[-1]).float()
+        # for cur_file_path in file_paths:
+        #     tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
+
+        #     if self.has_labels:
+        #         x = torch.from_numpy(tile[:-1]).float()
+        #         if self.heatmap_gt_path is None:
+        #             y = torch.from_numpy(tile[-1]).long()
+        #         else:
+        #             y = torch.from_numpy(tile[-1]).float()
                 
-                assert x.ndim == 3
-                assert y.ndim == 2
-                yield {
-                    "pixel_values": x,   # (C, H, W)
-                    "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
-                    "meta": meta
-                }
-            else:
-                x = torch.from_numpy(tile).float()
-                yield {
-                    "pixel_values": x,   # (C, H, W)
-                    "labels": None,
-                    "meta": meta
-                }
+        #         assert x.ndim == 3
+        #         assert y.ndim == 2
+        #         yield {
+        #             "pixel_values": x,   # (C, H, W)
+        #             "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
+        #             "meta": meta
+        #         }
+        #     else:
+        #         x = torch.from_numpy(tile).float()
+        #         yield {
+        #             "pixel_values": x,   # (C, H, W)
+        #             "labels": None,
+        #             "meta": meta
+        #         }
+        
+
+    def _process_item_by_path(self, cur_file_path):
+        data_name = "sud" if "sud-road" in cur_file_path.lower() else "whu"
+        pc_id, x_start, y_start = self.extract_grid_identifier(cur_file_path)
+
+        tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
+
+        if self.has_labels:
+            x_np = tile[:-1].transpose(1, 2, 0)
+            y_np = tile[-1]
+
+            if self.heatmap_gt_path is not None:
+                cur_heatmap_gt_path = os.path.join(self.heatmap_gt_path, f"{data_name}_{pc_id}_{x_start}_{y_start}.npy")
+                if os.path.exists(cur_heatmap_gt_path):
+                    gt_2d_map = np.load(cur_heatmap_gt_path)
+                else:
+                    gt_2d_map = np.zeros(shape=(500, 500, 3))
+                y_np = gt_2d_map[:, :, self.used_heatmap_channel].reshape((500, 500))
+
+            if self.augment:
+                augmented = self.aug_pipeline(image=x_np, mask=y_np)
+                x_np = augmented['image']
+                y_np = augmented['mask']
+
+            x = normalize_bev(x_np.transpose(2, 0, 1))
+            x = torch.from_numpy(x).float()
+            
+            if self.image_training:
+                x = x[[0, 2, 3]]    # Channel drop/choice
+
+                if self.preprocessor is not None:
+                    x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
+                    if self.pass_label_in_preprocessor:
+                        if self.heatmap_gt_path is None:
+                            y_np = y_np.astype(np.int32)
+                        processed = self.preprocessor(
+                            images=x_np,
+                            segmentation_maps=y_np,
+                            return_tensors="pt"
+                        )
+                        x = processed["pixel_values"].squeeze(0)  # (C, H, W)
+                        y = torch.from_numpy(y_np).long() if self.heatmap_gt_path is None else torch.from_numpy(y_np).float()
+                        
+                        return {
+                            "pixel_values": x,
+                            "mask_labels": processed["mask_labels"][0],
+                            "class_labels": processed["class_labels"][0],
+                            "labels": y,
+                            "meta": meta
+                        }
+                    else:
+                        processed = self.preprocessor(
+                            images=x_np,
+                            return_tensors="pt"
+                        )
+                    x = processed["pixel_values"].squeeze(0)  # (C, H, W)
+                else:
+                    x[:2] = (x[:2] - x[:2].mean()) / (x[:2].std() + 1e-6)
+            
+            y = torch.from_numpy(y_np).long() if self.heatmap_gt_path is None else torch.from_numpy(y_np).float()
+            
+            return {
+                "pixel_values": x,
+                "labels": y,
+                "meta": meta
+            }
+        else:
+            x = normalize_bev(tile)
+            x = torch.from_numpy(x).float()
+            return {
+                "pixel_values": x,
+                "labels": None,
+                "meta": meta
+            }
 
     def extract_bev_path_from_full_path(self, path):
         _, bev_file_name = os.path.split(path)

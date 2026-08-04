@@ -424,6 +424,51 @@ def extract_center_point(points, method, use_2d_version, use_projection=False, a
             "loss": None,
             "input_points": points
         }
+    elif method == "mesqra":
+        if use_2d_version:
+            cur_center_mean = np.array([np.mean(points[:, 0]), np.mean(points[:, 1])])
+            center_x, center_y, r_s, mean_distance_error, loss = fit_circle_least_squares(x, y)
+            center_ls = np.array([center_x, center_y])
+            center_r, axis, r_r, inliers, error = fit_circle_ransac(x, y, method="sklearn")
+        else:
+            # print(f"Points shape: {points.shape}")
+            # print(f"Points: {points}")
+            cur_center_mean = np.array([np.mean(points[:, 0]), np.mean(points[:, 1]), np.mean(points[:, 2])])
+            center_ls, normal, r_s, mean_distance_error, loss = fit_circle_least_squares_3D(points)
+            center_r, axis, r_r, inliers, error = fit_circle_ransac_3D(points, use_projection=use_projection)
+
+        cur_center = np.mean(np.stack([center_ls, center_r, cur_center_mean], axis=0), axis=0)
+        # print(f"Cur Center Pred: {cur_center}")
+        # print(f"Cur Center Squares Pred: {center_ls}")
+        # print(f"Cur Center cur_center_mean Pred: {cur_center_mean}")
+
+        return {
+            "center": cur_center,
+            "radius": (r_r+r_s)/2,
+            "inliers": inliers,
+            "error": error,
+            "loss": loss,
+            "input_points": points
+        }
+
+    elif method == "mean":
+        if use_2d_version:
+            cur_center = np.array([np.mean(points[:, 0]), np.mean(points[:, 1])])
+        else:
+            cur_center = np.array([np.mean(points[:, 0]), np.mean(points[:, 1]), np.mean(points[:, 2])])
+            
+        radius = np.mean(np.linalg.norm(points - cur_center, axis=1))
+
+        return {
+            "center": cur_center,
+            "radius": radius,
+            "inliers": points,
+            "error": 99.99,
+            "loss": 99.99,
+            "input_points": points
+        }
+
+        
     else:
         raise ValueError(f"Center Point Extraction Method not Found: {method}")
 

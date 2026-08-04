@@ -70,6 +70,7 @@ class ModelConfig(BaseModel):
 class DataConfig(BaseModel):
     name: str
     path: str
+    name_2: str
     path_2: str
     preprocessed: bool
     type: str
@@ -92,9 +93,15 @@ class EvalExtractionConfig(BaseModel):
     generate_2d_gt_maps: bool
     generate_also_3d_gt_maps: bool
 
+
+class CenterEvalConfig(BaseModel):
+    center_extraction_method: str
+
+
 class InferenceConfig(BaseModel):
     checkpoint_path: str
     save_path: str
+
 
 class Config(BaseModel):
     mode: str
@@ -104,6 +111,7 @@ class Config(BaseModel):
     inference: InferenceConfig
     preprocessing: PreprocessingConfig
     eval_extraction: EvalExtractionConfig
+    center_eval: CenterEvalConfig
     model: ModelConfig
     data: DataConfig
     device: Union[str, None]
