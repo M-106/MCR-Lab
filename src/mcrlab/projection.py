@@ -462,7 +462,10 @@ def bev_pixel_to_3d(
         origin_x,    # in meta
         origin_y,    # in meta
         resolution,  # in meta
-        search_radius
+        search_radius,
+        tile_size=5.0,
+        invert_y=False,
+        invert_x=False
 ):
     """
     Converts a BEV pixel coordinate into 3D world coordinate.
@@ -479,11 +482,21 @@ def bev_pixel_to_3d(
     patch_points = np.asarray(patch_points)
 
     # pixel center to world xy
-    world_x = origin_x + (pixel_x + 0.5) * resolution
-    world_y = origin_y + (pixel_y + 0.5) * resolution
+    if invert_x:
+        # world_x = (origin_x + tile_size) - (pixel_x * resolution)
+        world_x = (origin_x + tile_size) - ((pixel_x+0.5) * resolution)
+    else:
+        # world_x = origin_x + pixel_x * resolution
+        world_x = origin_x + (pixel_x + 0.5) * resolution
+    
+    if invert_y:
+        # world_y = (origin_y + tile_size) - (pixel_y * resolution)
+        world_y = (origin_y + tile_size) - ((pixel_y + 0.5) * resolution)
+    else:
+        world_y = origin_y + (pixel_y + 0.5) * resolution
 
     if search_radius is None:
-        search_radius = resolution * 1.5
+        search_radius = 1.5  # resolution * 10.0
 
     # search nearby points for z
     mask = (
@@ -496,11 +509,42 @@ def bev_pixel_to_3d(
 
     # no nearby points
     if len(nearby_points) == 0:
-        return np.array([world_x, world_y, np.nan])  # or 0?
+        # return np.array([world_x, world_y, np.nan])  # or 0?
     
+        # If prediction is 100m away, inspect world_x and world_y here
+        print(f"[WARNING] No nearby 3D points found around ({world_x:.2f}, {world_y:.2f})!")
+        
+        dists_sq = (patch_points[:, 0] - world_x)**2 + (patch_points[:, 1] - world_y)**2
+        nearest_idx = np.argmin(dists_sq)
+        
+        # If nearest point is within reasonable distance (< 0.5m), take its Z
+        if dists_sq[nearest_idx] < 0.25:
+            world_z = patch_points[nearest_idx, 2]
+        else:
+            world_z = 0.0 # Default fallback
+            
+        return np.array([world_x, world_y, world_z])
+
+        # # If points are relative to patch origin, patch_points[:, 0] will be in range [0, 5]
+        # # Check if patch_points are local:
+        # if patch_points.shape[0] > 0 and patch_points[:, 0].max() < 100.0:
+        #     # Points are LOCAL to patch, convert query to local:
+        #     local_x = (pixel_x + 0.5) * resolution
+        #     local_y = (pixel_y + 0.5) * resolution
+        #     local_mask = (
+        #         (patch_points[:, 0] >= local_x - search_radius) &
+        #         (patch_points[:, 0] <= local_x + search_radius) &
+        #         (patch_points[:, 1] >= local_y - search_radius) &
+        #         (patch_points[:, 1] <= local_y + search_radius)
+        #     )
+        #     nearby_local = patch_points[local_mask]
+        #     if len(nearby_local) > 0:
+        #         return np.array([world_x, world_y, np.median(nearby_local[:, 2])])
+
+        # return np.array([world_x, world_y, 0.0])
+
     # robust z estimation
     world_z = np.median(nearby_points[:,2])
-
     return np.array([world_x, world_y, world_z])
 
 
@@ -526,6 +570,7 @@ def bev_pixel_to_world_area(pixel_x, pixel_y,
 def bev_projection_testing(patch_gen, atol=1e-4, dataset_name=None, save_path=None):
     """
     Validates BEV channels using geometric reprojection.
+    Tests 3D -> 2D.
 
     Checks:
         - max height
@@ -775,6 +820,7 @@ def bev_projection_testing(patch_gen, atol=1e-4, dataset_name=None, save_path=No
     # FINAL REPORT
 
     final_report = "\n\n===== BEV VALIDATION RESULTS ====="
+    final_report += "\n    -> 3D → 2D"
 
     if dataset_name is not None:
         final_report += f"\n\nTested Dataset: {dataset_name}"
@@ -810,6 +856,171 @@ def bev_projection_testing(patch_gen, atol=1e-4, dataset_name=None, save_path=No
 
         print(f"\nSaved the report at: {save_path}")
 
+
+
+def bev_back_projection_testing(pc, meta, num_samples=50, tolerance_m=None):
+    """
+    Tests the 2D -> 3D back-projection for single (Patch, Meta, PC)-Tupel.
+    """
+    # --- Pointcloud Extraction ---
+    raw_pc = pc[0] if isinstance(pc, (list, tuple)) else pc
+    
+    if hasattr(raw_pc, "get_as_o3d"):
+        raw_pc = raw_pc.get_as_o3d()
+    
+    if hasattr(raw_pc, "point"): # Open3D Tensor PC
+        points = raw_pc.point[get_coordinate_attribute(raw_pc)].numpy()
+    elif hasattr(raw_pc, "to_numpy"): # PointCloudTensor
+        points = raw_pc.to_numpy(as_copy=True).coordinates
+    else:
+        points = np.asarray(raw_pc)
+
+    if len(points) == 0:
+        print("[WARNING] Pointcloud-Patch is empty. Skipping Test.")
+        return False
+
+    # Read metadata
+    origin_x = meta["origin_x"]
+    origin_y = meta["origin_y"]
+    resolution = meta["resolution"]
+    tile_size = meta["tile_size"]
+
+    # Maximal expected Difference (Discretesation limit)
+    if tolerance_m is None:
+        tolerance_m = (resolution * np.sqrt(2)) / 2.0
+
+    # --- Sampling from real GT-Points ---
+    sample_indices = np.random.choice(len(points), size=min(num_samples, len(points)), replace=False)
+    sampled_gt_points = points[sample_indices]
+
+    xy_errors = []
+    z_errors = []
+    out_of_bounds_count = 0
+
+    # --- Forward- and Back-Projection ---
+    for gt_pt in sampled_gt_points:
+        gt_x, gt_y, gt_z = gt_pt[0], gt_pt[1], gt_pt[2]
+
+        # Forward projection: 3D to 2D
+        px = int(np.floor((gt_x - origin_x) / resolution))
+        py = int(np.floor((gt_y - origin_y) / resolution))
+
+        # Check if point even is inside the tile
+        max_grid_size = int(tile_size / resolution)
+        if px < 0 or px >= max_grid_size or py < 0 or py >= max_grid_size:
+            out_of_bounds_count += 1
+            continue
+
+        # Back projection 2D pixel to 3D worldcoordinate
+        reprojected_3d = bev_pixel_to_3d(
+            patch_points=points,
+            pixel_x=px,
+            pixel_y=py,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            resolution=resolution,
+            search_radius=resolution,
+            tile_size=tile_size
+        )
+
+        # Error calculation
+        xy_err = np.linalg.norm([reprojected_3d[0] - gt_x, reprojected_3d[1] - gt_y])
+        z_err = abs(reprojected_3d[2] - gt_z)
+
+        xy_errors.append(xy_err)
+        z_errors.append(z_err)
+
+    if len(xy_errors) == 0:
+        print("[ERROR] Keine gültigen Punkte im Grid-Bereich gefunden.")
+        return False
+
+    mean_xy_err = np.mean(xy_errors)
+    max_xy_err = np.max(xy_errors)
+    mean_z_err = np.mean(z_errors)
+    passed = mean_xy_err <= tolerance_m
+
+    # --- Return result ---
+    print("\n" + "="*50)
+    print(f"  BEV REPROJECTION TEST (PC-ID: {meta.get('pc_id', 'N/A')})")
+    print("="*50)
+    print(f" Origin (X, Y):        ({origin_x:.2f}, {origin_y:.2f})")
+    print(f" Tested Sample Points: {len(xy_errors)} (Out of Bounds: {out_of_bounds_count})")
+    print(f" Mean XY Error:        {mean_xy_err:.4f} m (Tol: <= {tolerance_m:.4f} m)")
+    print(f" Max XY Error:         {max_xy_err:.4f} m")
+    print(f" Mean Z Error:         {mean_z_err:.4f} m")
+    print(f" Status:               {'[ PASSED ]' if passed else '[ FAILED ]'}")
+    print("="*50 + "\n")
+
+    return passed
+
+
+# def bev_back_projection_testing(patch_points, meta, num_samples=100, max_allowed_2d_error=None):
+    
+#     # Extract 3D coordinates from tensor object
+#     if hasattr(patch_points, "get_as_o3d"):
+#         patch_points = patch_points.get_as_o3d()
+        
+#     points = patch_points.point[get_coordinate_attribute(patch_points)].numpy()
+    
+#     origin_x = meta["origin_x"]
+#     origin_y = meta["origin_y"]
+#     resolution = meta["resolution"]
+#     tile_size = meta["tile_size"]
+    
+#     # Define Threshold for XY Difference (max. half diagonal from a pixel)
+#     if max_allowed_2d_error is None:
+#         max_allowed_2d_error = (resolution * np.sqrt(2)) / 2.0
+
+#     # Sample random points from the point cloud
+#     indices = np.random.choice(len(points), size=min(num_samples, len(points)), replace=False)
+#     sample_points = points[indices]
+
+#     xy_errors = []
+#     z_errors = []
+
+#     for gt_point in sample_points:
+#         gt_x, gt_y, gt_z = gt_point[0], gt_point[1], gt_point[2]
+
+#         # forward projection: 3D to 2D pixel
+#         px = int(np.floor((gt_x - origin_x) / resolution))
+#         py = int(np.floor((gt_y - origin_y) / resolution))
+
+#         # back projection: 2D pixel to 3D point
+#         reprojected_3d = bev_pixel_to_3d(
+#             patch_points=points,
+#             pixel_x=px,
+#             pixel_y=py,
+#             origin_x=origin_x,
+#             origin_y=origin_y,
+#             resolution=resolution,
+#             search_radius=resolution,
+#             tile_size=tile_size
+#         )
+
+#         # error computing
+#         xy_err = np.linalg.norm([reprojected_3d[0] - gt_x, reprojected_3d[1] - gt_y])
+#         z_err = abs(reprojected_3d[2] - gt_z)
+
+#         xy_errors.append(xy_err)
+#         z_errors.append(z_err)
+
+#     mean_xy_err = np.mean(xy_errors)
+#     mean_z_err = np.mean(z_errors)
+
+#     print("===== REPROJECTION 2D -> 3D TEST RESULTS =====")
+#     print(f"Tested Points:     {len(sample_points)}")
+#     print(f"Mean XY Error:     {mean_xy_err:.4f} m (Expected: <= {max_allowed_2d_error:.4f} m)")
+#     print(f"Mean Z Error:      {mean_z_err:.4f} m")
+    
+#     # Validierung: XY-Fehler darf nicht größer als die Diskretisierung des Pixels sein
+#     is_xy_valid = mean_xy_err <= max_allowed_2d_error
+#     print(f"XY Reprojection:   {'SUCCESS' if is_xy_valid else 'FAILED'}")
+    
+#     return {
+#         "mean_xy_error": mean_xy_err,
+#         "mean_z_error": mean_z_err,
+#         "passed": is_xy_valid
+#     }
     
 
 

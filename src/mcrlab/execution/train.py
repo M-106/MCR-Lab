@@ -394,7 +394,8 @@ def get_model_and_processor(model_name, encoder_name,
     #     config = DeepLabV3Config(num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=heatmap_is_gt)
     #     model = model_class(config)
 
-    if mode == "train" or mode == "val":
+    if checkpoint is None: # mode == "train" or mode == "val":
+        # raise ValueError("DEBUGGING ERROR: SHOULD GO into other branch!")
         config = ModelConfig(
             num_labels=num_labels, 
             ignore_index=ignore_index, 
@@ -407,7 +408,7 @@ def get_model_and_processor(model_name, encoder_name,
         # config = AutoConfig.from_pretrained(checkpoint)
         config = ModelConfig.from_pretrained(checkpoint)
     
-        if mode != "train" and checkpoint is not None:
+        if checkpoint is not None:  # mode != "train" and 
             model = ModelForSemanticSegmentation.from_pretrained(
                 checkpoint,
                 config=config,
@@ -424,7 +425,7 @@ def get_model_and_processor(model_name, encoder_name,
     #     processor_source = default_checkpoint if check_point_path else checkpoint
     processor = AutoImageProcessor.from_pretrained(
         processor_source,
-        do_resize=True,
+        do_resize=False,  # FIXME: was True
         size={"height": 500, "width": 500},  # PROCESSOR_SIZE[model_name],
         size_divisibility=0,  # important, else it will round to the next vielfache
         do_rescale=False,
@@ -455,22 +456,6 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
         logits_tensor = torch.from_numpy(logits)
     else:
         logits_tensor = logits.detach().cpu()
-            
-    # elif model_name in ["mask2former", "oneformer"]:
-    #     if is_numpy_input or is_torch_input:
-    #         logits_tensor = torch.from_numpy(outputs) if is_numpy_input else outputs
-    #     elif isinstance(outputs, tuple):
-    #         from transformers.models.mask2former.modeling_mask2former import Mask2FormerForUniversalSegmentationOutput
-    #         outputs_obj = Mask2FormerForUniversalSegmentationOutput(
-    #             class_queries_logits=torch.from_numpy(outputs[0]),
-    #             masks_queries_logits=torch.from_numpy(outputs[1]),
-    #         )
-    #         # for Mask2Former using directly the output-obj
-    #         logits_tensor = None 
-    #     else:
-    #         logits_tensor = None
-    # else:
-    #     raise ValueError(f"Unsupported model name: {model_name}")
 
     # --- PROCESSING (PROBABILITY vs. ARGMAX) ---
     
@@ -716,17 +701,6 @@ def train_hf_pipeline(config):
     heatmap_gt_str = f"heatmapGT{used_heatmap_channel}_" if heatmap_path else ""
     save_name = f"{year}_{month:02}_{day:02}_{hour:02}_{minute:02}_{model_name}_{config.data.name}_{heatmap_gt_str}{config.train.exp_name}"
 
-
-    # FIXME
-    # for cur_file in os.listdir("./output/"):
-    #     cur_file_path = os.path.join("./output/", cur_file)
-    #     if os.path.isdir(cur_file_path):
-    # try:
-    #     shutil.rmtree("./output/plots")
-    #     shutil.rmtree("./output/checkpoints")
-    # except Exception as e:
-    #     print(e)
-
     checkpoint_path = config.model.check_point_path
     if checkpoint_path == "None":
         checkpoint_path = None
@@ -735,6 +709,8 @@ def train_hf_pipeline(config):
     # Load Data
 
     pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
+    normalization = config.data.normalization
+    normalization_mode = config.data.normalization_mode
     if config.data.name == "merged_whu_sud":
         train_dataset = get_data_loader(
             "whu", 
@@ -785,7 +761,9 @@ def train_hf_pipeline(config):
                                augment=True,
                                pass_label_in_preprocessor=pass_label_in_preprocessor,
                                heatmap_gt_path=heatmap_path,
-                               used_heatmap_channel=used_heatmap_channel)
+                               used_heatmap_channel=used_heatmap_channel,
+                               normalize=normalization, 
+                               normalization_mode=normalization_mode)
     train_dataset.manhole_filter(required_manhole_points=50, amount_non_manhole_samples=10)
     
     if config.data.name == "merged_whu_sud":
@@ -836,7 +814,9 @@ def train_hf_pipeline(config):
                              augment=False,
                              pass_label_in_preprocessor=pass_label_in_preprocessor,
                              heatmap_gt_path=heatmap_path,
-                             used_heatmap_channel=used_heatmap_channel)
+                             used_heatmap_channel=used_heatmap_channel,
+                             normalize=normalization, 
+                             normalization_mode=normalization_mode)
     val_dataset.manhole_filter(required_manhole_points=50)
     # config.data.preprocessed
 
@@ -1052,7 +1032,7 @@ def train_hf_pipeline(config):
         logging_steps=10,
         remove_unused_columns=False,   # important for SAM
         push_to_hub=False,
-        report_to=["tensorboard", "mlflow"],  # "none"
+        report_to=["tensorboard"],  # "none", "mlflow"
         use_cpu=False
     )
 

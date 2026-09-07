@@ -2,6 +2,9 @@
 # > Imports <
 # -----------
 import shutil
+import os
+
+import json
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,9 +15,6 @@ import scipy.ndimage
 import scipy
 
 from tqdm import tqdm
-
-import os
-import json
 
 from mcrlab.point_cloud.data import get_data_loader
 from mcrlab.point_cloud.inspect import print_pc, visualize
@@ -35,7 +35,7 @@ def add_entry(json_data, cur_point, cur_dataset, cur_pc_id):
     for idx_, cur_entry in enumerate(json_data):
         if cur_entry.get("dataset", "-999") == cur_dataset and cur_entry.get("pointcloud-id", "-999") == cur_pc_id:
             if cur_point:
-                if hasattr(cur_entry, "centers"):
+                if "centers" in cur_entry and isinstance(cur_entry["centers"], list):
                     json_data[idx_]["centers"].append(cur_point)
                 else:
                     json_data[idx_]["centers"] = [cur_point]
@@ -52,9 +52,9 @@ def add_entry(json_data, cur_point, cur_dataset, cur_pc_id):
             })
         else:
             json_data.append({
-            "dataset": cur_dataset,
-            "pointcloud-id": cur_pc_id,
-            "centers": []
+                "dataset": cur_dataset,
+                "pointcloud-id": cur_pc_id,
+                "centers": []
             })
 
     return json_data
@@ -68,6 +68,16 @@ def ground_truth_extraction(config):
         json_data = list()
 
         cur_dataset = config.eval_extraction.names[cur_idx]
+
+        # Create output directory for image plots
+        plot_save_dir = os.path.join(
+            config.eval_extraction.save_path,   # "/mnt/data_2/ippolito/center_gt_extraction",
+            "center_gt/plots", 
+            f"{cur_dataset}_{config.eval_extraction.center_algorithm}"
+        )
+        os.makedirs(plot_save_dir, exist_ok=True)
+        shutil.rmtree(plot_save_dir)
+        os.makedirs(plot_save_dir, exist_ok=True)
 
         data_loader = get_data_loader(config.eval_extraction.names[cur_idx], 
                                       config.eval_extraction.data_paths[cur_idx], 
@@ -104,6 +114,8 @@ def ground_truth_extraction(config):
             center_coordinates_square, radius_squares, points_square, cluster_point_clouds, _, error, _ = center_estimation_3d_pipeline_debugging(None, method="least_square", extended_return=True, should_visualize=False, clusters=original_cluster_pcs, label_value=label_value)
             center_coordinates_ransac, _, _, _, _, _, _ = center_estimation_3d_pipeline_debugging(None, method="ransac", extended_return=True, should_visualize=False, clusters=original_cluster_pcs, label_value=label_value)
 
+            extracted_centers = []
+
             for cur_manhole_idx in range(len(points_square)):
                 # cur_points = points_square[cur_manhole_idx]
                 if config.eval_extraction.center_algorithm == "squares":
@@ -132,6 +144,8 @@ def ground_truth_extraction(config):
                     "y": float(cur_center[1]), 
                     "z": float(cur_center[2])
                 }
+
+                extracted_centers.append(cur_center)
                 
                 # check if there is already an entry where we just can add the center
                 json_data = add_entry(
@@ -140,6 +154,48 @@ def ground_truth_extraction(config):
                     cur_dataset=cur_dataset, 
                     cur_pc_id=cur_pc_id
                 )
+
+            # Save visual inspection plot if points exist
+            print("Points Amount:", len(points_square))
+            if len(points_square) > 0:
+                all_cluster_pts = np.vstack(points_square)
+                centers_arr = np.array(extracted_centers)
+
+                fig = plt.figure(figsize=(12, 5))
+                
+                # 2D Top-Down Projection (XY)
+                ax1 = fig.add_subplot(1, 2, 1)
+                ax1.scatter(all_cluster_pts[:, 0], all_cluster_pts[:, 1], c='gray', s=1, alpha=0.5, label='Points')
+                ax1.scatter(centers_arr[:, 0], centers_arr[:, 1], c='red', marker='X', s=80, label='Predicted Centers')
+                ax1.set_title(f"Top-Down (XY): {cur_pc_id}")
+                ax1.set_xlabel("X")
+                ax1.set_ylabel("Y")
+                ax1.set_aspect('equal', 'datalim')
+                ax1.legend()
+                ax1.grid(True)
+
+                # 3D Orthographic View
+                ax2 = fig.add_subplot(1, 2, 2, projection='3d')
+                ax2.scatter(all_cluster_pts[:, 0], all_cluster_pts[:, 1], all_cluster_pts[:, 2], c=all_cluster_pts[:, 2], cmap='viridis', s=1, alpha=0.5)
+                ax2.scatter(centers_arr[:, 0], centers_arr[:, 1], centers_arr[:, 2], c='red', marker='X', s=100, label='Centers')
+                ax2.set_title(f"3D View: {cur_pc_id}")
+                ax2.set_xlabel("X")
+                ax2.set_ylabel("Y")
+                ax2.set_zlabel("Z")
+
+                plt.suptitle(f"Dataset: {cur_dataset} | ID: {cur_pc_id} | Algo: {config.eval_extraction.center_algorithm}")
+                # plt.tight_layout()
+
+                # Save to disk and clear RAM
+                fig_path = os.path.join(plot_save_dir, f"{cur_pc_id}_centers_000.png")
+                counter_ = 1
+                while os.path.exists(fig_path):
+                    fig_path = os.path.join(plot_save_dir, f"{cur_pc_id}_centers_{counter_:03}.png")
+                    counter_ += 1
+                plt.savefig(fig_path, dpi=150)
+                plt.close(fig)
+
+                print(f"  → Saved fig at '{fig_path}'", flush=True)
 
         save_path = os.path.join(config.eval_extraction.save_path, f"{cur_dataset}_eval_ground_truths_{config.eval_extraction.center_algorithm}.json")
     

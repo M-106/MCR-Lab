@@ -78,6 +78,184 @@ def normalize_bev(bev):
     return bev
 
 
+# values come from global 2D train dataset
+SENSOR_CONFIGS = {
+    'as-900hl': {  # WHU
+        'intensity_p1': 0.0, 
+        'intensity_p99': 6069.0,
+        'intensity_mean': 236.1677, 
+        'intensity_std': 1416.8572, 
+        'intensity_min': 0.0,
+        'intensity_max': 65534.0,
+        # 'max_density': 1.0,
+        'height_min': 0.0,
+        'height_max': 23.0701,
+        'delta_height_min': 0.0,
+        'delta_height_max': 1.5090,
+        'density_min': 0.0,
+        'density_max': 9.1638
+    },
+    'riegl_vux-1ha_mls': {  # sud
+        'intensity_p1': 0.0, 
+        'intensity_p99': 3012.0, 
+        'intensity_mean': 418.6283, 
+        'intensity_std': 940.646,
+        'intensity_min': 0.0,
+        'intensity_max': 4314.5,
+        #'max_density': 1.0,
+        'height_min': 0.0,
+        'height_max': 0.0,
+        'delta_height_min': 0.0,
+        'delta_height_max': 27.595,
+        'density_min': 0.0,
+        'density_max': 3.1355
+    },
+    # 'velodyne_hdl64': {'intensity_p1': 0.0, 'intensity_p99': 255.0, 'max_density': 100},
+    # 'hesai_pandar64': {'intensity_p1': 0.0, 'intensity_p99': 255.0, 'max_density': 150},
+    # 'ouster_os1_128': {'intensity_p1': 0.0, 'intensity_p99': 65535.0, 'max_density': 200},
+    'default': {'intensity_p1': 0.0, 'intensity_p99': 255.0, 'max_density': 100}
+}
+
+def safe_minmax(channel, min_value=None, max_value=None, eps=1e-6, clipping=True):
+    """
+    Robust min-max normalization to [0, 1].
+
+    Handles:
+        - NaN
+        - +/- Inf
+        - constant channels
+        - empty valid masks
+    """
+
+    channel = channel.astype(np.float32, copy=False)
+
+    # Only use valid values
+    valid = np.isfinite(channel)
+
+    # If everything is inf/nan
+    if not np.any(valid):
+        return np.zeros_like(channel, dtype=np.float32)
+
+    valid_values = channel[valid]
+
+    if min_value is None:
+        min_value = valid_values.min()
+    if max_value is None:
+        max_value = valid_values.max()
+
+    denom = max_value - min_value
+
+    out = np.zeros_like(channel, dtype=np.float32)
+
+    # Constant Channel
+    if denom < eps:
+        return out
+
+    out[valid] = (channel[valid] - min_value) / denom
+
+    if clipping:
+        out = np.clip(out, 0.0, 1.0)
+
+    return out
+
+def safe_standard_norm(channel, mean, std, eps=1e-6, clip_range=None):
+    """
+    Standardizes a channel using mean and standard deviation: (x - mean) / std.
+    
+    Optionally clips extreme values (e.g. clip_range=(-3.0, 3.0)).
+    """
+    channel = channel.astype(np.float32, copy=False)
+    
+    # Avoid division by zero or tiny std
+    std = max(std, eps)
+    
+    # Normalize
+    out = (channel - mean) / std
+    
+    # Fill non-finite values (if present) with zeros
+    invalid = ~np.isfinite(out)
+    if np.any(invalid):
+        out[invalid] = 0.0
+
+    if clip_range is not None:
+        out = np.clip(out, clip_range[0], clip_range[1])
+        
+    return out
+
+def normalize_bev_robust(
+    bev,
+    channel_names,
+    sensor_type='default', 
+    intensity_norm_mode='standard',  # Options: 'standard', 'minmax'
+    intensity_clip_range=(-3.0, 3.0) # Used only if norm_mode is 'standard'
+):
+    """
+    Robust BEV-data normalization via list of channel-names.
+    """
+    is_chw = bev.shape[0] <= 10 and bev.shape[0] == len(channel_names)
+    if is_chw:
+        bev = np.transpose(bev, (1, 2, 0))
+
+    if bev.shape[-1] != len(channel_names):
+        raise ValueError(f"Amount of channel names ({len(channel_names)}) "
+                         f"does not fit to BEV shape ({bev.shape}).")
+
+    bev_norm = bev.copy()
+    cfg = SENSOR_CONFIGS.get(sensor_type, SENSOR_CONFIGS['default'])
+
+    for idx, name in enumerate(channel_names):
+        channel = bev_norm[:, :, idx]
+        name_clean = name.lower().strip()
+
+        if name_clean in ['max_height', 'z_max', 'height']:
+            min_, max_ = cfg['height_min'], cfg['height_max']
+            channel = safe_minmax(channel, min_value=min_, max_value=max_, eps=1e-6, clipping=False)
+
+            # channel = safe_minmax(channel, min_value=z_bounds[0], max_value=z_bounds[1], eps=1e-6, clipping=True)
+
+        elif name_clean in ['delta_z', 'height_diff']:
+            min_, max_ = cfg['delta_height_min'], cfg['delta_height_max']
+            channel = safe_minmax(channel, min_value=min_, max_value=max_, eps=1e-6, clipping=False)
+
+            # channel = safe_minmax(channel, min_value=max_delta_bounds[0], max_value=max_delta_bounds[1], eps=1e-6, clipping=True)
+
+        elif name_clean in ['intensity', 'mean_intensity']:
+            if intensity_norm_mode == 'standard':
+                # Standard Image Normalization: (x - mean) / std
+                mean = cfg.get('intensity_mean', 127.5)
+                std = cfg.get('intensity_std', 73.5)
+                channel = safe_standard_norm(
+                    channel, 
+                    mean=mean, 
+                    std=std, 
+                    clip_range=intensity_clip_range
+                )
+            elif intensity_norm_mode == 'minmax':
+                # Percentile Min-Max Normalization: [0.0, 1.0]
+                p1, p99 = cfg['intensity_p1'], cfg['intensity_p99']
+                channel = safe_minmax(channel, min_value=p1, max_value=p99, eps=1e-6, clipping=True)
+            else:
+                raise ValueError(f"Unknown intensity_norm_mode: {intensity_norm_mode}")
+
+        elif name_clean in ['density', 'point_count']:
+            # channel = safe_minmax(channel, min_value=None, max_value=None, eps=1e-6, clipping=True)
+            min_, max_ = cfg['density_min'], cfg['density_max']
+            channel = safe_minmax(channel, min_value=min_, max_value=max_, eps=1e-6, clipping=False)
+
+        elif name_clean in ['class', 'label', 'category', 'ignore']:
+            pass
+
+        else:
+            raise ValueError(f"Unknown channel name: '{name}'")
+
+        bev_norm[:, :, idx] = channel
+
+    if is_chw:
+        bev_norm = np.transpose(bev_norm, (2, 0, 1))
+
+    return bev_norm
+
+
 
 def normalize_img_per_channel(img: np.ndarray, skip_already_normalized_channels=True):
     img = img.astype(np.float32)

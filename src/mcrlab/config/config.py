@@ -76,6 +76,8 @@ class DataConfig(BaseModel):
     type: str
     heatmap_path: Union[str, None]
     used_heatmap_channel: int
+    normalization: bool
+    normalization_mode: str
 
 
 
@@ -96,6 +98,8 @@ class EvalExtractionConfig(BaseModel):
 
 class CenterEvalConfig(BaseModel):
     center_extraction_method: str
+    save_debug_plots: bool
+    min_confidence: float
 
 
 class InferenceConfig(BaseModel):

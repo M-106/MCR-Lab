@@ -22,7 +22,7 @@ from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_ba
 from mcrlab.point_cloud.inspect import print_pc, visualize, visualize_intensity_in_2d, \
                                        analyze_point_distribution
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
-from mcrlab.projection import bev_projection, bev_projection_testing
+from mcrlab.projection import bev_projection, bev_projection_testing, bev_back_projection_testing
 from mcrlab.image.utils import normalize_img_per_channel
 from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
@@ -56,6 +56,273 @@ def simple_viusalize_point_cloud(config):
 
     print_pc(point_cloud)
     visualize(point_cloud, color_mode="class")
+
+
+# def plot_3d_point_cloud_overview(point_cloud, target_labels=[1, 255], save_path="pc_overview.png"):
+#     """
+#     1. Full 3D Point Cloud Overview: Renders the entire scene with manholes highlighted.
+#     """
+#     # Extract coordinates & attributes
+#     coords = point_cloud.point["positions"].numpy()
+    
+#     # Base grayscale color based on intensity
+#     if "intensity" in point_cloud.point:
+#         intensities = point_cloud.point["intensity"].numpy().flatten()
+#         i_min, i_max = intensities.min(), intensities.max()
+#         norm_i = (intensities - i_min) / (i_max - i_min + 1e-8) if i_max > i_min else np.zeros_like(intensities)
+#         colors = np.tile(norm_i[:, None], (1, 3)) * 0.6  # Dim gray
+#     else:
+#         colors = np.full((len(coords), 3), 0.5)
+
+#     # Highlight manhole points in Magenta
+#     if "classes" in point_cloud.point:
+#         semantics = point_cloud.point["classes"].numpy().flatten()
+#         mask = np.isin(semantics, target_labels)
+#         colors[mask] = [1.0, 0.0, 1.0]
+
+#     legacy_pcd = o3d.geometry.PointCloud()
+#     legacy_pcd.points = o3d.utility.Vector3dVector(coords)
+#     legacy_pcd.colors = o3d.utility.Vector3dVector(colors)
+
+#     # Render off-screen snapshot or launch viewer
+#     vis = o3d.visualization.Visualizer()
+#     vis.create_window(visible=True, width=1920, height=1080)
+#     vis.add_geometry(legacy_pcd)
+    
+#     opt = vis.get_render_option()
+#     opt.point_size = 2.0
+#     opt.background_color = np.array([0.05, 0.05, 0.05])
+    
+#     print(f"[3D Overview] Displaying point cloud. Press 'Q' or close window to proceed...")
+#     vis.run()
+#     if save_path:
+#         vis.capture_screen_float_buffer(True)
+#         vis.capture_screen_image(save_path)
+#         print(f"[Saved] Overview image saved to {save_path}")
+#     vis.destroy_window()
+
+
+
+def plot_3d_point_cloud_overview(
+    point_cloud, 
+    target_labels=[1, 255], 
+    save_path="pc_overview.png"
+):
+    """1. Full 3D Point Cloud Overview: Renders the entire scene with manholes highlighted using Matplotlib."""
+    # Extract coordinates & attributes
+    coords = point_cloud.point["positions"].numpy()
+
+    # Base grayscale color based on intensity
+    if "intensity" in point_cloud.point:
+        intensities = point_cloud.point["intensity"].numpy().flatten()
+        i_min, i_max = intensities.min(), intensities.max()
+        norm_i = (
+            (intensities - i_min) / (i_max - i_min + 1e-8)
+            if i_max > i_min
+            else np.zeros_like(intensities)
+        )
+        colors = np.tile(norm_i[:, None], (1, 3)) * 0.6  # Dim gray
+    else:
+        colors = np.full((len(coords), 3), 0.5)
+
+    # Highlight manhole points in Magenta
+    if "classes" in point_cloud.point:
+        semantics = point_cloud.point["classes"].numpy().flatten()
+        mask = np.isin(semantics, target_labels)
+        colors[mask] = [1.0, 0.0, 1.0]
+
+    # Initialize 1920x1080 figure with dark background
+    fig = plt.figure(figsize=(19.2, 10.8), dpi=100, facecolor="#0d0d0d")
+    ax = fig.add_subplot(111, projection="3d", facecolor="#0d0d0d")
+
+    # Scatter plot matching Open3D point size & colors
+    ax.scatter(
+        coords[:, 0],
+        coords[:, 1],
+        coords[:, 2],
+        c=colors,
+        s=2.0,  # Match point size
+        depthshade=False,  # Keep exact RGB colors without artificial depth shading
+    )
+
+    # Clean plot appearance (remove axes and grid for viewer look)
+    ax.axis("off")
+    ax.set_box_aspect(
+        [
+            np.ptp(coords[:, 0]),
+            np.ptp(coords[:, 1]),
+            np.ptp(coords[:, 2]),
+        ]
+    )  # Keep 1:1 aspect ratio
+
+    # plt.tight_layout()
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    if save_path:
+        plt.savefig(
+            save_path,
+            bbox_inches="tight",
+            pad_inches=0,
+            facecolor=fig.get_facecolor(),
+        )
+        print(f"[Saved] Overview image saved to {save_path}")
+
+    # print(
+    #     "[3D Overview] Displaying point cloud. Close the window to proceed..."
+    # )
+    # plt.show()
+    plt.close(fig)
+
+
+
+def plot_manhole_3d_crops(point_cloud, target_labels=[1, 255], crop_radius=2.0, max_crops=3, save_dir="./output/pc_viz/manhole_3d_crops"):
+    """
+    2. Local Manhole 3D Crops: Finds manholes, crops surrounding points, and saves 2D scatter plots.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    coords = point_cloud.point["positions"].numpy()
+    semantics = point_cloud.point["classes"].numpy().flatten()
+    
+    # Extract intensity if present
+    if "intensity" in point_cloud.point:
+        intensities = point_cloud.point["intensity"].numpy().flatten()
+    else:
+        intensities = np.ones(len(coords))
+
+    manhole_indices = np.where(np.isin(semantics, target_labels))[0]
+    if len(manhole_indices) == 0:
+        print("[Warning] No manholes found in this point cloud for cropping.")
+        return
+
+    # Simple spatial clustering to find unique manhole centers
+    manhole_coords = coords[manhole_indices]
+    
+    # Take up to max_crops manholes
+    for idx, center in enumerate(manhole_coords[::max(1, len(manhole_coords) // max_crops)][:max_crops]):
+        dists = np.linalg.norm(coords[:, :2] - center[:2], axis=1)
+        crop_mask = dists <= crop_radius
+        
+        crop_pts = coords[crop_mask]
+        crop_intensity = intensities[crop_mask]
+        crop_sem = semantics[crop_mask]
+
+        fig = plt.figure(figsize=(12, 5))
+        
+        # 2D Overhead Scatter plot
+        ax1 = fig.add_subplot(121)
+        sc = ax1.scatter(crop_pts[:, 0] - center[0], crop_pts[:, 1] - center[1], 
+                         c=crop_intensity, cmap="gray", s=12)
+        plt.colorbar(sc, ax=ax1, label="Intensity")
+        ax1.set_title("Local Overhead Intensity")
+        ax1.set_xlabel("X Offset (m)")
+        ax1.set_ylabel("Y Offset (m)")
+        ax1.set_aspect("equal")
+
+        # 2D Semantic Mask plot
+        ax2 = fig.add_subplot(122)
+        is_mh = np.isin(crop_sem, target_labels)
+        ax2.scatter(crop_pts[~is_mh, 0] - center[0], crop_pts[~is_mh, 1] - center[1], c="gray", s=8, label="Background")
+        ax2.scatter(crop_pts[is_mh, 0] - center[0], crop_pts[is_mh, 1] - center[1], c="magenta", s=20, label="Manhole")
+        ax2.set_title("Semantic Label Segmentation")
+        ax2.set_xlabel("X Offset (m)")
+        ax2.set_ylabel("Y Offset (m)")
+        ax2.legend()
+        ax2.set_aspect("equal")
+
+        plt.suptitle(f"Manhole Instance Crop #{idx+1} (Radius: {crop_radius}m)", fontsize=14, fontweight="bold")
+        out_path = os.path.join(save_dir, f"manhole_crop_{idx+1}.png")
+        plt.savefig(out_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        print(f"[Saved] Manhole crop plot saved to {out_path}")
+
+
+def plot_bev_rasterization_panel(bev_item, save_path="bev_rasterization_panel.png"):
+    """
+    3. BEV Rasterization Breakdown: Creates a multi-channel visualization grid for presentation figures.
+    """
+    img = bev_item["pixel_values"].detach().cpu().numpy()  # Channels x H x W
+    labels = bev_item["labels"].detach().cpu().numpy()      # H x W
+    meta = bev_item["meta"]
+
+    # Transpose image channels (C, H, W -> H, W, C)
+    img_t = np.transpose(img, (1, 2, 0))
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 11))
+    
+    # 1. Max Height Channel
+    axes[0, 0].imshow(img_t[:, :, 0], cmap="viridis")
+    axes[0, 0].set_title("1. Max Height Channel", fontsize=12, fontweight="bold")
+
+    # 2. Delta Height Channel
+    axes[0, 1].imshow(img_t[:, :, 1], cmap="plasma")
+    axes[0, 1].set_title("2. Height Delta Channel", fontsize=12, fontweight="bold")
+
+    # 3. Intensity Channel (Normalized)
+    i_chan = img_t[:, :, 2]
+    i_norm = (i_chan - i_chan.min()) / (i_chan.ptp() + 1e-8) if np.ptp(i_chan) > 0 else i_chan
+    axes[1, 0].imshow(i_norm, cmap="gray")
+    axes[1, 0].set_title("3. Intensity Channel", fontsize=12, fontweight="bold")
+
+    # 4. Density Channel
+    axes[1, 1].imshow(img_t[:, :, 3], cmap="cividis")
+    axes[1, 1].set_title("4. Density / Point Count Channel", fontsize=12, fontweight="bold")
+
+    # 5. Semantic Ground Truth Overlay
+    cmap_label = mcolors.ListedColormap(["black", "magenta", "cyan"])
+    norm_bounds = mcolors.BoundaryNorm([0, 0.5, 1.5, 256], cmap_label.N)
+    
+    axes[0, 2].imshow(labels, cmap=cmap_label, norm=norm_bounds)
+    axes[0, 2].set_title("5. Target Manhole Mask", fontsize=12, fontweight="bold")
+
+    # 6. Composite RGB Preview (Intensity + Mask Overlay)
+    rgb_composite = np.stack([i_norm]*3, axis=-1)
+    mh_mask = np.isin(labels, [1, 255])
+    rgb_composite[mh_mask] = [1.0, 0.0, 1.0]  # Highlight manhole in pink
+    axes[1, 2].imshow(rgb_composite)
+    axes[1, 2].set_title("6. Composite BEV Patch", fontsize=12, fontweight="bold")
+
+    # Turn off axes and format titles
+    for ax in axes.flat:
+        ax.axis("off")
+
+    pc_id = meta.get("pc_id", "Unknown")
+    plt.suptitle(f"BEV Patch Rasterization Breakdown (Patch ID: {pc_id})", fontsize=16, fontweight="bold", y=0.95)
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[Saved] Rasterization panel figure saved to {save_path}")
+
+
+
+def generate_presentation_plots(config):
+    data_loader = get_data_loader(
+        config.data.name, 
+        config.data.path, 
+        type=config.data.type, 
+        transform=None,  # get_basic_transform(),
+        batch_size=1, shuffle=False, num_workers=0,
+        preprocessed=config.data.preprocessed, return_train_format=False
+    )
+
+    target_labels = [1, 255] if config.data.preprocessed else ([3] if config.data.name == "sud" else [104002])
+
+    for batch in data_loader:
+        point_cloud = batch[0]
+        
+        # Plot 1: Full 3D Scene Overview
+        plot_3d_point_cloud_overview(point_cloud, target_labels=target_labels, save_path="./output/pc_viz/full_scene_3d.png")
+        
+        # Plot 2: Local 3D Manhole Crops
+        plot_manhole_3d_crops(point_cloud, target_labels=target_labels, crop_radius=2.5, max_crops=3)
+
+        # Plot 3: BEV Patch Rasterization Multi-Channel Breakdown
+        if point_cloud.bev_data is not None:
+            bev_gen = point_cloud.get_bev()
+            for idx, bev_item in enumerate(bev_gen):
+                if np.any(np.isin(bev_item["labels"].numpy(), target_labels)):
+                    plot_bev_rasterization_panel(bev_item, save_path=f"./output/pc_viz/bev_panel_patch_{idx}.png")
+                    break  # Stop after showing the first patch containing a manhole
+        break
 
 
 
@@ -274,6 +541,62 @@ def bev_preprocessed_loading_working_testing(config):
 
     #     # do not end after one testset?
     #     break
+
+
+
+def bev_back_preprocessed_loading_working_testing(config):
+    if not config.data.preprocessed:
+        raise ValueError("'Preprocessing' must be True! (config.data.preprocessed)")
+
+    result = {}
+
+    for cur_dataset in ["whu", "sud"]:
+        result[cur_dataset] = []
+
+        test_3d_dataset = get_data_loader(
+            cur_dataset, 
+            config.data.path if cur_dataset == "whu" else config.data.path_2, 
+            type="test",
+            transform=get_basic_transform(),
+            batch_size=1, 
+            shuffle=False, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=True,
+        )
+        
+        all_test_paths = test_3d_dataset.point_cloud_paths
+
+        test_bev_dataset = BEVDataset(
+            path=all_test_paths, 
+            file_paths=[], 
+            has_labels=True, 
+            image_training=True, 
+            preprocessor=None,
+            augment=False,
+            pass_label_in_preprocessor=False,
+            heatmap_gt_path=None,
+            used_heatmap_channel=False
+        )
+
+        for idx, cur_data_path in enumerate(all_test_paths):
+            pc_id, x_start, y_start = test_bev_dataset.extract_grid_identifier(cur_data_path)
+
+            bev_dict = next(test_bev_dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True))
+            meta = bev_dict["meta"]
+            pc = test_3d_dataset[idx]
+
+            result[cur_dataset].append(bev_back_projection_testing(pc=pc, meta=meta, num_samples=100))
+
+    print(f"Back Projection Result:")
+    for dataset_name, passed_list in result.items():
+        total = len(passed_list)
+        passed = len([x for x in passed_list if x])
+        not_passed = total - passed
+
+        print(f"\n{dataset_name}:\n  - passed: {round((passed/total)*100, 2)}%  ({passed})")
+        print(f"  - not passed: {round((not_passed/total)*100, 2)}%  ({not_passed})")
 
 
 
@@ -2153,12 +2476,12 @@ def eval_center_gt(config):
         ax.relim()
         ax.autoscale_view()
 
-    xlim = summary_axes[0].get_xlim()
-    ylim = summary_axes[0].get_ylim()
+    # xlim = summary_axes[0].get_xlim()
+    # ylim = summary_axes[0].get_ylim()
 
-    for ax in summary_axes:
-        ax.set_xlim(xlim)
-        ax.set_ylim(ylim)
+    # for ax in summary_axes:
+    #     ax.set_xlim(xlim)
+    #     ax.set_ylim(ylim)
 
     # N-Points - setting equal aspect and autoscale
     for ax in summary_points_axes.flat:
@@ -2168,12 +2491,12 @@ def eval_center_gt(config):
         ax.relim()
         ax.autoscale_view()
 
-    xlim = summary_points_axes[0].get_xlim()
-    ylim = summary_points_axes[0].get_ylim()
+    # xlim = summary_points_axes[0].get_xlim()
+    # ylim = summary_points_axes[0].get_ylim()
 
-    for ax in summary_points_axes:
-        ax.set_xlim(xlim)
-        ax.set_ylim(ylim)
+    # for ax in summary_points_axes:
+    #     ax.set_xlim(xlim)
+    #     ax.set_ylim(ylim)
 
     
     summary_fig.savefig(os.path.join("./output/monte-carlo-gt-check", f"center_summary_sigma.png"), dpi=300)  # , bbox_inches='tight'
@@ -2372,6 +2695,632 @@ def manhole_sample_counting(config):
 
 
 
+# def calculate_intensity_percentiles(config):
+#     """
+#     Computes the 1st and 99th percentiles of intensity values 
+#     across all point clouds for specified datasets.
+
+#     Raw Point Cloud Data:
+#     [WHU] Intensity 1st Percentile : 1034.0000
+#     [WHU] Intensity 99th Percentile: 34802.0000
+#     [SUD] Intensity 1st Percentile : 1910.0000
+#     [SUD] Intensity 99th Percentile: 3329.0000
+
+#     Patch Intensity Data:
+#     [WHU] Intensity 1st Percentile : 1141.0000
+#     [WHU] Intensity 99th Percentile: 25715.0000
+#     [SUD] Intensity 1st Percentile : 1912.0000
+#     [SUD] Intensity 99th Percentile: 3297.0000
+
+#     2D Results? (should be the same? / very similiar)
+#     """
+#     print("\n --- Calculating Intensity Percentiles (1st & 99th) ---")
+
+#     datasets_to_check = [
+#         ("whu", config.data.path),
+#         ("sud", config.data.path_2)
+#     ]
+
+#     percentiles_result = {}
+
+#     for name, path in datasets_to_check:
+#         print(f"\nProcessing dataset: {name.upper()}...")
+
+#         for is_processed in [False, True]:
+#             # Load full point cloud dataset (without BEV pre-processing or transforms)
+#             data_loader = get_data_loader(
+#                 name, 
+#                 path, 
+#                 type="train", 
+#                 transform=get_basic_transform(),
+#                 batch_size=1, 
+#                 shuffle=False, 
+#                 num_workers=0,
+#                 preprocessed=is_processed, 
+#                 return_train_format=False
+#             )
+
+#             all_intensities = []
+
+#             for idx, batch in enumerate(data_loader):
+#                 point_cloud = batch[0]
+
+#                 # Extract raw intensity values from the point cloud object
+#                 # (assuming points are structured as [N, 4] with (X, Y, Z, Intensity) or accessible as an attribute)
+#                 if hasattr(point_cloud, 'intensities'):
+#                     intensities = point_cloud.intensities
+#                 elif hasattr(point_cloud, 'points'):
+#                     intensities = point_cloud.points[:, 3]  # standard 4th channel
+#                 else:
+#                     raise AttributeError("Could not find point intensity attributes on PointCloud object.")
+
+#                 # print("Debug, intesnity: ", intensities)
+
+#                 # Flatten and cast
+#                 ints = np.asarray(intensities, dtype=np.float32).ravel()
+
+#                 # Filter NaN / Inf directly per cloud
+#                 valid_ints = ints[np.isfinite(ints)]
+
+#                 if valid_ints.size > 0:
+#                     all_intensities.append(valid_ints)
+
+#                 # # Flatten and cast to float32 to save memory
+#                 # all_intensities.append(np.asarray(intensities, dtype=np.float32).ravel())
+
+#                 # if (idx + 1) % 50 == 0:
+#                 #     print(f"  Processed {idx + 1} point clouds...")
+
+#             if not all_intensities:
+#                 print(f"Warning: No intensity values found for {name}!")
+#                 continue
+
+#             # Concatenate all point cloud intensity values into a single vector
+#             global_intensities = np.concatenate(all_intensities, axis=0)
+
+#             # Compute percentiles
+#             p1 = np.percentile(global_intensities, 1)
+#             p99 = np.percentile(global_intensities, 99)
+#             mean = np.mean(global_intensities)
+#             std = np.std(global_intensities)
+
+#             percentiles_result[name] = {
+#                 "p1": p1,
+#                 "p99": p99,
+#                 "mean": mean,
+#                 "std": std
+#             }
+
+#             processed_str = "processed" if is_processed else "raw"
+#             print(f"[{name.upper()} - {processed_str}] Intensity 1st Percentile : {p1:.4f}")
+#             print(f"[{name.upper()} - {processed_str}] Intensity 99th Percentile: {p99:.4f}")
+#             print(f"[{name.upper()} - {processed_str}] Intensity Mean           : {mean:.4f}")
+#             print(f"[{name.upper()} - {processed_str}] Intensity Std            : {std:.4f}")
+
+#     return percentiles_result
+
+
+
+def calculate_intensity_statistics(config):
+    """
+    Computes intensity statistics for both 3D point clouds and 2D BEV images.
+
+    Statistics:
+        - 1st percentile
+        - 99th percentile
+        - mean
+        - standard deviation
+
+    Results are calculated separately for WHU and SUD.
+
+    WHU:
+    [3D] P1   : 1034.0000
+    [3D] P99  : 34802.0000
+    [3D] Mean : 6674.9087
+    [3D] Std  : 6627.9756
+
+    [2D] P1   : 0.0000
+    [2D] P99  : 2224.0000
+    [2D] Mean : 59.1831
+    [2D] Std  : 711.9660
+
+
+    SUD:
+    [3D] P1   : 1910.0000
+    [3D] P99  : 3329.0000
+    [3D] Mean : 2493.8530
+    [3D] Std  : 285.8570
+
+    [2D] P1   : 0.0000
+    [2D] P99  : 2642.0000
+    [2D] Mean : 104.6962
+    [2D] Std  : 502.2997
+    """
+
+    print("\n--- Calculating Intensity Statistics (2D & 3D) ---")
+
+    datasets_to_check = [
+        ("whu", config.data.path),
+        ("sud", config.data.path_2)
+    ]
+
+    statistics_result = {}
+
+    for name, path in datasets_to_check:
+        print(f"\nProcessing dataset: {name.upper()}...")
+
+        statistics_result[name] = {}
+
+        # =========================
+        # 3D POINT CLOUD STATISTICS
+
+        print(f"  Processing 3D point clouds...")
+
+        data_loader = get_data_loader(
+            name,
+            path,
+            type="train",
+            transform=get_basic_transform(),
+            batch_size=1,
+            shuffle=False,
+            num_workers=0,
+            preprocessed=False,
+            return_train_format=False
+        )
+
+        all_intensities_3d = []
+
+        for idx, batch in enumerate(data_loader):
+
+            point_cloud = batch[0]
+
+            # Extract intensity values from point cloud
+            if hasattr(point_cloud, 'intensities'):
+                intensities = point_cloud.intensities
+
+            elif hasattr(point_cloud, 'points'):
+                intensities = point_cloud.points[:, 3]
+
+            else:
+                raise AttributeError(
+                    "Could not find point intensity attributes "
+                    "on PointCloud object."
+                )
+
+            # Convert to numpy and flatten
+            ints = np.asarray(
+                intensities,
+                dtype=np.float32
+            ).ravel()
+
+            # Remove NaN and Inf
+            valid_ints = ints[np.isfinite(ints)]
+
+            if valid_ints.size > 0:
+                all_intensities_3d.append(valid_ints)
+
+            if (idx + 1) % 50 == 0:
+                print(
+                    f"    Processed {idx + 1} point clouds..."
+                )
+
+        if not all_intensities_3d:
+            print(f"  Warning: No 3D intensity values found!")
+        else:
+
+            global_intensities_3d = np.concatenate(
+                all_intensities_3d,
+                axis=0
+            )
+
+            statistics_result[name]["3d"] = {
+                "p1": np.percentile(global_intensities_3d, 1),
+                "p99": np.percentile(global_intensities_3d, 99),
+                "mean": np.mean(global_intensities_3d),
+                "std": np.std(global_intensities_3d),
+            }
+
+            stats = statistics_result[name]["3d"]
+
+            print(f"    [3D] P1   : {stats['p1']:.4f}")
+            print(f"    [3D] P99  : {stats['p99']:.4f}")
+            print(f"    [3D] Mean : {stats['mean']:.4f}")
+            print(f"    [3D] Std  : {stats['std']:.4f}")
+
+
+        # =================
+        # 2D BEV STATISTICS
+
+        print(f"  Processing 2D BEV images...")
+
+        data_loader = get_data_loader(
+            name,
+            path,
+            type="train",
+            transform=get_basic_transform(),
+            batch_size=1,
+            shuffle=False,
+            num_workers=0,
+            preprocessed=True,
+            return_train_format=False
+        )
+
+        all_intensities_2d = []
+
+        for idx, batch in enumerate(data_loader):
+
+            point_cloud = batch[0]
+
+            # Get BEV representation
+            if point_cloud.bev_data is None:
+
+                raise ValueError("Should not generate BEV.")
+
+                # Generate BEV if it is not already available
+                tiles, metas = bev_projection(
+                    point_cloud,
+                    tile_size=35.0,
+                    resolution=0.05
+                )
+
+                bev_gen = bev_gen_wrapper(
+                    tiles,
+                    metas
+                )
+
+            else:
+
+                bev_gen = point_cloud.get_bev()
+
+            # Iterate over BEV tiles
+            for bev_item in bev_gen:
+
+                img = (
+                    bev_item["pixel_values"]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+
+                # Intensity is channel 3
+                intensity_channel = img[3]
+
+                # Flatten
+                intensities = intensity_channel.ravel()
+
+                # Remove NaN and Inf
+                valid_intensities = intensities[
+                    np.isfinite(intensities)
+                ]
+
+                if valid_intensities.size > 0:
+                    all_intensities_2d.append(
+                        valid_intensities
+                    )
+
+        if not all_intensities_2d:
+            print(f"  Warning: No 2D intensity values found!")
+
+        else:
+
+            global_intensities_2d = np.concatenate(
+                all_intensities_2d,
+                axis=0
+            )
+
+            statistics_result[name]["2d"] = {
+                "p1": np.percentile(global_intensities_2d, 1),
+                "p99": np.percentile(global_intensities_2d, 99),
+                "mean": np.mean(global_intensities_2d),
+                "std": np.std(global_intensities_2d),
+            }
+
+            stats = statistics_result[name]["2d"]
+
+            print(f"    [2D] P1   : {stats['p1']:.4f}")
+            print(f"    [2D] P99  : {stats['p99']:.4f}")
+            print(f"    [2D] Mean : {stats['mean']:.4f}")
+            print(f"    [2D] Std  : {stats['std']:.4f}")
+
+    return statistics_result
+
+
+
+def calculate_dataset_statistics(config, max_percentile_samples=500_000):
+    """
+    Computes global statistics (min, max, mean, std, p1, p99) for 3D point cloud 
+    channels (x, y, z, intensity) and 2D BEV image channels (Max Height, Delta Z, 
+    Mean Intensity, Density).
+
+    Results:
+
+    WHU:
+        [3D X        ] Min: 5536.1260 | Max: 7463.8320 | Mean: 6171.2170 | Std: 980.5695 | P1: 5565.2969 | P99: 7418.1831
+        [3D Y        ] Min: 1849.5537 | Max: 3678.2195 | Mean: 3166.7742 | Std: 0.0000 | P1: 1885.1090 | P99: 3629.0349
+        [3D Z        ] Min: 8.3624 | Max: 42.3585 | Mean: 16.5909 | Std: 1.3017 | P1: 13.5777 | P99: 24.9924
+        [3D INTENSITY] Min: 800.0000 | Max: 65534.0000 | Mean: 6631.8525 | Std: 6396.6171 | P1: 1041.9900 | P99: 36904.6016
+  
+        [2D MAX_HEIGHT    ] Min: 0.0000 | Max: 23.0701 | Mean: 0.7268 | Std: 3.2033 | P1: 0.0000 | P99: 15.1902
+        [2D DELTA_Z       ] Min: 0.0000 | Max: 1.5090 | Mean: 0.0002 | Std: 0.0085 | P1: 0.0000 | P99: 0.0000
+        [2D MEAN_INTENSITY] Min: 0.0000 | Max: 65534.0000 | Mean: 236.1677 | Std: 1416.8572 | P1: 0.0000 | P99: 6069.0000
+        [2D DENSITY       ] Min: 0.0000 | Max: 9.1638 | Mean: 0.0364 | Std: 0.1648 | P1: 0.0000 | P99: 0.6931
+
+    SUD:
+        [3D X        ] Min: -352.9000 | Max: 15.5900 | Mean: -201.2230 | Std: 101.3453 | P1: -342.3614 | P99: 4.0905
+        [3D Y        ] Min: -275.0950 | Max: 137.4150 | Mean: -72.4730 | Std: 105.1606 | P1: -259.0863 | P99: 130.1151
+        [3D Z        ] Min: -27.5950 | Max: 1.1950 | Mean: -15.5281 | Std: 6.1804 | P1: -26.9750 | P99: -1.7850
+        [3D INTENSITY] Min: 45.0000 | Max: 5155.0000 | Mean: 2459.7376 | Std: 461.4881 | P1: 1906.0000 | P99: 3337.0200
+  
+        [2D MAX_HEIGHT    ] Min: 0.0000 | Max: 0.0000 | Mean: 0.0000 | Std: 0.0000 | P1: 0.0000 | P99: 0.0000
+        [2D DELTA_Z       ] Min: 0.0000 | Max: 27.5950 | Mean: 2.5898 | Std: 6.3295 | P1: 0.0000 | P99: 24.1950
+        [2D MEAN_INTENSITY] Min: 0.0000 | Max: 4314.5000 | Mean: 418.6283 | Std: 940.6460 | P1: 0.0000 | P99: 3012.0000
+        [2D DENSITY       ] Min: 0.0000 | Max: 3.1355 | Mean: 0.1480 | Std: 0.3470 | P1: 0.0000 | P99: 1.3863
+    """
+    print("\n--- Calculating Extended Statistics (2D & 3D) ---")
+
+    datasets_to_check = [
+        ("whu", config.data.path),
+        ("sud", config.data.path_2)
+    ]
+
+    # Map BEV channel indices schema/format
+    bev_channel_names = {
+        0: "max_height",
+        1: "delta_z",
+        2: "mean_intensity",
+        3: "density"
+    }
+
+    statistics_result = {}
+
+    for name, path in datasets_to_check:
+        print(f"\nProcessing dataset: {name.upper()}...")
+        statistics_result[name] = {"3d": {}, "2d": {}}
+
+        # =========================================================================
+        # 1. 3D POINT CLOUD STATISTICS (x, y, z, intensity)
+        # =========================================================================
+        print(f"  Processing 3D point clouds...")
+        data_loader_3d = get_data_loader(
+            name,
+            path,
+            type="train",
+            transform=get_basic_transform(),
+            batch_size=1,
+            shuffle=False,
+            num_workers=0,
+            preprocessed=False,
+            return_train_format=False
+        )
+
+        # Accumulators for 4 features: [X, Y, Z, Intensity]
+        counts_3d = np.zeros(4, dtype=np.int64)
+        sums_3d = np.zeros(4, dtype=np.float64)
+        sq_sums_3d = np.zeros(4, dtype=np.float64)
+        mins_3d = np.full(4, np.inf, dtype=np.float64)
+        maxs_3d = np.full(4, -np.inf, dtype=np.float64)
+        samples_3d = [[] for _ in range(4)]
+
+        for idx, batch in enumerate(data_loader_3d):
+            point_cloud = batch[0]
+
+            pts = point_cloud.coordinates
+            # Ensure shape is (N, 4) -> X, Y, Z, Intensity
+            pts = np.asarray(pts, dtype=np.float32)
+    
+            ints = np.asarray(point_cloud.intensities, dtype=np.float32).reshape(-1, 1)
+            pts = np.hstack((pts[:, :3], ints))
+
+            # Filter non-finite values
+            valid_mask = np.all(np.isfinite(pts[:, :4]), axis=1)
+            valid_pts = pts[valid_mask, :4]
+
+            if valid_pts.shape[0] > 0:
+                counts_3d += valid_pts.shape[0]
+                sums_3d += np.sum(valid_pts, axis=0)
+                sq_sums_3d += np.sum(valid_pts ** 2, axis=0)
+                mins_3d = np.minimum(mins_3d, np.min(valid_pts, axis=0))
+                maxs_3d = np.maximum(maxs_3d, np.max(valid_pts, axis=0))
+
+                # Subsample for percentiles to prevent memory explosion
+                if valid_pts.shape[0] > 1000:
+                    sub_idx = np.random.choice(valid_pts.shape[0], size=1000, replace=False)
+                    sub_pts = valid_pts[sub_idx]
+                else:
+                    sub_pts = valid_pts
+
+                for c in range(4):
+                    samples_3d[c].append(sub_pts[:, c])
+
+            if (idx + 1) % 50 == 0:
+                print(f"    Processed {idx + 1} 3D point clouds...")
+
+        # Process aggregated 3D stats
+        ch_names_3d = ["x", "y", "z", "intensity"]
+        for c, ch_name in enumerate(ch_names_3d):
+            if counts_3d[c] > 0:
+                mean = sums_3d[c] / counts_3d[c]
+                var = (sq_sums_3d[c] / counts_3d[c]) - (mean ** 2)
+                std = np.sqrt(np.maximum(0.0, var))
+                
+                cat_samples = np.concatenate(samples_3d[c]) if samples_3d[c] else np.array([])
+                p1 = np.percentile(cat_samples, 1) if cat_samples.size > 0 else np.nan
+                p99 = np.percentile(cat_samples, 99) if cat_samples.size > 0 else np.nan
+
+                statistics_result[name]["3d"][ch_name] = {
+                    "min": float(mins_3d[c]),
+                    "max": float(maxs_3d[c]),
+                    "mean": float(mean),
+                    "std": float(std),
+                    "p1": float(p1),
+                    "p99": float(p99)
+                }
+
+                print(f"    [3D {ch_name.upper():<9}] Min: {mins_3d[c]:.4f} | Max: {maxs_3d[c]:.4f} | Mean: {mean:.4f} | Std: {std:.4f} | P1: {p1:.4f} | P99: {p99:.4f}")
+
+        # =========================================================================
+        # 2. 2D BEV STATISTICS (Channels 0, 1, 2, 3)
+        # =========================================================================
+        print(f"  Processing 2D BEV images...")
+        data_loader_2d = get_data_loader(
+            name,
+            path,
+            type="train",
+            transform=get_basic_transform(),
+            batch_size=1,
+            shuffle=False,
+            num_workers=0,
+            preprocessed=True,
+            return_train_format=False,
+            bev_normalized=False
+        )
+
+        counts_2d = np.zeros(4, dtype=np.int64)
+        sums_2d = np.zeros(4, dtype=np.float64)
+        sq_sums_2d = np.zeros(4, dtype=np.float64)
+        mins_2d = np.full(4, np.inf, dtype=np.float64)
+        maxs_2d = np.full(4, -np.inf, dtype=np.float64)
+        samples_2d = [[] for _ in range(4)]
+
+        for idx, batch in enumerate(data_loader_2d):
+            point_cloud = batch[0]
+            
+            bev_gen = point_cloud.get_bev() if point_cloud.bev_data is not None else []
+
+            for bev_item in bev_gen:
+                img = bev_item["pixel_values"].detach().cpu().numpy()  # Expected shape (C, H, W) or (H, W, C)
+                
+                # Align channel dimension to first axis if shape is (H, W, C)
+                if img.ndim == 3 and img.shape[2] in [4, 5]:
+                    img = np.transpose(img, (2, 0, 1))
+
+                for c_idx in range(4):
+                    ch_data = img[c_idx].ravel()
+                    valid_ch = ch_data[np.isfinite(ch_data)]
+
+                    if valid_ch.size > 0:
+                        counts_2d[c_idx] += valid_ch.size
+                        sums_2d[c_idx] += np.sum(valid_ch)
+                        sq_sums_2d[c_idx] += np.sum(valid_ch ** 2)
+                        mins_2d[c_idx] = min(mins_2d[c_idx], np.min(valid_ch))
+                        maxs_2d[c_idx] = max(maxs_2d[c_idx], np.max(valid_ch))
+
+                        if valid_ch.size > 1000:
+                            sub = np.random.choice(valid_ch, size=1000, replace=False)
+                        else:
+                            sub = valid_ch
+                        samples_2d[c_idx].append(sub)
+
+        # Process aggregated 2D stats
+        for c_idx, ch_name in bev_channel_names.items():
+            if counts_2d[c_idx] > 0:
+                mean = sums_2d[c_idx] / counts_2d[c_idx]
+                var = (sq_sums_2d[c_idx] / counts_2d[c_idx]) - (mean ** 2)
+                std = np.sqrt(np.maximum(0.0, var))
+
+                cat_samples = np.concatenate(samples_2d[c_idx]) if samples_2d[c_idx] else np.array([])
+                p1 = np.percentile(cat_samples, 1) if cat_samples.size > 0 else np.nan
+                p99 = np.percentile(cat_samples, 99) if cat_samples.size > 0 else np.nan
+
+                statistics_result[name]["2d"][ch_name] = {
+                    "min": float(mins_2d[c_idx]),
+                    "max": float(maxs_2d[c_idx]),
+                    "mean": float(mean),
+                    "std": float(std),
+                    "p1": float(p1),
+                    "p99": float(p99)
+                }
+
+                print(f"    [2D {ch_name.upper():<14}] Min: {mins_2d[c_idx]:.4f} | Max: {maxs_2d[c_idx]:.4f} | Mean: {mean:.4f} | Std: {std:.4f} | P1: {p1:.4f} | P99: {p99:.4f}")
+
+    return statistics_result
+
+
+
+def calculate_max_density(config):
+    """
+    Compute maximum point density per BEV-Pixel 
+    over all patches.
+
+    Results:
+    Processing dataset: WHU...
+    Found 11260 bev images (orthogonal images).
+    Found 11260 point clouds.
+    [WHU] Absolute Max Points/Pixel : 1.0
+    [WHU] 95th Percentile Density   : 1.00
+    [WHU] 99th Percentile Density   : 1.00
+    [WHU] 99.9th Percentile Density : 1.00
+
+    Processing dataset: SUD...
+    Found 982 bev images (orthogonal images).
+    Found 982 point clouds.
+    [SUD] Absolute Max Points/Pixel : 1.0
+    [SUD] 95th Percentile Density   : 1.00
+    [SUD] 99th Percentile Density   : 1.00
+    [SUD] 99.9th Percentile Density : 1.00
+    """
+    print("\n --- Calculating Max BEV Pixel Density ---")
+
+    datasets_to_check = [
+        ("whu", config.data.path),
+        ("sud", config.data.path_2)
+    ]
+
+    for name, path in datasets_to_check:
+        print(f"\nProcessing dataset: {name.upper()}...")
+
+        data_loader = get_data_loader(
+            name, 
+            path, 
+            type="train", 
+            transform=get_basic_transform(),
+            batch_size=1, 
+            shuffle=False, 
+            num_workers=0,
+            preprocessed=True, 
+            return_train_format=False
+        )
+
+        pixel_counts_list = []
+
+        for idx, batch in enumerate(data_loader):
+            point_cloud = batch[0]
+            
+            # 1. Get the BEV-Tiles / Patches
+            bev_gen = point_cloud.get_bev()
+
+            for bev_item in bev_gen:
+                img = bev_item["pixel_values"].detach().cpu().numpy()
+                
+                density_channel = img[2]
+                
+                # Only pixels with at least 1 point
+                nonzero_counts = density_channel[density_channel > 0]
+                
+                if nonzero_counts.size > 0:
+                    pixel_counts_list.append(nonzero_counts.ravel())
+
+        if not pixel_counts_list:
+            print(f"Warning: No valid points found for {name}!")
+            continue
+
+        # Aggregate all Pixel-Counts
+        all_counts = np.concatenate(pixel_counts_list, axis=0)
+
+        # Calc statistics
+        absolute_max = np.max(all_counts)
+        p95_density = np.percentile(all_counts, 95)
+        p99_density = np.percentile(all_counts, 99)
+        p99_9_density = np.percentile(all_counts, 99.9)
+
+        print(f"[{name.upper()}] Absolute Max Points/Pixel : {absolute_max}")
+        print(f"[{name.upper()}] 95th Percentile Density   : {p95_density:.2f}")
+        print(f"[{name.upper()}] 99th Percentile Density   : {p99_density:.2f}")
+        print(f"[{name.upper()}] 99.9th Percentile Density : {p99_9_density:.2f}")              
+    
+
+
+
 # --------------
 # > Playground <
 # --------------
@@ -2381,6 +3330,7 @@ def tryout(config):
 
     # bev_segmentation_trying(config)
     # bev_preprocessed_loading_working_testing(config)
+    # bev_back_preprocessed_loading_working_testing(config)
 
     # train_data_testing(config)
     # train_testing(config)
@@ -2415,12 +3365,19 @@ def tryout(config):
     # ground_truth_2d_map_test(config)
     # ground_truth_2d_and_3d_map_test(config)
 
-    eval_center_gt(config)
+    # eval_center_gt(config)
 
     # manhole_3d_and_2d_density_test(config)
     # manhole_intensity_range_test(config)
 
     # manhole_sample_counting(config)
+
+    # calculate_intensity_statistics(config)
+    calculate_dataset_statistics(config, max_percentile_samples=1_000_000)
+    # calculate_max_density(config)
+
+    # not working, maybe on local work:
+    # generate_presentation_plots(config)
     
 
 

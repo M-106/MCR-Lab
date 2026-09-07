@@ -219,6 +219,8 @@ cloth_nodes.txt
 /test_bev_images
 /output/*
 /tmp_eval
+/tmp_eval_old
+/tmp_eval_old_2
 
 .env
 

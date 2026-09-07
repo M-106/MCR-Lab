@@ -9,11 +9,13 @@ import matplotlib.pyplot as plt
 
 # import evaluate
 import numpy as np
-from sklearn.metrics import f1_score, precision_score, recall_score, jaccard_score
+from sklearn.metrics import f1_score, precision_score, recall_score, jaccard_score, roc_curve
 from sklearn.metrics import auc
 from scipy.ndimage import label, binary_closing, generate_binary_structure
 from scipy.optimize import linear_sum_assignment
 import torch
+
+import cv2
 
 from skimage import measure
 from shapely.geometry import Polygon
@@ -23,25 +25,59 @@ from shapely.geometry import Polygon
 
 
 def mask_to_polygon(mask):
-    contours = measure.find_contours(mask.astype(np.uint8), 0.5)
-
-    if len(contours) == 0:
+    if mask is None or not np.any(mask):
         return None
 
+    mask_uint8 = mask.astype(np.uint8) if mask.dtype != np.uint8 else mask
+
+    # contours = measure.find_contours(mask_uint8, 0.5)
+    contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        return None
+
+    # if len(contours) == 0:
+    #     return None
+
     # take largest contour
-    largest_contour = max(contours, key=lambda x: len(x))
+    largest_contour = max(contours, key=cv2.contourArea)  # lambda x: len(x))
 
-    # (row, col) → (x, y)
-    coords = [(p[1], p[0]) for p in largest_contour]
+    # # (row, col) → (x, y)
+    # coords = [(p[1], p[0]) for p in largest_contour]
 
-    # create Polygon
-    poly = Polygon(coords)
+    # Reshape from (N, 1, 2) to (N, 2)
+    coords = largest_contour.squeeze(axis=1)
 
-    # if broken (self-intersection etc.)
-    if not poly.is_valid:
-        poly = poly.buffer(0)
+    # A valid LinearRing requires at least 4 coordinate tuples
+    if coords.ndim < 2 or len(coords) < 3:
+        return None
 
-    return poly
+    # Ensure contour is explicitly closed for Shapely
+    if not np.array_equal(coords[0], coords[-1]):
+        coords = np.vstack([coords, coords[0]])
+
+    if len(coords) < 4:
+        return None
+
+    # # create Polygon
+    # poly = Polygon(coords)
+
+    # # if broken (self-intersection etc.)
+    # if not poly.is_valid:
+    #     poly = poly.buffer(0)
+
+    # return poly
+
+    try:
+        poly = Polygon(coords)
+        # Verify polygon validity and non-zero area
+        if not poly.is_valid or poly.area <= 0:
+            poly = poly.buffer(0)  # Attempt topology fix
+            if poly.is_empty or poly.area <= 0:
+                return None
+        return poly
+    except Exception:
+        return None
 
 
 
@@ -419,36 +455,66 @@ def compute_metrics(preds, labels,
     mAF1 = get_mean_from_multiple_results("avg_f1", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
     mAIOU = get_mean_from_multiple_results("avg_obj_iou", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
 
+    # # >>> compute pixel metrics <<<
+    # # create mask for ignroe index
+    # mask = labels != ignore_index
+
+    # print(f"Debug preds shape: {preds.shape}")
+    # print(f"Debug labels shape: {labels.shape}")
+
+    # preds_binarized = (preds >= 0.5).astype(np.uint8)
+    # labels_binarized = (labels >= 0.5).astype(np.uint8)
+    # # if using_heatmap_as_gt:
+    # preds_flat = preds_binarized[mask].flatten()
+    # labels_flat = labels_binarized[mask].flatten()
+    # # else:
+    # #     preds_flat = preds[mask].flatten()
+    # #     labels_flat = labels[mask].flatten()
+    # # -> Flatten for sklearn metrics (exclude ignore_index)
+
+    # print(f"Debug preds_flat shape: {preds_flat.shape}")
+    # print(f"Debug labels_flat shape: {labels_flat.shape}")
+
+    # f1 = f1_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
+    # precision = precision_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
+    # recall = recall_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
+
+    # # calc iou via sklearn
+    # per_class_iou = jaccard_score(labels_flat, preds_flat, average=None, labels=[0, 1], zero_division=0)
+    # manhole_iou = per_class_iou[1] if len(per_class_iou) > 1 else per_class_iou[0]
+    # mean_iou = np.mean(per_class_iou)
+
+    # # most likely for heatmap - mean absolute error
+    # mae_score = np.abs(preds[mask] - labels[mask]).mean()
+
     # >>> compute pixel metrics <<<
-    # create mask for ignroe index
     mask = labels != ignore_index
 
-    print(f"Debug preds shape: {preds.shape}")
-    print(f"Debug labels shape: {labels.shape}")
+    # 1. Continuous probabilities for ROC Curve (DO NOT BINARIZE YET)
+    preds_probs_flat = preds[mask].flatten()
+    labels_flat_raw = labels[mask].flatten()
+    
+    # Ensure binary target integers [0, 1] for roc_curve
+    labels_bin_flat = (labels_flat_raw >= 0.5).astype(np.uint8)
 
+    # Calculate Pixel ROC Curve & AUC Score
+    pixel_fpr, pixel_tpr, _ = roc_curve(labels_bin_flat, preds_probs_flat, pos_label=1)
+    pixel_auc = auc(pixel_fpr, pixel_tpr)
+
+    # 2. Binarized metrics @ 0.5 threshold
     preds_binarized = (preds >= 0.5).astype(np.uint8)
-    labels_binarized = (labels >= 0.5).astype(np.uint8)
-    # if using_heatmap_as_gt:
     preds_flat = preds_binarized[mask].flatten()
-    labels_flat = labels_binarized[mask].flatten()
-    # else:
-    #     preds_flat = preds[mask].flatten()
-    #     labels_flat = labels[mask].flatten()
-    # -> Flatten for sklearn metrics (exclude ignore_index)
 
-    print(f"Debug preds_flat shape: {preds_flat.shape}")
-    print(f"Debug labels_flat shape: {labels_flat.shape}")
+    f1 = f1_score(labels_bin_flat, preds_flat, pos_label=1, zero_division=0)
+    precision = precision_score(labels_bin_flat, preds_flat, pos_label=1, zero_division=0)
+    recall = recall_score(labels_bin_flat, preds_flat, pos_label=1, zero_division=0)
 
-    f1 = f1_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
-    precision = precision_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
-    recall = recall_score(labels_flat, preds_flat, pos_label=1, zero_division=0)
-
-    # calc iou via sklearn
-    per_class_iou = jaccard_score(labels_flat, preds_flat, average=None, labels=[0, 1], zero_division=0)
+    # Calculate IoU via sklearn
+    per_class_iou = jaccard_score(labels_bin_flat, preds_flat, average=None, labels=[0, 1], zero_division=0)
     manhole_iou = per_class_iou[1] if len(per_class_iou) > 1 else per_class_iou[0]
     mean_iou = np.mean(per_class_iou)
 
-    # most likely for heatmap - mean absolute error
+    # Mean Absolute Error
     mae_score = np.abs(preds[mask] - labels[mask]).mean()
 
     return {
@@ -458,6 +524,9 @@ def compute_metrics(preds, labels,
         "precision": float(precision),
         "recall": float(recall),
         "mean_iou": float(mean_iou),
+        "pixel_auc": float(pixel_auc),
+        "pixel_fpr": pixel_fpr.tolist(),  # converted to list for serialization
+        "pixel_tpr": pixel_tpr.tolist(),
         "obj_mA_f1": float(mAF1),
         "obj_mA_recall": float(mAR),
         "obj_mA_precision": float(mAP),

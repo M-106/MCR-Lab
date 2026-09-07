@@ -477,7 +477,7 @@ def plot_single_value_sample(ax, plot_results, plot_limit, value_idx, save_plot=
         if len(outside) == 0:
             errors_in = np.linalg.norm(inside, axis=1)
             text = (
-                "Outliers : 0"
+                "Outliers : 0\n"
                 f"Sum error: {errors_in.sum():.3f}"
             )
         else:

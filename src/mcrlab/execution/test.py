@@ -2,6 +2,7 @@
 # > Imports <
 # -----------
 import os
+import shutil
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -11,6 +12,8 @@ import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+
+from sklearn.metrics import roc_curve, auc  # , f1_score, precision_score, recall_score, jaccard_score
 
 from transformers import (Trainer as HFTrainer, 
                          TrainingArguments as HFTrainingArguments)
@@ -78,7 +81,8 @@ from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDat
 
 def get_data_for_plot(obj_results, 
                       fix_metric_name="iou_threshold", fix_value=0.5, 
-                      variable_metric_name="confident_threshold"):
+                      variable_metric_name="confident_threshold",
+):
     """
     Filtert die Daten so, dass eine Metrik fixiert bleibt (z.B. iou_threshold = 0.5)
     und die andere Metrik über die X-Achse läuft.
@@ -95,6 +99,7 @@ def get_data_for_plot(obj_results,
     AP = []
     AR = []
     AIOU = []
+    FP = []
 
     for r in filtered:
         tp, fp, fn = r["total_tp"], r["total_fp"], r["total_fn"]
@@ -106,43 +111,54 @@ def get_data_for_plot(obj_results,
         AP.append(precision)
         AR.append(recall)
         AIOU.append(iou)
+        FP.append(fp)
 
-    return np.array(x_thresholds), np.array(AP), np.array(AR), np.array(AIOU)
+    return np.array(x_thresholds), np.array(AP), np.array(AR), np.array(AIOU), np.array(FP)
 
 
 
-# def get_data_for_plot(obj_results, 
-#                       match_threshold=0.5, match_is_min=False, 
-#                       tp_threshold=0.5, tp_is_min=True,
-#                       obj_iou_as_pred=False):
-#     # filter all results, so that we get onyl the results which got calculated with math_thresh=0.5 (coco standard) 
-#     if match_is_min:
-#         match_compare = lambda x, y: x >= y
-#     else:
-#         match_compare = lambda x, y: x == y
-#     filtered = [r for r in obj_results if match_compare(r["iou_match_threshold"], match_threshold)]
+def plot_pixel_roc_and_save(fpr, tpr, auc_score, title, save_path):
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 7))
 
-#     # filter again but this time towards the tp threshold which need a min value
-#     if tp_is_min:
-#         tp_compare = lambda x, y: x >= y
-#     else:
-#         tp_compare = lambda x, y: x == y
-#     filtered = [r for r in filtered if tp_compare(r["iou_tp_threshold"], tp_threshold)]
+    # Plot ROC line
+    ax.plot(fpr, tpr, color='darkorange', lw=2, label=f'Pixel ROC (AUC = {auc_score:.4f})')
+    
+    # Plot diagonal reference line
+    ax.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random Chance')
 
-#     # sort data for good plots
-#     if tp_is_min:
-#         filtered.sort(key=lambda x: x["iou_tp_threshold"])
-#     else:
-#         filtered.sort(key=lambda x: x["iou_match_threshold"])
+    # Set titles and labels
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+    ax.set_xlabel('False Positive Rate (FPR)', fontsize=12)
+    ax.set_ylabel('True Positive Rate (TPR / Sensitivity)', fontsize=12)
 
-#     tp_thresholds = [r["iou_tp_threshold"] for r in filtered]
-#     match_thresholds = [r["iou_match_threshold"] for r in filtered]
-#     AP = [r["avg_obj_precision"] for r in filtered]
-#     AR = [r["avg_obj_recall"] for r in filtered]
-#     iou_key = "avg_obj_pred_iou" if obj_iou_as_pred else "avg_obj_iou"
-#     AIOU = [r[iou_key] for r in filtered]
+    ax.set_xlim([-0.01, 1.01])
+    ax.set_ylim([-0.01, 1.01])
 
-#     return np.array(tp_thresholds), np.array(match_thresholds), np.array(AP), np.array(AR), np.array(AIOU)
+    ax.grid(True, linestyle='--', alpha=0.6)
+    ax.legend(loc='lower right', fontsize=11)
+
+    # plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close(fig)
+
+
+
+def plot_froc_and_save(fp, recall, title, save_path):
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    ax.plot(fp, recall, label='Instance Detection', color='darkorange', linewidth=2, marker='o')
+
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+    ax.set_xlabel('False Positive Instances (FP)', fontsize=12)
+    ax.set_ylabel('Recall / TPR (TP / Ground Truth)', fontsize=12)
+
+    ax.set_ylim(-0.02, 1.02)
+    ax.grid(True, linestyle='--', alpha=0.6)
+    ax.legend(loc='lower right', fontsize=11)
+
+    # plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close(fig)
 
 
 
@@ -179,7 +195,7 @@ def plot_mean_average(object_results, root_save_path, save_name):
     # 1. Confidence Curve (Fixed IoU Threshold on 0.5, variable Confident Threshold)
     save_path1 = os.path.join(root_save_path, f"confidence_curve_{save_name}.png")
     
-    conf_thresholds, AP, AR, AIOU = get_data_for_plot(
+    conf_thresholds, AP, AR, AIOU, _ = get_data_for_plot(
         object_results, 
         fix_metric_name="iou_threshold", 
         fix_value=0.5, 
@@ -199,7 +215,7 @@ def plot_mean_average(object_results, root_save_path, save_name):
     # 2. IoU Matching Sensitivity Curve (Fixed Confident Threshold on 0.5, variable IoU Threshold)
     save_path2 = os.path.join(root_save_path, f"matching_sensitivity_curve_{save_name}.png")
     
-    iou_thresholds, AP, AR, AIOU = get_data_for_plot(
+    iou_thresholds, AP, AR, AIOU, _ = get_data_for_plot(
         object_results, 
         fix_metric_name="confident_threshold", 
         fix_value=0.5, 
@@ -216,130 +232,24 @@ def plot_mean_average(object_results, root_save_path, save_name):
         save_path=save_path2
     )
 
+    # # 3.F ROC Curve (Fix IoU @ 0.5)
+    # save_path3 = os.path.join(root_save_path, f"froc_curve_{save_name}.png")
 
-# def plot_mean_average(object_results, root_save_path, save_name, root_coco_standard_save_path=None):
-#     """
-#     object_results: [
-#     {
-#         "confident_threshold": ...,
-#         "iou_threshold": ...,
-#         "avg_obj_recall": ...,
-#         "avg_obj_precision": ...,
-#         "avg_f1": ...,
-#         "avg_obj_iou": ...
-#     }, 
-#     ...]
-#     """
+    # conf_thresholds, AP, AR, AIOU, FP = get_data_for_plot(
+    #     object_results, 
+    #     fix_metric_name="iou_threshold", 
+    #     fix_value=0.5, 
+    #     variable_metric_name="confident_threshold"
+    # )
 
-#     # 1. Precision TP Curve
-#     # Shows: Stability of the Model
-#     # Fix Match IoU Threshold, flexible TP IoU Threshold
-#     # -> How does the model detection (mAP/mAR) and precision (mIoU) changes if  threshold of when a object is a TP changes
-#     # -> If the requirements on precision changes, how does change the results
-#     save_path = os.path.join(root_save_path, f"precision_tp_curve_{save_name}.png")
-#     coco_standard_save_path = os.path.join(root_coco_standard_save_path, f"precision_tp_curve_{save_name}_coco_standard.png")
-#     print(f"Precision-TP-Curve successfully saved to: {save_path}")
-
-#     # extract values
-#     tp_thresholds, match_thresholds, AP, AR, AIOU = get_data_for_plot(
-#         object_results, 
-#         match_threshold=0.5, 
-#         match_is_min=False,
-#         tp_threshold=0.0,
-#         tp_is_min=True,
-#         obj_iou_as_pred=True
-#     )
-
-#     plot_and_save(
-#         iou_thresholds=tp_thresholds, 
-#         AR=AR, 
-#         AP=AP, 
-#         AIOU=AIOU,
-#         title="Precision TP Curve",
-#         xlabel='IoU Threshold for TP',
-#         iou_label='Avg True Pred IoU (AIOU)',
-#         save_path=save_path
-#     )
+    # plot_froc_and_save(
+    #     fp=FP, 
+    #     recall=AR, 
+    #     title="FROC Curve (Fix IoU @ 0.5)", 
+    #     save_path=save_path3
+    # )
 
 
-#     if coco_standard_save_path:
-#         # also save from 0.5
-#         # indices = np.where(iou_thresholds > 0.46)[0]
-#         # iou_thresholds = iou_thresholds[indices]
-#         # AR = AR[indices]
-#         # AP = AP[indices]
-#         # AF1 = AF1[indices]
-#         # AIOU = AIOU[indices]
-
-#         tp_thresholds, match_thresholds, AP, AR, AIOU = get_data_for_plot(
-#             object_results, 
-#             match_threshold=0.5, 
-#             match_is_min=False,
-#             tp_threshold=0.5,
-#             tp_is_min=True,
-#             obj_iou_as_pred=False
-#         )
-
-#         plot_and_save(
-#             iou_thresholds=tp_thresholds, 
-#             AR=AR, 
-#             AP=AP,
-#             AIOU=AIOU, 
-#             title="Precision TP Curve",
-#             xlabel='IoU Threshold for TP',
-#             iou_label='Avg True Pred IoU (AIOU)',
-#             save_path=coco_standard_save_path
-#         )
-
-#     # 2. mAP/mAR/mIoU Matching Sensity Curve
-#     # Shows: Sensity of Matching
-#     # Flexible Match IoU Threshold, fix TP IoU Threshold
-#     # -> How does the model detection (mAP/mAR) and precision (mIoU) changes if threshold of when a object is a considered a match changes
-#     # -> If the requirements on recall changes, how does change the results
-#     save_path = os.path.join(root_save_path, f"matching_sensity_curve_{save_name}.png")
-#     coco_standard_save_path = os.path.join(root_coco_standard_save_path, f"matching_sensity_curve_{save_name}_coco_standard.png")
-#     print(f"Matching Sensity-Curve successfully saved to: {save_path}")
-
-#     # extract values
-#     tp_thresholds, match_thresholds, AP, AR, AIOU = get_data_for_plot(
-#         object_results, 
-#         match_threshold=0.0, 
-#         match_is_min=True,
-#         tp_threshold=0.5,
-#         tp_is_min=False
-#     )
-
-#     plot_and_save(
-#         iou_thresholds=match_thresholds, 
-#         AR=AR, 
-#         AP=AP, 
-#         AIOU=AIOU,
-#         title="Matching Sensity Plot",
-#         xlabel='IoU Threshold for Matching',
-#         iou_label='Avg Matching IoU (AIOU)',
-#         save_path=save_path
-#     )
-
-
-#     if coco_standard_save_path:
-#         tp_thresholds, match_thresholds, AP, AR, AIOU = get_data_for_plot(
-#             object_results, 
-#             match_threshold=0.5, 
-#             match_is_min=True,
-#             tp_threshold=0.5,
-#             tp_is_min=False
-#         )
-
-#         plot_and_save(
-#             iou_thresholds=match_thresholds, 
-#             AR=AR, 
-#             AP=AP,
-#             AIOU=AIOU, 
-#             title="Matching Sensity Plot",
-#             xlabel='IoU Threshold for Matching',
-#             iou_label='Avg Matching IoU (AIOU)',
-#             save_path=coco_standard_save_path
-#         )
 
 
 
@@ -386,10 +296,17 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
     if use_all_test_data:
         exp_name += "_all"
 
+    output_dir = f"./tmp_eval/{exp_name}"
+    os.makedirs(output_dir, exist_ok=True)
+    shutil.rmtree(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
     # Load Test Data
     heatmap_path = config.data.heatmap_path
     used_heatmap_channel = config.data.used_heatmap_channel
     pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
+    normalization = config.data.normalization
+    normalization_mode = config.data.normalization_mode
     
     if config.data.name == "merged_whu_sud":
         test_loader_raw = get_data_loader(
@@ -444,7 +361,9 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
         augment=False,
         pass_label_in_preprocessor=pass_label_in_preprocessor,
         heatmap_gt_path=heatmap_path,
-        used_heatmap_channel=used_heatmap_channel
+        used_heatmap_channel=used_heatmap_channel,
+        normalize=normalization, 
+        normalization_mode=normalization_mode
     )
     
     # Filter identical to training to keep metric comparisons fair
@@ -560,7 +479,7 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
 
     # Initialize Trainer for Evaluation Only
     eval_args = HFTrainingArguments(
-        output_dir="./tmp_eval",
+        output_dir=output_dir,
         per_device_eval_batch_size=batch_size,
         remove_unused_columns=False,
         report_to="none" # Turn off mlflow/tensorboard for clean terminal outputs
@@ -595,7 +514,7 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
     
     for metric_name, value in results.items():
         # remove prefix 'test_' or 'eval_'
-        if isinstance(value, list):
+        if isinstance(value, list) and not any([name_ in metric_name for name_ in ["pixel_fpr", "pixel_tpr"]]):
             for cur_obj_result in value:
                 line = f"Object Mean Average Values - IoU Threshold: {cur_obj_result["iou_threshold"]:.2f} & Confident Threshold: {cur_obj_result["confident_threshold"]:.2f}"
                 output_lines.append(line)
@@ -623,6 +542,7 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
     # hour = now.hour
     # minute = now.minute
 
+    # Save Text Metrics
     save_name = exp_name  # f"{year}_{month:02}_{day:02}_{hour:02}_{minute:02}_{model_name}"
     
     os.makedirs(eval_args.output_dir, exist_ok=True)
@@ -633,8 +553,20 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
         
     print(f"Metrics successfully saved to: {txt_path}")
 
+    # Plot Object-Level Mean Average Curves & FROC
     plot_mean_average(results["eval_obj_results"], root_save_path=eval_args.output_dir, save_name=save_name)
     
+    # Plot Pixel-Level ROC Curve
+    if "eval_pixel_fpr" in results and "eval_pixel_tpr" in results:
+        pixel_roc_path = os.path.join(eval_args.output_dir, f"pixel_roc_curve_{save_name}.png")
+        plot_pixel_roc_and_save(
+            fpr=results["eval_pixel_fpr"],
+            tpr=results["eval_pixel_tpr"],
+            auc_score=results["eval_pixel_auc"],
+            title=f"Pixel-Level ROC Curve ({model_name.upper()})",
+            save_path=pixel_roc_path
+        )
+
     return results
 
 
@@ -705,16 +637,23 @@ def test(config):
         # "fpn", 
         # "deeplabv3", 
         # "deeplabv3plus", 
-        "dpt"]
+        #"dpt"
+    ]
     encoders = [
-        ["resnext101_32x32d"], 
+        ["timm-efficientnet-b7"]
+        # ["resnext101_32x32d"], 
         # ["timm-efficientnet-b7", "mit_b5", "resnet101", "resnext101_32x32d", "densenet161", "mobileone_s4"], 
         # ["timm-efficientnet-b7", "resnet101", "resnext101_32x32d", "mobileone_s4"],
         # ["timm-efficientnet-b7", "mit_b5", "resnet101", "resnext101_32x32d", "mobileone_s4"],
-        ["tu-samvit_huge_patch16.sa1b", "tu-maxvit_xlarge_tf_512", "tu-beit_large_patch16_512.in22k_ft_in22k_in1k"]
+        # ["tu-samvit_huge_patch16.sa1b", "tu-maxvit_xlarge_tf_512", "tu-beit_large_patch16_512.in22k_ft_in22k_in1k"]
     ]
     checkpoint_paths = [
-        ["./output/checkpoints/2026_07_18_11_59_unet_whu_comparison_1_r101_32x32d/checkpoint-962"],
+        ["./output/checkpoints/2026_07_17_22_10_unet_whu_comparison_1_teb7/checkpoint-702"],
+        # ["./output/checkpoints/2026_08_11_09_41_unet_sud_comparison_1_teb7_domainfinetuned/checkpoint-196"],
+        # ["./output/checkpoints/2026_08_11_18_37_unet_merged_whu_sud_comparison_1_teb7_domainfinetuned_merged/checkpoint-308"],
+        # ["./output/checkpoints/2026_08_11_21_32_unet_whu_comparison_1_teb7_improved_norm/checkpoint-1411"],
+        # ["./output/checkpoints/2026_08_12_11_05_unet_whu_comparison_1_teb7_improved_norm_other_channels_minmax/checkpoint-1394"],
+        # ["./output/checkpoints/2026_07_18_11_59_unet_whu_comparison_1_r101_32x32d/checkpoint-962"],
         # ["./output/checkpoints/2026_07_19_12_06_fpn_whu_comparison_1_teb7/checkpoint-819",
         #  "./output/checkpoints/2026_07_19_13_13_fpn_whu_comparison_1_mb5/checkpoint-546",
         #  "./output/checkpoints/2026_07_19_14_44_fpn_whu_comparison_1_r101/checkpoint-637",
@@ -730,9 +669,9 @@ def test(config):
         #  "./output/checkpoints/2026_07_21_06_33_deeplabv3plus_whu_comparison_1_r101/checkpoint-1003",
         #  "./output/checkpoints/2026_07_21_08_27_deeplabv3plus_whu_comparison_1_r101_32x32d/checkpoint-1898",
         #  "./output/checkpoints/2026_07_21_12_16_deeplabv3plus_whu_comparison_1_mos4/checkpoint-663"],
-         ["./output/checkpoints/2026_07_21_13_59_dpt_whu_comparison_1_tshp16s/checkpoint-1248",
-         "./output/checkpoints/2026_07_22_16_38_dpt_whu_comparison_1_tmxt512/checkpoint-4134",
-         "./output/checkpoints/2026_07_23_07_15_dpt_whu_comparison_1_tblp16512/checkpoint-510"],
+        #  ["./output/checkpoints/2026_07_21_13_59_dpt_whu_comparison_1_tshp16s/checkpoint-1248",
+        #  "./output/checkpoints/2026_07_22_16_38_dpt_whu_comparison_1_tmxt512/checkpoint-4134",
+        #  "./output/checkpoints/2026_07_23_07_15_dpt_whu_comparison_1_tblp16512/checkpoint-510"],
     ]
 
     model_entries = zip(names, encoders, checkpoint_paths)

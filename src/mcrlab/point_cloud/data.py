@@ -13,6 +13,7 @@ import copy
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms.functional as F
 
 # from skimage.ndimage import label as ski_label
 from sklearn.cluster import DBSCAN
@@ -35,7 +36,7 @@ from mcrlab.point_cloud.semantic_kitti_utils import load_semantic_kitti_as_o3d
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor, map_torch_device_to_o3d
 from mcrlab.projection import bev_projection
 from mcrlab.image.io import load_single_bev_tile_as_pickle
-from mcrlab.image.utils import normalize_img_per_channel, normalize_bev
+from mcrlab.image.utils import normalize_img_per_channel, normalize_bev, normalize_bev_robust
 from mcrlab.point_cloud.shape_check import circle_shape_check
 
 
@@ -797,7 +798,8 @@ class ParisLille3DDataset(Dataset):
 # FIXME why only find Found 28 point clouds??? -> because of preprocessed flag, but where is it used?
 class WHUUrban3DDataset(Dataset):
     def __init__(self, path, type="train", transform=None, 
-                 preprocessed=False, return_train_format=False):
+                 preprocessed=False, return_train_format=False,
+                 bev_normalized=True, bev_normalize_mode="local_minmax"):
         self.path = os.path.join(path, "mls", "h5")
         self.type = type  # see in https://pypi.org/project/pywhu3d/ which scenes are train/val/test split
         self.transform = transform
@@ -835,9 +837,10 @@ class WHUUrban3DDataset(Dataset):
                 self.point_cloud_paths.append(os.path.join(path, cur_file))
 
         if preprocessed:
-            self.bev_gen = BEVDataset(path=self.point_cloud_paths, has_labels=False if self.type == "inference" else True)
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, has_labels=False if self.type == "inference" else True, normalize=bev_normalized, normalization_mode=bev_normalize_mode)
 
         print(f"Found {len(self.point_cloud_paths)} point clouds.")
+        # raise ValueError(f"DEBUGGING STOP, point cloud paths: {self.point_cloud_paths}")
 
     def __len__(self):
         return len(self.point_cloud_paths)
@@ -888,11 +891,24 @@ class WHUUrban3DDataset(Dataset):
             # print(point_cloud.point[get_coordinate_attribute(point_cloud)].shape)
             return point_cloud  # PointCloudTensor or o3d.t.geometry.Tensor
 
+    def get_patch_via_identifier(self, pc_id, x_start, y_start):
+        # '/data/whu3d-dataset-wo-test-label/mls/h5/preprocessed/preprocessed_patch_2447_7177.5_3739.5.h5'
+        
+        searched_root_path = os.path.dirname(self.point_cloud_paths[0])
+        searched_full_path = os.path.join(searched_root_path, f"preprocessed_patch_{pc_id}_{x_start}_{y_start}.h5")
+
+        try:
+            # find first index with this value
+            index = self.point_cloud_paths.index(searched_full_path)
+            return self[index]
+        except ValueError:
+            raise ValueError(f"Can't find '{searched_full_path}' in 3D Dataset.")
 
 
 class SUDROADDataset(Dataset):
     def __init__(self, path, type="train", transform=None, 
-                 preprocessed=False, return_train_format=False):
+                 preprocessed=False, return_train_format=False,
+                 bev_normalized=True, bev_normalize_mode="local_minmax"):
         self.path = path
         self.type = type  # have the additional special type not_splitted
         self.transform = transform
@@ -938,7 +954,7 @@ class SUDROADDataset(Dataset):
                     self.point_cloud_paths.append(os.path.join(path, cur_file))
 
         if preprocessed:
-            self.bev_gen = BEVDataset(path=self.point_cloud_paths, has_labels=False if self.type == "inference" else True)
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, has_labels=False if self.type == "inference" else True, normalize=bev_normalized, normalize_mode=bev_normalize_mode)
 
         print(f"Found {len(self.point_cloud_paths)} point clouds.")
 
@@ -975,6 +991,19 @@ class SUDROADDataset(Dataset):
             return point_cloud.get_as_one_tensor(include_intensity=True), y
         else:
             return point_cloud  # PointCloudTensor or o3d.t.geometry.Tensor
+
+    def get_patch_via_identifier(self, pc_id, x_start, y_start):
+        '/data/whu3d-dataset-wo-test-label/mls/h5/preprocessed/preprocessed_patch_2447_7177.5_3739.5.h5'
+        
+        searched_root_path = os.path.dirname(self.point_cloud_paths[0])
+        searched_full_path = os.path.join(searched_root_path, f"preprocessed_patch_{pc_id}_{x_start}_{y_start}.h5")
+
+        try:
+            # find first index with this value
+            index = self.point_cloud_paths.index(searched_full_path)
+            return self[index]
+        except ValueError:
+            raise ValueError(f"Can't find '{searched_full_path}' in 3D Dataset.")
 
 
 
@@ -1152,7 +1181,9 @@ class BEVDataset(Dataset):
                  file_paths=[], has_labels=False,
                  image_training=False, preprocessor=None,
                  augment=False, pass_label_in_preprocessor=False,
-                 heatmap_gt_path=None, used_heatmap_channel=2
+                 heatmap_gt_path=None, used_heatmap_channel=2,
+                 normalize=True,
+                 normalization_mode="local_minmax"  # "local_minmax", "global_minmax", "global_standard"
                  ):
         """
         path is a list of point cloud file or a list of paths to search the bev images.
@@ -1178,6 +1209,8 @@ class BEVDataset(Dataset):
         if self.heatmap_gt_path is not None and self.heatmap_gt_path == "None":
             self.heatmap_gt_path = None
         self.used_heatmap_channel = used_heatmap_channel
+        self.normalize = normalize
+        self.normalization_mode = normalization_mode
 
         # find pkl files
         all_bev_paths = []
@@ -1205,7 +1238,7 @@ class BEVDataset(Dataset):
 
             self.file_paths_dict[f"{pc_id}_{x_start}_{y_start}"] = cur_file_path
 
-        print(f"Found {len(self.file_paths)} bev images (orthogonal images).")
+        print(f"Found {len(self.file_paths)} bev images (orthogonal images).\n    - normalization: {self.normalize} ('{self.normalization_mode}')")
 
     def __getitem__(self, idx):
         cur_file_path = self.file_paths[idx]
@@ -1419,13 +1452,37 @@ class BEVDataset(Dataset):
                 x_np = augmented['image']
                 y_np = augmented['mask']
 
-            x = normalize_bev(x_np.transpose(2, 0, 1))
+            if self.normalize:
+                if self.normalization_mode == "local_minmax":
+                    x = normalize_bev(x_np.transpose(2, 0, 1))
+                elif self.normalization_mode in ["global_minmax", "global_standard"]:
+                    intensity_norm_mode = 'minmax' if self.normalization_mode == "global_minmax" else 'standard'
+
+                    sensor = 'as-900hl' if data_name == "whu" else 'riegl_vux-1ha_mls'
+                    x = normalize_bev_robust(
+                        bev=x_np.transpose(2, 0, 1),
+                        channel_names=['max_height', 'delta_z', 'mean_intensity', 'density'],
+                        sensor_type=sensor,
+                        intensity_norm_mode=intensity_norm_mode,  # Options: 'standard', 'minmax'
+                        intensity_clip_range=(-3.0, 3.0)
+                    )
+                else:
+                    raise ValueError(f"Got normalization mode '{self.normalization_mode}' which does not match available options: 'local_minmax', 'global_minmax', 'global_standard'.")
+            else:
+                x = x_np
             x = torch.from_numpy(x).float()
             
             if self.image_training:
+                # > 0 Maximum height (Z) of points falling into that pixel
+                #   1 Delta Z
+                # > 2 Mean intensity of points falling into that pixel
+                # > 3 Density
+                #   4 Class/label
                 x = x[[0, 2, 3]]    # Channel drop/choice
 
                 if self.preprocessor is not None:
+                    # FIXME -> right?
+                    x = F.resize(x, size=[500, 500], antialias=True)
                     x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
                     if self.pass_label_in_preprocessor:
                         if self.heatmap_gt_path is None:
@@ -1547,22 +1604,22 @@ def extract_tiles_metas(bev_gen, amount=5, as_numpy=True):
 def get_data_loader(data_name, path, type="train", transform=None,
                     batch_size=32, shuffle=True, num_workers=4,
                     preprocessed=False, return_train_format=False,
-                    return_dataset=False):
+                    return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax"):
     if data_name == "paris":
         data_loader = get_paris_data_loader(path, type=type, transform=transform,
                                             batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                             preprocessed=preprocessed, return_train_format=return_train_format,
-                                            return_dataset=return_dataset)
+                                            return_dataset=return_dataset, bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
     elif data_name == "whu":
         data_loader = get_whu_data_loader(path, type=type, transform=transform,
                                           batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                           preprocessed=preprocessed, return_train_format=return_train_format,
-                                          return_dataset=return_dataset)
+                                          return_dataset=return_dataset, bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
     elif data_name == "sud":
         data_loader = get_sud_data_loader(path, type=type, transform=transform,
                                           batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                           preprocessed=preprocessed, return_train_format=return_train_format,
-                                          return_dataset=return_dataset)
+                                          return_dataset=return_dataset, bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
     else:
         raise ValueError(f"No Dataset with the name '{data_name}' founded. Try 'paris'.")
 
@@ -1573,7 +1630,7 @@ def get_data_loader(data_name, path, type="train", transform=None,
 def get_paris_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
                           preprocessed=False, return_train_format=False,
-                          return_dataset=False):
+                          return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax"):
     dataset = ParisLille3DDataset(path=path, type=type, transform=transform,
                                   preprocessed=preprocessed, return_train_format=return_train_format)
 
@@ -1588,9 +1645,10 @@ def get_paris_data_loader(path, type="train", transform=None,
 def get_whu_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
                           preprocessed=False, return_train_format=False,
-                          return_dataset=False):
+                          return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax"):
     dataset = WHUUrban3DDataset(path=path, type=type, transform=transform,
-                                preprocessed=preprocessed, return_train_format=return_train_format)
+                                preprocessed=preprocessed, return_train_format=return_train_format,
+                                bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
 
     if return_dataset:
         return dataset
@@ -1603,9 +1661,10 @@ def get_whu_data_loader(path, type="train", transform=None,
 def get_sud_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
                           preprocessed=False, return_train_format=False,
-                          return_dataset=False):
+                          return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax"):
     dataset = SUDROADDataset(path=path, type=type, transform=transform,
-                             preprocessed=preprocessed, return_train_format=return_train_format)
+                             preprocessed=preprocessed, return_train_format=return_train_format,
+                             bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
 
     if return_dataset:
         return dataset
