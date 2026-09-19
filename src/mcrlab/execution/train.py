@@ -42,6 +42,7 @@ from mcrlab.metrices import compute_metrics
 # from mcrlab.custom_hf.unet import UnetForSemanticSegmentation, UnetConfig
 # from mcrlab.custom_hf.deeplabv3 import DeepLabV3Wrapper, DeepLabV3Config
 from mcrlab.custom_hf.smp_model import ModelForSemanticSegmentation, ModelConfig
+# from mcrlab.helper import save_dir_creation
 
 
 
@@ -64,13 +65,16 @@ class ImagePlottingCallback(TrainerCallback):
         
         # create folderfor saving
 
-        self.plot_dir = f"./output/plots/{save_name}"
+        # self.plot_dir = f"./output/plots/{save_name}"
+        self.plot_dir = f"/out/checkpoints/2d/output/plots/{save_name}"
         # if save_post_dir_name is not None:
         #     self.plot_dir += f"_{save_post_dir_name}"
+        # save_dir_creation(dir_path=self.plot_dir)
         os.makedirs(self.plot_dir, exist_ok=True)
         if clear_path:
             shutil.rmtree(self.plot_dir)
             os.makedirs(self.plot_dir, exist_ok=True)
+            # save_dir_creation(dir_path=self.plot_dir)
 
     def on_evaluate(self, args, state: TrainerState, control: TrainerControl, model=None, **kwargs):
         """
@@ -267,6 +271,7 @@ class ImagePlottingCallback(TrainerCallback):
 # ----------
 def save_model(model, dir_path, name="model"):
     os.makedirs(dir_path, exist_ok=True)
+    # save_dir_creation(dir_path=dir_path)
 
     if not name.endswith(".pt"):
         name += ".pt"
@@ -518,146 +523,7 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
                 preds = preds.squeeze(1)
 
     return preds
-
-
-# def get_segmentation_prediction(outputs, model_name, processor=None, target_sizes=None, using_heatmap_as_gt=False, as_prob=True):
-#     model_name = model_name.lower()
-
-#     is_numpy_input = isinstance(outputs, np.ndarray)
-#     is_torch_input = isinstance(outputs, torch.Tensor)
-
-#     if model_name in ["segformer", "deeplabv3", "unet"]:
-#         if not is_numpy_input and hasattr(outputs, "logits"):
-#             logits = outputs.logits
-#         else:
-#             logits = outputs
-        
-#         # raise RuntimeError(f"DEBUGGING STOP, logits/pred shape: {logits.shape}\nMin-Max ({logits.min()} - {logits.max()})")
-#         # if isinstance(logits, np.ndarray):
-#         #     preds = logits.argmax(axis=1)
-#         # else:
-#         #     preds = logits.argmax(dim=1)
-
-#         if isinstance(logits, np.ndarray):
-#             logits_tensor = torch.from_numpy(logits)
-#         else:
-#             logits_tensor = logits.detach().cpu()
-
-        
-
-#         # upscaling because: SegFormer logits are 1/4 of input size
-#         if model_name in ["segformer", "unet"]:
-#             # and hasattr(outputs, "logits") and processor is not None and not using_heatmap_as_gt
-#             preds_list = processor.post_process_semantic_segmentation(outputs, target_sizes=target_sizes)
-#             preds = torch.stack(preds_list)
-#         else:
-#             if using_heatmap_as_gt:
-#                 preds = torch.sigmoid(logits_tensor)
-#             else:
-#                 if as_prob:
-#                     # FIXME -> still have to apply softmax?
-#                     preds = logits_tensor.softmax(dim=1) # (B ,W, H) also?
-#                 else:
-#                     preds = logits_tensor.argmax(dim=1) # (B, W, H)
-
-#             if target_sizes is not None:
-#                 size = tuple(int(x) for x in target_sizes[0])
-        
-#                 # Interpolate braucht 4D: (B, 1, H, W)
-#                 preds = preds if using_heatmap_as_gt else preds.unsqueeze(1).float()
-#                 mode = "bilinear" if using_heatmap_as_gt else "nearest"
-#                 preds = F.interpolate(preds, size=size, mode=mode)
-#                 if not using_heatmap_as_gt and not as_prob:
-#                     preds = preds.squeeze(1).long()
-#                 else:
-#                     preds = preds.squeeze(1)
-
-#     elif model_name in ["mask2former", "oneformer"]:
-
-#         # print(f"\noutputs Len: {len(outputs)} Dtype: {type(outputs)}\nSub-Element type: {type(outputs[0])}\nShapes:")
-#         # for cur_idx, cur_elem in enumerate(outputs):
-#         #     if hasattr(cur_elem, "shape"):
-#         #         shape_str = f"{cur_elem.shape}"
-#         #     else:
-#         #         shape_str = "none"
-#         #     print(f"  - {cur_idx:02}:\n      dtype={type(cur_elem)}\n      shape={shape_str}")
-#         # raise ValueError("DEBUGGING STOP")
-
-#         if is_numpy_input or is_torch_input:
-#             if is_numpy_input:
-#                 logits_tensor = torch.from_numpy(outputs)
-#             else:
-#                 logits_tensor = outputs
-
-#             if using_heatmap_as_gt:
-#                 preds = torch.sigmoid(logits_tensor)
-#             else:
-#                 if as_prob:
-#                     preds = logits_tensor.softmax(dim=1) # (B ,W, H) also?
-#                 else:
-#                     preds = logits_tensor.argmax(dim=1) # (B, W, H)
-        
-#             if target_sizes is not None:
-#                 size = tuple(int(x) for x in target_sizes[0])
-#                 preds = preds if using_heatmap_as_gt else preds.unsqueeze(1).float()
-#                 mode = "bilinear" if using_heatmap_as_gt else "nearest"
-#                 preds = F.interpolate(preds, size=size, mode=mode)
-#                 if not using_heatmap_as_gt and not as_prob:
-#                     preds = preds.squeeze(1).long()
-#                 else:
-#                     preds = preds.squeeze(1)
-#         elif isinstance(outputs, tuple):
-#             # debugging
-#             # print(type(outputs), len(outputs) if isinstance(outputs, tuple) else outputs.shape)
-#             # for i, o in enumerate(outputs):
-#             #     print(f"  outputs[{i}]: shape={o.shape}, dtype={o.dtype}")
-
-#             # raise ValueError("DEBUGING STOP")
-#             # <class 'tuple'> 52/3 [00:01<00:00,  1.18it/s]
-#             # outputs[0]: shape=(22, 100, 3), dtype=float32
-#             # outputs[1]: shape=(22, 100, 128, 128), dtype=float32
-#             # outputs[2]: shape=(22, 1536, 16, 16), dtype=float32
-#             # outputs[3]: shape=(22, 256, 128, 128), dtype=float32
-#             # outputs[4]: shape=(22, 100, 256), dtype=float32
-
-#             from transformers.models.mask2former.modeling_mask2former import Mask2FormerForUniversalSegmentationOutput
-#             outputs_obj = Mask2FormerForUniversalSegmentationOutput(
-#                 class_queries_logits=torch.from_numpy(outputs[0]),
-#                 masks_queries_logits=torch.from_numpy(outputs[1]),
-#             )
-
-#             # Post-processing liefert eine Liste von PyTorch-Tensoren
-#             preds_list = processor.post_process_semantic_segmentation(
-#                 outputs_obj,
-#                 target_sizes=target_sizes
-#             )
-#             preds = torch.stack(preds_list)
-#         else:
-#             if processor is None:
-#                 raise ValueError(f"Processor muss für {model_name} übergeben werden! (maybe activate code below)")
-
-#             if target_sizes is None or len(target_sizes) != outputs.class_queries_logits.shape[0]:
-#                 current_batch_size = outputs.class_queries_logits.shape[0]
-#                 target_sizes = [(500, 500)] * current_batch_size
-
-#             preds_list = processor.post_process_semantic_segmentation(
-#                 outputs,
-#                 target_sizes=target_sizes
-#             )
-#             preds = torch.stack(preds_list)
-#     else:
-#         raise ValueError(f"Unsupported model name: {model_name}")
-
-#     # if not right size
-#     # pred_mask_resized = cv2.resize(pred_mask, (500, 500), interpolation=cv2.INTER_NEAREST)
-
-#     # preds = torch.argmax(outputs.logits, dim=1)
-#     # preds = preds.unsqueeze(1).float() 
-#     # preds_upsampled = F.interpolate(preds, size=(500, 500), mode="nearest").long()
-#     # pred_mask = preds_upsampled.squeeze().cpu().numpy()
-
-#     return preds
-#     # return preds if is_numpy_input else preds.numpy()
+    
 
 
 def train_hf_pipeline(config):
@@ -858,71 +724,6 @@ def train_hf_pipeline(config):
             outputs = eval_pred.predictions
             labels = eval_pred.label_ids
 
-            # print(f"\n\n=== DEBUGGING PRINT === (compute_metrics_fn)\nLabels Shape: {labels.shape}")
-            # FIXME labels already have 500, 500
-
-            # print("Output/Preds:", type(outputs), len(outputs) if isinstance(outputs, tuple) else outputs.shape)
-            # for i, o in enumerate(outputs):
-            #     print(f"  outputs[{i}]: shape={o.shape}, dtype={o.dtype}")
-
-
-            # print(f"Labels:\n   type: {type(labels)}\n    len: {len(labels)}")
-            # print(f"Label [0]:\n   type: {type(labels[0])}\n    len: {len(labels[0])}")
-            # [print(f"    - Output {idx}: {cur_label.shape}, dtype={cur_label.dtype}") for idx, cur_label in enumerate(labels[0])]
-            # print(f"Label [1]:\n   type: {type(labels[1])}\n    len: {len(labels[1])}")
-            # [print(f"    - Output {idx}: {cur_label.shape}, dtype={cur_label.dtype})") for idx, cur_label in enumerate(labels[1])]
-            # print(f"{labels}")
-            # print(labels[1])
-
-            # print(f"Pred:\n   type: {type(outputs)}\n    len: {len(outputs)}")
-            # print(f"Label [0]:\n   type: {type(outputs[0])}\n    len: {len(outputs[0])}")
-            # [print(f"    - Output {idx}: {cur_out.shape}, dtype={cur_out.dtype}") for idx, cur_out in enumerate(outputs[0])]
-            # print(f"Label [1]:\n   type: {type(outputs[1])}\n    len: {len(outputs[1])}")
-            # [print(f"    - Output {idx}: {cur_out.shape}, dtype={cur_out.dtype})") for idx, cur_out in enumerate(outputs[1])]
-
-                # Labels:
-                # type: <class 'tuple'>
-                #     len: 2
-                # Label [0]:
-                # type: <class 'list'>
-                #     len: 8
-                #     - Output 0: (7, 512, 512), dtype=float32
-                #     - Output 1: (7, 512, 512), dtype=float32
-                #     - Output 2: (7, 512, 512), dtype=float32
-                #     - Output 3: (7, 512, 512), dtype=float32
-                #     - Output 4: (7, 512, 512), dtype=float32
-                #     - Output 5: (7, 512, 512), dtype=float32
-                #     - Output 6: (6, 512, 512), dtype=float32
-                #     - Output 7: (6, 512, 512), dtype=float32
-                # Label [1]:
-                # type: <class 'list'>
-                #     len: 8
-                #     - Output 0: (7,), dtype=int64)
-                #     - Output 1: (7,), dtype=int64)
-                #     - Output 2: (7,), dtype=int64)
-                #     - Output 3: (7,), dtype=int64)
-                #     - Output 4: (7,), dtype=int64)
-                #     - Output 5: (7,), dtype=int64)
-                #     - Output 6: (6,), dtype=int64)
-                #     - Output 7: (6,), dtype=int64)
-                # Preds:
-                # type: <class 'tuple'>
-                #     len: 2
-                # Pred [0]:
-                # type: <class 'numpy.ndarray'>
-                #     len: 32
-                #     - Output 0: (100, 3), dtype=float32
-                #     - Output 1: (100, 3), dtype=float32
-                #     - ...
-                # Pred [1]:
-                # type: <class 'numpy.ndarray'>
-                #     len: 32
-                #     - Output 0: (100, 128, 128), dtype=float32)
-                #     - Output 1: (100, 128, 128), dtype=float32)
-                #     - ...
-
-            # if model_name in ["segformer", "unet", "deeplabv3"]:
-            # target_sizes = [labels.shape[-2:]] * labels.shape[0]
             target_sizes = [(500, 500)] * labels.shape[0]  # batch_size  # [label.shape[-2:] for label in labels]
 
             preds = get_segmentation_prediction(
@@ -933,47 +734,6 @@ def train_hf_pipeline(config):
                 using_heatmap_as_gt=using_heatmap_as_gt,
                 as_prob=as_prob
             )
-            # else:
-            #     # raise ValueError("DEBUGGING STOP: did not expect to go here...")
-            #     # unpack labels and get true number of pictures
-            #     mask_labels_list = labels[0]
-            #     class_labels_list = labels[1]
-            #     num_real_images = len(mask_labels_list)
-
-            #     aggregated_batch_size = outputs[0].shape[0] if isinstance(outputs, tuple) else outputs.shape[0]
-            #     target_sizes = [(500, 500)] * aggregated_batch_size
-
-            #     # slicing preds to match labels
-            #     # if isinstance(outputs, (list, tuple)):
-            #     #     cls_logits = outputs[0][:num_images]
-            #     #     mask_logits = outputs[1][:num_images]
-            #     #     outputs = (cls_logits, mask_logits)
-            #     # else:
-            #     #     outputs = outputs[:num_images]
-
-            #     preds = get_segmentation_prediction(
-            #         outputs,
-            #         model_name=model_name,
-            #         processor=processor,
-            #         target_sizes=target_sizes,
-            #         using_heatmap_as_gt=using_heatmap_as_gt,
-            #         as_prob=as_prob
-            #     )
-
-            #     # drop padded elements, right??
-            #     preds = preds[:num_real_images]
-
-            #     semantic_labels = []
-            #     for masks, classes in zip(mask_labels_list, class_labels_list):
-            #         H, W = masks.shape[1], masks.shape[2]
-            #         sem = np.zeros((H, W), dtype=np.int64)
-            #         for mask, cls in zip(masks, classes):
-            #             # if cls == 1:
-            #             #     sem = mask
-            #             # originally: 
-            #             sem[mask > 0.5] = cls
-            #         semantic_labels.append(sem)
-            #     labels = np.stack(semantic_labels)
 
         else:
             outputs, labels = eval_pred
@@ -1007,7 +767,7 @@ def train_hf_pipeline(config):
 
     # FIXME -> make many of the settings adjustable via config
     training_args = HFTrainingArguments(
-        output_dir=f"./output/checkpoints/{save_name}",
+        output_dir=f"/out/checkpoints/2d/{save_name}",
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         learning_rate=1e-4,  # 6e-5,           # 6e-5     
@@ -1035,13 +795,6 @@ def train_hf_pipeline(config):
         report_to=["tensorboard"],  # "none", "mlflow"
         use_cpu=False
     )
-
-    # optimizer = SGD(
-    #     model.parameters(), 
-    #     lr=1e-4, 
-    #     momentum=0.9, 
-    #     weight_decay=1e-4
-    # )
 
     optimizer = AdamW(
         model.parameters(), 
@@ -1082,88 +835,13 @@ def train_hf_pipeline(config):
         preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else logits,
     )
 
-    os.makedirs(f"./output/checkpoints/{save_name}", exist_ok=True)
-    with open(f"./output/checkpoints/{save_name}/config.txt", "w") as file_:
+    os.makedirs(f"/out/checkpoints/2d/{save_name}", exist_ok=True)
+    # save_dir_creation(dir_path=f"/out/checkpoints/2d/{save_name}")
+    with open(f"/out/checkpoints/2d/{save_name}/config.txt", "w") as file_:
         yaml.dump(config.dict(), file_)
 
     trainer.train()
     print("Success! Your Training is finish and your pipeline works.")
-
-    # ------------------------------------
-    # --> POST TRAINING <--
-
-    # robustness finetuning
-    # danger: Catastrophic Forgetting
-
-    # print("Start post training.")
-
-    # train_dataset = BEVDataset(path=all_train_paths, 
-    #                            file_paths=[], 
-    #                            has_labels=True, 
-    #                            image_training=True, 
-    #                            preprocessor=processor,
-    #                            augment=True)
-    # val_dataset = BEVDataset(path=all_val_paths, 
-    #                          file_paths=[], 
-    #                          has_labels=True, 
-    #                          image_training=True, 
-    #                          preprocessor=processor,
-    #                          augment=False)
-
-    # plotting_callback = ImagePlottingCallback(
-    #     val_dataset=val_dataset,
-    #     model_name=model_name,
-    #     processor=processor,
-    #     config=config,
-    #     num_samples=5,
-    #     pre_name="post_training", 
-    #     clear_path=True,
-    #     save_post_dir_name="post_training",
-    #     batch_size=batch_size
-    # )
-
-    # training_args = HFTrainingArguments(
-    #     output_dir=f"./output/checkpoints/{config.model.name}_post_training",
-    #     per_device_train_batch_size=batch_size,
-    #     per_device_eval_batch_size=batch_size,
-    #     learning_rate=5e-6,           # 6e-5     
-    #     lr_scheduler_type="cosine",   # cosine
-    #     warmup_steps=0,             # 0.1
-    #     fp16=False,                    # faster training
-    #     gradient_accumulation_steps=4,
-    #     num_train_epochs=100,   
-    #     dataloader_num_workers=4,
-    #     eval_strategy="steps",
-    #     eval_steps=int( len(train_dataset)/batch_size ) * 2,
-    #     save_strategy="steps",  # or best?
-    #     save_steps=int( len(train_dataset)/batch_size ) * 2,
-    #     save_total_limit=2,
-    #     logging_steps=10,
-    #     remove_unused_columns=False,   # important for SAM
-    #     push_to_hub=False,
-    #     report_to=["tensorboard", "mlflow"],  # "none"
-    #     use_cpu=False
-    # )
-
-    # trainer = HFTrainer(
-    #     model=model,
-    #     args=training_args,
-    #     train_dataset=train_dataset,  # load bev/meta files and extract in right format -> use BEV Dataset
-    #     eval_dataset=val_dataset,
-    #     # train_dataset=train_dataset.select(range(2)) if hasattr(train_dataset, 'select') else train_dataset,
-    #     # eval_dataset=val_dataset.select(range(2)) if hasattr(val_dataset, 'select') else val_dataset,
-    #     data_collator=collate_fn,
-    #     compute_metrics=partial(
-    #         compute_metrics_fn,
-    #         model_name=model_name,
-    #         processor=processor
-    #     ),
-    #     callbacks=[plotting_callback]
-    # )
-
-    # trainer.train()
-
-    # print("Post Training is finish!")
 
 
 

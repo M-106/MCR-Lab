@@ -24,6 +24,7 @@ from mcrlab.classic.shape_fit import use_label_candidates_and_extract_center_poi
                                       use_points_and_extract_center_point
 from mcrlab.classic.utils import visualize_circle_fit
 from mcrlab.execution.tryout import center_estimation_3d_pipeline_debugging
+# from mcrlab.helper import save_dir_creation
 
 
 
@@ -71,12 +72,15 @@ def ground_truth_extraction(config):
 
         # Create output directory for image plots
         plot_save_dir = os.path.join(
-            config.eval_extraction.save_path,   # "/mnt/data_2/ippolito/center_gt_extraction",
+            config.eval_extraction.save_path,   # "/out/center_gt_extraction",
             "center_gt/plots", 
             f"{cur_dataset}_{config.eval_extraction.center_algorithm}"
         )
+
+        # save_dir_creation(plot_save_dir)
         os.makedirs(plot_save_dir, exist_ok=True)
         shutil.rmtree(plot_save_dir)
+        # save_dir_creation(plot_save_dir)
         os.makedirs(plot_save_dir, exist_ok=True)
 
         data_loader = get_data_loader(config.eval_extraction.names[cur_idx], 
@@ -269,8 +273,10 @@ def ground_truth_extraction_heatmap(config):
     output_dir = os.path.join(
         os.path.dirname(config.eval_extraction.save_path), "2d_gt_patches"
     )
+    # save_dir_creation(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     shutil.rmtree(output_dir)
+    # save_dir_creation(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     generate_3d_heatmaps = config.eval_extraction.generate_also_3d_gt_maps

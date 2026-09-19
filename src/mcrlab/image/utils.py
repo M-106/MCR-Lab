@@ -3,7 +3,8 @@
 # -----------
 import numpy as np
 from PIL import Image
-import matplotlib.cm as cm
+# import matplotlib.cm as cm
+from matplotlib import colormaps
 
 
 
@@ -81,33 +82,33 @@ def normalize_bev(bev):
 # values come from global 2D train dataset
 SENSOR_CONFIGS = {
     'as-900hl': {  # WHU
-        'intensity_p1': 0.0, 
-        'intensity_p99': 6069.0,
-        'intensity_mean': 236.1677, 
-        'intensity_std': 1416.8572, 
-        'intensity_min': 0.0,
+        'intensity_p1': 1105.855, 
+        'intensity_p99': 40865.0,
+        'intensity_mean': 4786.7, 
+        'intensity_std': 4348.1, 
+        'intensity_min': 800.0,
         'intensity_max': 65534.0,
         # 'max_density': 1.0,
-        'height_min': 0.0,
+        'height_min': 11.5335,
         'height_max': 23.0701,
         'delta_height_min': 0.0,
-        'delta_height_max': 1.5090,
-        'density_min': 0.0,
+        'delta_height_max': 1.509,
+        'density_min': 0.6931,
         'density_max': 9.1638
     },
     'riegl_vux-1ha_mls': {  # sud
-        'intensity_p1': 0.0, 
-        'intensity_p99': 3012.0, 
-        'intensity_mean': 418.6283, 
-        'intensity_std': 940.646,
-        'intensity_min': 0.0,
+        'intensity_p1': 1944.0, 
+        'intensity_p99': 3395.5, 
+        'intensity_mean': 2499.8788, 
+        'intensity_std': 284.4588,
+        'intensity_min': 70.0,
         'intensity_max': 4314.5,
         #'max_density': 1.0,
-        'height_min': 0.0,
-        'height_max': 0.0,
-        'delta_height_min': 0.0,
-        'delta_height_max': 27.595,
-        'density_min': 0.0,
+        'height_min': 1.695,
+        'height_max': 27.5950,
+        'delta_height_min': 0.01,
+        'delta_height_max': 0.71,
+        'density_min': 0.6931,
         'density_max': 3.1355
     },
     # 'velodyne_hdl64': {'intensity_p1': 0.0, 'intensity_p99': 255.0, 'max_density': 100},
@@ -304,7 +305,7 @@ def apply_colormap(channel, cmap_name="viridis"):
     if channel.max() > 0:
         channel /= channel.max()
 
-    cmap = cm.get_cmap(cmap_name)
+    cmap = colormaps.get_cmap(cmap_name)  # cm.get_cmap(cmap_name)
     colored = cmap(channel)  # -> RGBA (H, W, 4)
 
     colored = (colored[:, :, :3] * 255).astype(np.uint8)  # .astype(np.uint8)  # RGB

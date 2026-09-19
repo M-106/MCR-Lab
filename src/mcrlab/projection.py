@@ -123,7 +123,7 @@ def _numba_aggregate(px, py, z, intensity, height, width, labels=None, num_class
         class_counts = np.zeros((height, width, num_classes), dtype=np.int32)
         # print("Checkpoint 3", class_counts.nbytes / 1024**2, "MB")
 
-
+    # bev[0, :, :] = -1e6  # init max-height FIXME -> should add?
     bev[1, :, :] = 1e6  # initialize min height
     
     for i in range(len(px)):
@@ -276,7 +276,8 @@ def bev_projection(point_cloud, pc_id,
     if isinstance(point_cloud, PointCloudTensor):
         point_cloud = point_cloud.get_as_o3d()
     
-    points  = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
+    points = point_cloud.point[get_coordinate_attribute(point_cloud)].numpy()
+
     intensities = point_cloud.point[get_intensity_attribute(point_cloud)].numpy().ravel()
 
     if include_class:

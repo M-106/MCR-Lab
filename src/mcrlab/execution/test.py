@@ -26,7 +26,8 @@ from mcrlab.config.config import Config
 from mcrlab.execution.train import get_model_and_processor, get_segmentation_prediction
 from mcrlab.metrices import compute_metrics
 from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDataset
-        
+# from mcrlab.helper import save_dir_creation
+
 
 
 # -----------
@@ -297,8 +298,10 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
         exp_name += "_all"
 
     output_dir = f"./tmp_eval/{exp_name}"
+    # save_dir_creation(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     shutil.rmtree(output_dir)
+    # save_dir_creation(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     # Load Test Data
@@ -545,6 +548,7 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
     # Save Text Metrics
     save_name = exp_name  # f"{year}_{month:02}_{day:02}_{hour:02}_{minute:02}_{model_name}"
     
+    # save_dir_creation(eval_args.output_dir)
     os.makedirs(eval_args.output_dir, exist_ok=True)
     txt_path = os.path.join(eval_args.output_dir, f"test_metrics_{save_name}.txt")
     
@@ -647,32 +651,42 @@ def test(config):
         # ["timm-efficientnet-b7", "mit_b5", "resnet101", "resnext101_32x32d", "mobileone_s4"],
         # ["tu-samvit_huge_patch16.sa1b", "tu-maxvit_xlarge_tf_512", "tu-beit_large_patch16_512.in22k_ft_in22k_in1k"]
     ]
-    checkpoint_paths = [
-        ["./output/checkpoints/2026_07_17_22_10_unet_whu_comparison_1_teb7/checkpoint-702"],
-        # ["./output/checkpoints/2026_08_11_09_41_unet_sud_comparison_1_teb7_domainfinetuned/checkpoint-196"],
-        # ["./output/checkpoints/2026_08_11_18_37_unet_merged_whu_sud_comparison_1_teb7_domainfinetuned_merged/checkpoint-308"],
-        # ["./output/checkpoints/2026_08_11_21_32_unet_whu_comparison_1_teb7_improved_norm/checkpoint-1411"],
-        # ["./output/checkpoints/2026_08_12_11_05_unet_whu_comparison_1_teb7_improved_norm_other_channels_minmax/checkpoint-1394"],
-        # ["./output/checkpoints/2026_07_18_11_59_unet_whu_comparison_1_r101_32x32d/checkpoint-962"],
-        # ["./output/checkpoints/2026_07_19_12_06_fpn_whu_comparison_1_teb7/checkpoint-819",
-        #  "./output/checkpoints/2026_07_19_13_13_fpn_whu_comparison_1_mb5/checkpoint-546",
-        #  "./output/checkpoints/2026_07_19_14_44_fpn_whu_comparison_1_r101/checkpoint-637",
-        #  "./output/checkpoints/2026_07_19_15_28_fpn_whu_comparison_1_r101_32x32d/checkpoint-1027",
-        #  "./output/checkpoints/2026_07_19_18_11_fpn_whu_comparison_1_d161/checkpoint-1066",
-        #  "./output/checkpoints/2026_07_19_19_07_fpn_whu_comparison_1_mos4/checkpoint-1066"],
-        # ["./output/checkpoints/2026_07_19_20_08_deeplabv3_whu_comparison_1_teb7/checkpoint-5141",
-        #  "./output/checkpoints/2026_07_20_05_37_deeplabv3_whu_comparison_1_r101/checkpoint-1479",
-        #  "./output/checkpoints/2026_07_20_10_43_deeplabv3_whu_comparison_1_r101_32x32d/checkpoint-3869",
-        #  "./output/checkpoints/2026_07_20_17_59_deeplabv3_whu_comparison_1_mos4/checkpoint-1428"],
-        #  ["./output/checkpoints/2026_07_20_20_23_deeplabv3plus_whu_comparison_1_teb7/checkpoint-4240",
-        #  "./output/checkpoints/2026_07_21_04_34_deeplabv3plus_whu_comparison_1_mb5/checkpoint-1190",
-        #  "./output/checkpoints/2026_07_21_06_33_deeplabv3plus_whu_comparison_1_r101/checkpoint-1003",
-        #  "./output/checkpoints/2026_07_21_08_27_deeplabv3plus_whu_comparison_1_r101_32x32d/checkpoint-1898",
-        #  "./output/checkpoints/2026_07_21_12_16_deeplabv3plus_whu_comparison_1_mos4/checkpoint-663"],
-        #  ["./output/checkpoints/2026_07_21_13_59_dpt_whu_comparison_1_tshp16s/checkpoint-1248",
-        #  "./output/checkpoints/2026_07_22_16_38_dpt_whu_comparison_1_tmxt512/checkpoint-4134",
-        #  "./output/checkpoints/2026_07_23_07_15_dpt_whu_comparison_1_tblp16512/checkpoint-510"],
+    checkpoint_paths = [  # dont forget to adjust the norm in the settings
+        ["/out/checkpoints/2d/2026_09_17_10_30_unet_whu_seg_norm_check_unet_teb7_no_norm/checkpoint-476",
+        "/out/checkpoints/2d/2026_09_17_12_10_unet_whu_seg_norm_check_unet_teb7_local_minmax/checkpoint-1530",
+        "/out/checkpoints/2d/2026_09_17_13_45_unet_whu_seg_norm_check_unet_teb7_global_minmax/checkpoint-1343",
+        "/out/checkpoints/2d/2026_09_17_15_22_unet_whu_seg_norm_check_unet_teb7_local_standard/checkpoint-1445"],
+        # ["/out/checkpoints/2d/2026_09_14_12_19_unet_whu_comparison_1_teb7_improved_norm_v3_minmax"]
+        # ["/out/checkpoints/2d/checkpoints/2026_07_17_22_10_unet_whu_comparison_1_teb7/checkpoint-702"],
+        # ["/out/checkpoints/2d/checkpoints/2026_09_07_09_48_unet_whu_comparison_1_teb7_improved_norm_v2_minmax/checkpoint-595",
+        #  "/out/checkpoints/2d/checkpoints/2026_09_07_12_18_unet_whu_comparison_1_teb7_improved_norm_v2_standardization/checkpoint-1496",
+        #  "/out/checkpoints/2d/checkpoints/2026_09_07_13_50_unet_whu_comparison_1_teb7_improved_norm_v2_minmax/checkpoint-1326"],
+        # ["/out/checkpoints/2d/checkpoints/2026_08_11_09_41_unet_sud_comparison_1_teb7_domainfinetuned/checkpoint-196"],
+        # ["/out/checkpoints/2d/checkpoints/2026_08_11_18_37_unet_merged_whu_sud_comparison_1_teb7_domainfinetuned_merged/checkpoint-308"],
+        # ["/out/checkpoints/2d/checkpoints/2026_08_11_21_32_unet_whu_comparison_1_teb7_improved_norm/checkpoint-1411"],
+        # ["/out/checkpoints/2d/checkpoints/2026_08_12_11_05_unet_whu_comparison_1_teb7_improved_norm_other_channels_minmax/checkpoint-1394"],
+        # ["/out/checkpoints/2d/checkpoints/2026_07_18_11_59_unet_whu_comparison_1_r101_32x32d/checkpoint-962"],
+        # ["/out/checkpoints/2d/checkpoints/2026_07_19_12_06_fpn_whu_comparison_1_teb7/checkpoint-819",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_19_13_13_fpn_whu_comparison_1_mb5/checkpoint-546",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_19_14_44_fpn_whu_comparison_1_r101/checkpoint-637",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_19_15_28_fpn_whu_comparison_1_r101_32x32d/checkpoint-1027",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_19_18_11_fpn_whu_comparison_1_d161/checkpoint-1066",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_19_19_07_fpn_whu_comparison_1_mos4/checkpoint-1066"],
+        # ["/out/checkpoints/2d/checkpoints/2026_07_19_20_08_deeplabv3_whu_comparison_1_teb7/checkpoint-5141",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_20_05_37_deeplabv3_whu_comparison_1_r101/checkpoint-1479",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_20_10_43_deeplabv3_whu_comparison_1_r101_32x32d/checkpoint-3869",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_20_17_59_deeplabv3_whu_comparison_1_mos4/checkpoint-1428"],
+        #  ["/out/checkpoints/2d/checkpoints/2026_07_20_20_23_deeplabv3plus_whu_comparison_1_teb7/checkpoint-4240",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_21_04_34_deeplabv3plus_whu_comparison_1_mb5/checkpoint-1190",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_21_06_33_deeplabv3plus_whu_comparison_1_r101/checkpoint-1003",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_21_08_27_deeplabv3plus_whu_comparison_1_r101_32x32d/checkpoint-1898",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_21_12_16_deeplabv3plus_whu_comparison_1_mos4/checkpoint-663"],
+        #  ["/out/checkpoints/2d/checkpoints/2026_07_21_13_59_dpt_whu_comparison_1_tshp16s/checkpoint-1248",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_22_16_38_dpt_whu_comparison_1_tmxt512/checkpoint-4134",
+        #  "/out/checkpoints/2d/checkpoints/2026_07_23_07_15_dpt_whu_comparison_1_tblp16512/checkpoint-510"],
     ]
+    
+    # ls -l /mnt/data_2/ippolito/checkpoints/2d/2026_09_17_15_22_unet_whu_seg_norm_check_unet_teb7_local_standard
 
     model_entries = zip(names, encoders, checkpoint_paths)
 
@@ -701,6 +715,15 @@ def test(config):
             config.model.name = name
             config.model.encoder = encoder
             config.model.check_point_path = path
+
+            if "local_minmax" in path:
+                config.data.normalization = "local_minmax"
+            elif "global_minmax" in path:
+                config.data.normalization = "global_minmax"
+            elif "local_standard" in path:  
+                config.data.normalization = "local_standard"
+            elif "no_norm" in path or "no_normalization" in path:
+                config.data.normalization = "none"
 
 
             evaluate_hf_pipeline(config, use_all_test_data=False, use_testset_1=True, print_out_results=False)

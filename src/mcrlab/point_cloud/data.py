@@ -38,6 +38,7 @@ from mcrlab.projection import bev_projection
 from mcrlab.image.io import load_single_bev_tile_as_pickle
 from mcrlab.image.utils import normalize_img_per_channel, normalize_bev, normalize_bev_robust
 from mcrlab.point_cloud.shape_check import circle_shape_check
+# from mcrlab.helper import save_dir_creation
 
 
 
@@ -481,6 +482,22 @@ class FilterAndRelabelingTransform:
         return point_cloud
 
 
+class InvertHeightTransform:
+    """
+    Inverts the Z-coordinate (height) of a point cloud in-place.
+    """
+    def __call__(self, point_cloud):
+        if isinstance(point_cloud, PointCloudTensor):
+            point_cloud.coordinates[:, 2] *= -1
+        elif isinstance(point_cloud, o3d.t.geometry.PointCloud):
+            coord_key = get_coordinate_attribute(point_cloud)
+            point_cloud.point[coord_key][:, 2] *= -1
+        elif isinstance(point_cloud, o3d.t.geometry.Tensor):
+            point_cloud[:, 2] *= -1
+        else:
+            raise TypeError(f"Got unknown type '{type(point_cloud)}'.")
+        return point_cloud
+
 # add more augmentations! -> random rotate, jitter
 
 
@@ -684,7 +701,7 @@ def get_basic_transform(num_points=-1):
 
 
 
-def get_preprocessing_transform(grid_size=0.01, do_voxelation=True, manhole_label=104002):
+def get_preprocessing_transform(grid_size=0.01, do_voxelation=True, manhole_label=104002, invert_z=False):
     transformations = [
         # ToFixPointsTransform(num_points=1000000, allow_padding=False, reduction_by_height=True),  # 7250451 -> 5000000
         # NaivMinHistoGroundKeepFilterTransform(),
@@ -695,6 +712,9 @@ def get_preprocessing_transform(grid_size=0.01, do_voxelation=True, manhole_labe
         # SegmentationGroundKeepFilterTransform
         FilterAndRelabelingTransform(manhole_label=manhole_label)
     ]
+
+    if invert_z:
+        transformations.append(InvertHeightTransform())
 
     if do_voxelation:
         transformations.append(VoxelDownsamplerTransform(grid_size=grid_size))
@@ -857,20 +877,9 @@ class WHUUrban3DDataset(Dataset):
 
         # add BEV information
         if isinstance(point_cloud, PointCloudTensor) and self.preprocessed:
-            # general_file_name = ".".join(self.point_cloud_paths[idx].split(".")[:-1])
-            # root, filename = os.path.split(self.point_cloud_paths[idx])
-            # bev_file_name = filename.replace("preprocessed_", "preprocessed_bev_").replace(".ply", ".pkl")
-            # bev_path = self.bev_paths[bev_file_name]
-            # bevs, meta = load_bev_tiles_as_pickle(bev_path)  
-            # bevs, meta = load_bev_tiles_as_pt(bev_path)
-            # point_cloud.bevs = bevs
-            # point_cloud.meta = meta
-
             point_cloud.set_bev(self.bev_gen, self.point_cloud_paths[idx])
             
             # cur_bev_gen = self.bev_gen.get_via_bev_filename(self.point_cloud_paths[idx], extract_from_full_ply_path=True)
-
-        # FIXME check if complete?
 
         # use labels
         if isinstance(point_cloud, PointCloudTensor):
@@ -954,7 +963,7 @@ class SUDROADDataset(Dataset):
                     self.point_cloud_paths.append(os.path.join(path, cur_file))
 
         if preprocessed:
-            self.bev_gen = BEVDataset(path=self.point_cloud_paths, has_labels=False if self.type == "inference" else True, normalize=bev_normalized, normalize_mode=bev_normalize_mode)
+            self.bev_gen = BEVDataset(path=self.point_cloud_paths, has_labels=False if self.type == "inference" else True, normalize=bev_normalized, normalization_mode=bev_normalize_mode)
 
         print(f"Found {len(self.point_cloud_paths)} point clouds.")
 
@@ -969,6 +978,18 @@ class SUDROADDataset(Dataset):
 
         if self.transform:
             point_cloud = self.transform(point_cloud)
+
+        # # inverse point_cloud height
+        # if isinstance(point_cloud, PointCloudTensor):
+        #     point_cloud.coordinates[:, 2] *= -1
+        # elif isinstance(point_cloud, o3d.t.geometry.PointCloud):
+        #     coordinates_key = get_coordinate_attribute(point_cloud)
+        #     positions = point_cloud.point[coordinates_key]
+        #     positions[:, 2] *= -1
+        # elif isinstance(point_cloud, o3d.t.geometry.Tensor):
+        #     point_cloud[:, 2] *= -1
+        # else:
+        #     raise TypeError(f"Got unknown type '{type(point_cloud)}'.")
 
         # add BEV information
         if isinstance(point_cloud, PointCloudTensor) and self.preprocessed:
@@ -1009,7 +1030,6 @@ class SUDROADDataset(Dataset):
 
 class SemanticKittiDataset(Dataset):
     """
-    FIXME -> NOT TESTED YET!
 
     To do:
     - need label mapping?
@@ -1245,113 +1265,6 @@ class BEVDataset(Dataset):
 
         return self._process_item_by_path(cur_file_path)
 
-        # data_name = "sud" if "sud-road" in cur_file_path.lower() else "whu"
-
-        # pc_id, x_start, y_start = self.extract_grid_identifier(cur_file_path)
-
-        # tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
-
-        # if self.has_labels:
-
-        #     x_np = tile[:-1].transpose(1, 2, 0)
-        #     y_np = tile[-1]
-
-        #     # print(f"Debugging y shape before preprocessing: {y_np.shape}")
-
-        #     # load additional Heatmap GT
-        #     if self.heatmap_gt_path is not None:
-        #         cur_heatmap_gt_path = os.path.join(self.heatmap_gt_path, f"{data_name}_{pc_id}_{x_start}_{y_start}.npy")
-        #         # print(f"Check the path, it is right?: {cur_heatmap_gt_path}")
-        #         if os.path.exists(cur_heatmap_gt_path):
-        #             gt_2d_map = np.load(cur_heatmap_gt_path)
-        #             # print("Did found Heatmap!")
-        #         else:
-        #             raise ValueError("All Heatmaps should be found!!!")
-        #             # print("Did NOT found Heatmap!")
-        #             # FIXME -> why can't find heatmaps?
-        #             gt_2d_map = np.zeros(shape=(500, 500, 3))
-        #         # y_np = y_np.reshape((500, 500, 1))
-        #         # y_np = np.concatenate((y_np, gt_2d_map), axis=-1)
-        #         target_channel = gt_2d_map[:, :, self.used_heatmap_channel].reshape((500, 500))  # .unsqueeze()
-        #         # add missing values?
-        #         # target_channel[y_np == 255] = 255
-        #         y_np = target_channel # * 255
-
-        #     if self.augment:
-        #         augmented = self.aug_pipeline(image=x_np, mask=y_np)
-        #         x_np = augmented['image']
-        #         y_np = augmented['mask']
-
-        #     # point_exist_mask = np.where(y_np == 255, 0.0, 1.0).astype(np.float32)
-
-        #     x = normalize_bev(x_np.transpose(2, 0, 1))
-        #     x = torch.from_numpy(x).float()
-        #     if self.image_training:
-        #         x = x[[0,2,3]]     # drop channel
-        #         # x = x[[1,2,3]]
-        #         # x[2] = torch.from_numpy(point_exist_mask)
-
-        #         # raise ValueError(f"DEBUGGING STOP -> Shape x: {x_np.shape} -> Shape y: {y_np.shape}")
-
-        #         if self.preprocessor is not None:
-        #             # HF preprocessors expect numpy (H, W, C) or PIL
-        #             x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
-        #             if self.pass_label_in_preprocessor:
-        #                 if self.heatmap_gt_path is None:
-        #                     y_np = y_np.astype(np.int32)
-        #                 # print(f"Debugging 2 y shape before preprocessing: {y_np.shape}")
-        #                 processed = self.preprocessor(
-        #                     images=x_np,
-        #                     segmentation_maps=y_np,
-        #                     return_tensors="pt"
-        #                 )
-        #                 # print(f"Debugging y 3 shape before preprocessing: {y_np.shape}")
-        #                 # print(f"Debugging mask labels shape before preprocessing: {processed["mask_labels"][0].shape}")
-        #                 # print(f"Debugging class_labels shape before preprocessing: {processed["class_labels"][0].shape}")
-        #                 x = processed["pixel_values"].squeeze(0)  # (C, H, W)
-        #                 if self.heatmap_gt_path is None:
-        #                     y = torch.from_numpy(y_np).long()
-        #                 else:
-        #                     y = torch.from_numpy(y_np).float()
-        #                 return {
-        #                     "pixel_values": x,
-        #                     "mask_labels": processed["mask_labels"][0],    # squeeze batch dim
-        #                     "class_labels": processed["class_labels"][0],
-        #                     "labels": y,
-        #                     "meta": meta
-        #                 }
-        #             else:
-        #                 processed = self.preprocessor(
-        #                     images=x_np,
-        #                     return_tensors="pt"
-        #                 )
-        #             # FIXME, OneFromer need: task_inputs=["semantic"]?
-        #             x = processed["pixel_values"].squeeze(0)  # (C, H, W)
-        #         else:
-        #             # x = (x - x.mean()) / (x.std() + 1e-6)
-        #             # Update me!
-        #             x[:2] = (x[:2] - x[:2].mean()) / (x[:2].std() + 1e-6)
-        #         assert x.ndim == 3
-
-        #     if self.heatmap_gt_path is None:
-        #         y = torch.from_numpy(y_np).long()
-        #     else:
-        #         y = torch.from_numpy(y_np).float()
-        #     assert y.ndim == 2
-
-        #     return {
-        #         "pixel_values": x,   # (C, H, W)
-        #         "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
-        #         "meta": meta
-        #     }
-        # else:
-        #     x = normalize_bev(tile)
-        #     x = torch.from_numpy(x).float()
-        #     return {
-        #         "pixel_values": x,   # (C, H, W)
-        #         "labels": None,
-        #         "meta": meta
-        #     }
 
     def manhole_filter(self, required_manhole_points=200, amount_non_manhole_samples=10):
         new_file_paths = []
@@ -1481,7 +1394,6 @@ class BEVDataset(Dataset):
                 x = x[[0, 2, 3]]    # Channel drop/choice
 
                 if self.preprocessor is not None:
-                    # FIXME -> right?
                     x = F.resize(x, size=[500, 500], antialias=True)
                     x_np = x.permute(1, 2, 0).numpy()  # (H, W, C)
                     if self.pass_label_in_preprocessor:
@@ -1604,7 +1516,8 @@ def extract_tiles_metas(bev_gen, amount=5, as_numpy=True):
 def get_data_loader(data_name, path, type="train", transform=None,
                     batch_size=32, shuffle=True, num_workers=4,
                     preprocessed=False, return_train_format=False,
-                    return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax"):
+                    return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax",
+                    invert_z=False):
     if data_name == "paris":
         data_loader = get_paris_data_loader(path, type=type, transform=transform,
                                             batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
@@ -1619,7 +1532,8 @@ def get_data_loader(data_name, path, type="train", transform=None,
         data_loader = get_sud_data_loader(path, type=type, transform=transform,
                                           batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                           preprocessed=preprocessed, return_train_format=return_train_format,
-                                          return_dataset=return_dataset, bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
+                                          return_dataset=return_dataset, bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode,
+                                          invert_z=invert_z)
     else:
         raise ValueError(f"No Dataset with the name '{data_name}' founded. Try 'paris'.")
 
@@ -1661,7 +1575,11 @@ def get_whu_data_loader(path, type="train", transform=None,
 def get_sud_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
                           preprocessed=False, return_train_format=False,
-                          return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax"):
+                          return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax",
+                          invert_z=True):
+    # if invert_z:
+    #     transform.transforms.append(InvertHeightTransform())
+    
     dataset = SUDROADDataset(path=path, type=type, transform=transform,
                              preprocessed=preprocessed, return_train_format=return_train_format,
                              bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
@@ -1673,9 +1591,8 @@ def get_sud_data_loader(path, type="train", transform=None,
                       collate_fn=collate_point_clouds)
 
 
-
 def preprocess_data(data_name, path, type="train", device="cpu",
-                    bev_tile_size=15.0, bev_resolution=0.01, bev_overlap=0.5,
+                    bev_tile_size=5.0, bev_resolution=0.01, bev_overlap=0.5,
                     file_ending=".ply"):
     print("--- Data Preprocessing ---")
 
@@ -1692,6 +1609,8 @@ def preprocess_data(data_name, path, type="train", device="cpu",
 
     # reset sample folders
     sample_root_path = f"./bev_samples"
+    # save_dir_creation(sample_root_path)
+    os.makedirs(sample_root_path, exist_ok=True)
     for dir in os.listdir(sample_root_path):
         dir_path = os.path.join(sample_root_path, dir)
         if os.path.isdir(dir_path) and dir.startswith(f"{data_name}_"):
@@ -1714,9 +1633,9 @@ def preprocess_data(data_name, path, type="train", device="cpu",
                              point_cloud=sub_cloud)
 
         # load new splitted point clouds and apply preprocessing
-        data_loader = get_data_loader(data_name, path, type="all", transform=get_preprocessing_transform(grid_size=bev_resolution, do_voxelation=False, manhole_label=3 if data_name=="sud"  else 104002),
+        data_loader = get_data_loader(data_name, path, type="all", transform=get_preprocessing_transform(grid_size=bev_resolution, do_voxelation=False, manhole_label=3 if data_name=="sud"  else 104002, invert_z=True),
                                       batch_size=1, shuffle=False, num_workers=0, preprocessed=False,
-                                      return_train_format=False)
+                                      return_train_format=False, invert_z=False)
 
         # to_device = ToDevice(device)
         dataset = data_loader.dataset
@@ -1735,8 +1654,10 @@ def preprocess_data(data_name, path, type="train", device="cpu",
 
         cur_root_path = os.path.join(cur_root_path, "preprocessed")
         if not preprocessed_path_cleaned:
+            # save_dir_creation(cur_root_path)
             os.makedirs(cur_root_path, exist_ok=True)
             shutil.rmtree(cur_root_path)
+            # save_dir_creation(cur_root_path)
             os.makedirs(cur_root_path, exist_ok=True)
             preprocessed_path_cleaned = True
 

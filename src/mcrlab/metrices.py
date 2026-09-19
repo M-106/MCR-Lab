@@ -20,6 +20,8 @@ import cv2
 from skimage import measure
 from shapely.geometry import Polygon
 
+# from mcrlab.helper import save_dir_creation
+
 # mean_iou_metric = evaluate.load("mean_iou")
 
 
@@ -251,6 +253,7 @@ def evaluate_object_wise(preds, labels, confident_threshold, iou_threshold, igno
     # saving the debug plot
     if debug_plot_path:
         plt.tight_layout()
+        # save_dir_creation(os.path.dirname(debug_plot_path))
         os.makedirs(os.path.dirname(debug_plot_path), exist_ok=True)
         plt.savefig(debug_plot_path, bbox_inches='tight', dpi=150)
         plt.close()

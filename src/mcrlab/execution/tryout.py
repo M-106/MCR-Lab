@@ -6,8 +6,13 @@ import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.ticker as ticker
 import torch
 import open3d as o3d
+
+from scipy.spatial import KDTree
+from sklearn.cluster import DBSCAN
+from sklearn.linear_model import LinearRegression
 
 from tqdm import tqdm
 
@@ -36,6 +41,7 @@ from mcrlab.classic.utils import visualize_circle_fit, visualize_circle_shape_an
                                  visualize_ransac_inliers
 from mcrlab.point_cloud.shape_check import circle_shape_check
 from mcrlab.point_cloud.monte_carlo_simulation import eval_center_robustness, eval_ellipse_precision
+# from mcrlab.helper import save_dir_creation
 
 
 
@@ -157,6 +163,7 @@ def plot_3d_point_cloud_overview(
 
     # plt.tight_layout()
 
+    # save_dir_creation(os.path.dirname(save_path))
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     if save_path:
@@ -180,6 +187,7 @@ def plot_manhole_3d_crops(point_cloud, target_labels=[1, 255], crop_radius=2.0, 
     """
     2. Local Manhole 3D Crops: Finds manholes, crops surrounding points, and saves 2D scatter plots.
     """
+    # save_dir_creation(save_dir)
     os.makedirs(save_dir, exist_ok=True)
     coords = point_cloud.point["positions"].numpy()
     semantics = point_cloud.point["classes"].numpy().flatten()
@@ -642,6 +650,7 @@ def manhole_intensity_test(config):
     path = f"./output/manhole_intensity_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -698,6 +707,7 @@ def manhole_BEV_intensity_test(config):
     path = f"./output/bev_image_manhole_investigation_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -801,6 +811,7 @@ def BEV_investigation(config):
     path = f"./output/bev_channel_investigation_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -914,6 +925,7 @@ def BEV_Density_investigation(config):
     path = f"./output/bev_density_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     total_max = []
@@ -1052,6 +1064,7 @@ def manhole_3d_and_2d_intensity_test(config):
     path = f"./output/intensity_3d_2d_investigation_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -1349,6 +1362,7 @@ def circular_manhole_classification_test(config):
     path = f"./output/center_shape_check_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -1400,6 +1414,7 @@ def center_robustnest_test(config):
     path = f"./output/center_estimation_stresstest_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -1515,6 +1530,7 @@ def ransac_inlier_test(config):
     path = f"./output/ransac_inlier_test_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -1576,6 +1592,7 @@ def ransac_downsampling_test(config):
     path = f"./output/ransac_downsampling_test_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -1643,6 +1660,7 @@ def point_amount_check(config):
     path = f"./output/center_estimation_stresstest_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     points = []
@@ -1802,6 +1820,7 @@ def center_prediction_use_labels_as_candidates_test(config):
     path = f"./output/center_estimation_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -1927,6 +1946,7 @@ def squares_circle_shape_test(config):
     path = f"./output/squares_circle_shape_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -2013,6 +2033,7 @@ def classic_2D_pipeline_test(config):
     path = f"./output/center_estimation_2d_geomtry_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     cur_pc = 0
@@ -2145,6 +2166,7 @@ def ground_truth_2d_map_test(config):
     path = f"./output/mcr_gt_2d_map_test_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     not_found_files = []
@@ -2204,6 +2226,58 @@ def ground_truth_2d_map_test(config):
 
 
 
+def ground_truth_2d_map_full_check(config):
+    print("\n --- Heatmap Check ---")
+
+    if config.data.name == "sud":
+        # label_value = (1, 255) if config.data.preprocessed else 3
+        label_value = 1 if config.data.preprocessed else 3
+    else:
+        # label_value = (1, 255) if config.data.preprocessed else 104002
+        label_value = 1 if config.data.preprocessed else 104002
+
+    print("Loading Data...")
+    train_dataset = get_data_loader(config.data.name, 
+                                   config.data.path, 
+                                   type="train", 
+                                   transform=get_basic_transform(),
+                                   batch_size=1, 
+                                   shuffle=False, 
+                                   num_workers=1,
+                                   preprocessed=True, 
+                                   return_train_format=True,
+                                   return_dataset=True)
+    all_train_paths = train_dataset.point_cloud_paths
+    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
+
+    all_file_paths = train_dataset.file_paths
+
+    not_found_files = []
+
+    for idx, batch in enumerate(train_dataset):
+        
+        x = batch["pixel_values"].detach().cpu().permute(1, 2, 0).numpy()
+        y = batch["labels"].detach().cpu().numpy()
+        y = np.ma.masked_where(y == 255, y)
+
+        # search the created gt map (if there is one)
+        file_name = os.path.split(all_file_paths[idx])[-1]
+        pc_id, x_start, y_start = train_dataset.extract_grid_identifier(file_name)
+
+        # gt_path = f"./2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}.npy"
+        gt_path = f"/data/2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}.npy"
+        
+        if not os.path.exists(gt_path):
+            not_found_files.append(gt_path)
+            continue
+        
+    if len(not_found_files) <= 0:
+        print("Successfull passed Heatmap Check. Found all Heatmap GTs!!!")
+    else:
+        print(f"Heatmap Check NOT passed!\nDid not found {len(not_found_files)} files.")
+
+
+
 def ground_truth_2d_and_3d_map_test(config):
     print("\n --- Center Estimation (with labels) ---")
 
@@ -2233,6 +2307,7 @@ def ground_truth_2d_and_3d_map_test(config):
     path = f"./output/mcr_gt_2d_map_test_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
+    # save_dir_creation(path)
     os.makedirs(path, exist_ok=True)
 
     for idx, batch in enumerate(train_dataset):
@@ -3035,26 +3110,28 @@ def calculate_dataset_statistics(config, max_percentile_samples=500_000):
     Results:
 
     WHU:
-        [3D X        ] Min: 5536.1260 | Max: 7463.8320 | Mean: 6171.2170 | Std: 980.5695 | P1: 5565.2969 | P99: 7418.1831
-        [3D Y        ] Min: 1849.5537 | Max: 3678.2195 | Mean: 3166.7742 | Std: 0.0000 | P1: 1885.1090 | P99: 3629.0349
-        [3D Z        ] Min: 8.3624 | Max: 42.3585 | Mean: 16.5909 | Std: 1.3017 | P1: 13.5777 | P99: 24.9924
-        [3D INTENSITY] Min: 800.0000 | Max: 65534.0000 | Mean: 6631.8525 | Std: 6396.6171 | P1: 1041.9900 | P99: 36904.6016
-  
-        [2D MAX_HEIGHT    ] Min: 0.0000 | Max: 23.0701 | Mean: 0.7268 | Std: 3.2033 | P1: 0.0000 | P99: 15.1902
-        [2D DELTA_Z       ] Min: 0.0000 | Max: 1.5090 | Mean: 0.0002 | Std: 0.0085 | P1: 0.0000 | P99: 0.0000
-        [2D MEAN_INTENSITY] Min: 0.0000 | Max: 65534.0000 | Mean: 236.1677 | Std: 1416.8572 | P1: 0.0000 | P99: 6069.0000
-        [2D DENSITY       ] Min: 0.0000 | Max: 9.1638 | Mean: 0.0364 | Std: 0.1648 | P1: 0.0000 | P99: 0.6931
+        [3D X        ] Min: 5538.3770 | Max: 7460.0439 | Mean: 6268.0885 | Std: 513.1016 | P1: 5566.9609 | P99: 7425.2817
+        [3D Y        ] Min: 1849.6196 | Max: 3678.2065 | Mean: 3072.3206 | Std: 410.1066 | P1: 1881.0437 | P99: 3640.0256
+        [3D Z        ] Min: 11.5335 | Max: 23.0701 | Mean: 14.6740 | Std: 1.3005 | P1: 13.5522 | P99: 21.3371
+        [3D INTENSITY] Min: 800.0000 | Max: 65534.0000 | Mean: 5006.8666 | Std: 4917.5458 | P1: 1100.0000 | P99: 44403.0000
+    
+        [2D MAX_HEIGHT    ] Min: 11.5335 | Max: 23.0701 | Mean: 14.7305 | Std: 1.2948 | P1: 13.5511 | P99: 21.3451
+        [2D DELTA_Z       ] Min: 0.0000 | Max: 1.5090 | Mean: 0.0575 | Std: 0.1290 | P1: 0.0010 | P99: 0.6840
+        [2D MEAN_INTENSITY] Min: 800.0000 | Max: 65534.0000 | Mean: 4786.7349 | Std: 4348.1123 | P1: 1105.8550 | P99: 40865.0000
+        [2D DENSITY       ] Min: 0.6931 | Max: 9.1638 | Mean: 0.7386 | Std: 0.1784 | P1: 0.6931 | P99: 1.3863
+
 
     SUD:
-        [3D X        ] Min: -352.9000 | Max: 15.5900 | Mean: -201.2230 | Std: 101.3453 | P1: -342.3614 | P99: 4.0905
-        [3D Y        ] Min: -275.0950 | Max: 137.4150 | Mean: -72.4730 | Std: 105.1606 | P1: -259.0863 | P99: 130.1151
-        [3D Z        ] Min: -27.5950 | Max: 1.1950 | Mean: -15.5281 | Std: 6.1804 | P1: -26.9750 | P99: -1.7850
-        [3D INTENSITY] Min: 45.0000 | Max: 5155.0000 | Mean: 2459.7376 | Std: 461.4881 | P1: 1906.0000 | P99: 3337.0200
-  
-        [2D MAX_HEIGHT    ] Min: 0.0000 | Max: 0.0000 | Mean: 0.0000 | Std: 0.0000 | P1: 0.0000 | P99: 0.0000
-        [2D DELTA_Z       ] Min: 0.0000 | Max: 27.5950 | Mean: 2.5898 | Std: 6.3295 | P1: 0.0000 | P99: 24.1950
-        [2D MEAN_INTENSITY] Min: 0.0000 | Max: 4314.5000 | Mean: 418.6283 | Std: 940.6460 | P1: 0.0000 | P99: 3012.0000
-        [2D DENSITY       ] Min: 0.0000 | Max: 3.1355 | Mean: 0.1480 | Std: 0.3470 | P1: 0.0000 | P99: 1.3863
+        [3D X        ] Min: -352.8900 | Max: 15.5900 | Mean: -205.0103 | Std: 91.9485 | P1: -345.6700 | P99: 5.3300
+        [3D Y        ] Min: -275.0950 | Max: 135.9750 | Mean: -72.0568 | Std: 105.6210 | P1: -260.9350 | P99: 130.7450
+        [3D Z        ] Min: 1.6750 | Max: 27.5950 | Mean: 15.4685 | Std: 6.0902 | P1: 1.8050 | P99: 27.1650
+        [3D INTENSITY] Min: 57.0000 | Max: 5155.0000 | Mean: 2487.2689 | Std: 279.8789 | P1: 1935.0000 | P99: 3384.0000
+    
+        [2D MAX_HEIGHT    ] Min: 1.6950 | Max: 27.5950 | Mean: 15.4651 | Std: 6.3341 | P1: 1.8050 | P99: 27.1650
+        [2D DELTA_Z       ] Min: 0.0100 | Max: 0.7100 | Mean: 0.0101 | Std: 0.0034 | P1: 0.0100 | P99: 0.0100
+        [2D MEAN_INTENSITY] Min: 70.0000 | Max: 4314.5000 | Mean: 2499.8788 | Std: 284.4588 | P1: 1944.0000 | P99: 3395.5000
+        [2D DENSITY       ] Min: 0.6931 | Max: 3.1355 | Mean: 0.8837 | Std: 0.2619 | P1: 0.6931 | P99: 1.6094
+        
     """
     print("\n--- Calculating Extended Statistics (2D & 3D) ---")
 
@@ -3089,7 +3166,7 @@ def calculate_dataset_statistics(config, max_percentile_samples=500_000):
             batch_size=1,
             shuffle=False,
             num_workers=0,
-            preprocessed=False,
+            preprocessed=True,
             return_train_format=False
         )
 
@@ -3196,7 +3273,9 @@ def calculate_dataset_statistics(config, max_percentile_samples=500_000):
 
                 for c_idx in range(4):
                     ch_data = img[c_idx].ravel()
-                    valid_ch = ch_data[np.isfinite(ch_data)]
+                    # we also mask zero because most zeros should come from missing sensor values, but be aware that statistics might be biased from this
+                    valid_mask = np.isfinite(ch_data) & (ch_data != 0.0)
+                    valid_ch = ch_data[valid_mask]
 
                     if valid_ch.size > 0:
                         counts_2d[c_idx] += valid_ch.size
@@ -3320,6 +3399,553 @@ def calculate_max_density(config):
     
 
 
+def analyze_point_cloud_resolution(config, num_patches=3, patch_size_m=0.5):
+    # init Data Loader
+    data_loader = get_data_loader(
+        config.data.name, 
+        config.data.path, 
+        type=config.data.type, 
+        transform=get_basic_transform(num_points=-1),
+        batch_size=1, 
+        shuffle=False, 
+        num_workers=1,
+        preprocessed=config.data.preprocessed, 
+        return_train_format=False
+    )
+
+    # Reset Output-Folder
+    path = f"./output/pc_resolution_{config.data.name}_{patch_size_m}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    # save_dir_creation(path)
+    os.makedirs(path, exist_ok=True)
+
+    for batch_idx, batch in enumerate(data_loader):
+        point_cloud = batch[0]
+        # print_pc(point_cloud)
+
+        # Extraction of 2D coordiantes
+        points = point_cloud.coordinates
+        if isinstance(points, torch.Tensor):
+            points = points.cpu().numpy()
+            
+        coords_2d = points[:, :2] # only X and Y for 
+        half_size = patch_size_m / 2.0
+
+        for patch_idx in range(num_patches):
+            # Pick random center point
+            random_idx = np.random.randint(0, len(coords_2d))
+            center = coords_2d[random_idx]
+
+            # 50cm x 50cm Bounding Box filtering
+            mask = (
+                (np.abs(coords_2d[:, 0] - center[0]) <= half_size) & 
+                (np.abs(coords_2d[:, 1] - center[1]) <= half_size)
+            )
+            patch_points = coords_2d[mask]
+
+            if len(patch_points) < 10:
+                print(f"Patch {patch_idx + 1}: Skipping...not enough points found...")
+                continue
+
+            # 2. Compute statistical metrics
+            area_sqm = patch_size_m * patch_size_m
+            density_per_sqm = len(patch_points) / area_sqm
+
+            tree = KDTree(patch_points)
+            distances, _ = tree.query(patch_points, k=2)  # k=2, because k=1 is the point itself
+            mean_dist_cm = np.mean(distances[:, 1]) * 100.0  # from meter in cm
+
+            print(f"\n[Batch {batch_idx} | Patch {patch_idx + 1}]")
+            print(f"  Points in Patch: {len(patch_points)}")
+            print(f"  Pointdensity:     {density_per_sqm:.1f} Pkt/m²")
+            print(f"  Mean Distance:  {mean_dist_cm:.2f} cm")
+
+            # 3. Visualization and plotting
+            plt.figure(figsize=(8, 8))
+            plt.scatter(patch_points[:, 0], patch_points[:, 1], s=12, c='blue', alpha=0.7, edgecolors='none')
+
+            # Set axislimit to 50cm x 50cm
+            x_min, x_max = center[0] - half_size, center[0] + half_size
+            y_min, y_max = center[1] - half_size, center[1] + half_size
+            plt.xlim(x_min, x_max)
+            plt.ylim(y_min, y_max)
+
+            # Grid-Ticks in 1-cm-steps
+            plt.xticks(np.arange(x_min, x_max + 0.01, 0.01))
+            plt.yticks(np.arange(y_min, y_max + 0.01, 0.01))
+            plt.grid(True, which='both', color='gray', linestyle='--', linewidth=0.5)
+
+            # Description and Infobox
+            plt.title(f"Patch {patch_idx + 1} ({patch_size_m*100:.0f}x{patch_size_m*100:.0f}cm)\n"
+                      f"Dichte: {density_per_sqm:.1f} Pkt/m² | Mittl. Abstand: {mean_dist_cm:.2f} cm")
+            plt.xlabel("X (Meter)")
+            plt.ylabel("Y (Meter)", rotation=60)
+            plt.axis('equal')
+
+            # save image
+            save_filename = os.path.join(path, f"batch_{batch_idx}_patch_{patch_idx + 1}.png")
+            plt.savefig(save_filename, dpi=300, bbox_inches='tight')
+            plt.close()
+
+            print(f"Saved on '{save_filename}'")
+
+        # end of first point cloud reached, should be already enough
+        break
+
+
+
+def analyze_point_cloud_resolution_upgraded(config, raster_size=0.8, grid_size=0.01):
+    print("\n --- Center Shape Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type=config.data.type, 
+                                    transform=None,  # get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    # clear save path
+    path = f"./output/pc_resolution_check"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    # save_dir_creation(path)
+    os.makedirs(path, exist_ok=True)
+
+    print("Make resolution check")
+
+    cur_pc = 0
+    for batch in tqdm(data_loader, total=len(data_loader), desc="Resolution Check"):
+        point_cloud = batch[0]
+
+        # get maholes
+        if config.data.name == "sud":
+            label_value = (1, 255) if config.data.preprocessed else 3
+        else:
+            label_value = (1, 255) if config.data.preprocessed else 104002
+        manholes = extract_manhole(point_cloud, label_value=label_value, points_around_dist=0)
+
+        for cur_vis, cur_manhole in enumerate(manholes):
+            # Extract 2D coordinates
+            if isinstance(cur_manhole, o3d.t.geometry.PointCloud):
+                points = cur_manhole.point[get_coordinate_attribute(cur_manhole)].numpy()
+            points_2d = points[:, :2]
+
+            # (not really important, because of line scan distance) 
+            # Calculate mean distance to nearest neighbor for each point
+            tree = KDTree(points_2d)
+            distances, _ = tree.query(points_2d, k=2)  # k=2 because k=1 is the point itself
+            avg_point_dist = np.mean(distances[:, 1])
+            
+            plot_name = f"pc_{cur_pc}_manhole_{cur_vis}_resolution.png"
+            
+            plt.style.use("seaborn-v0_8-whitegrid")
+
+            fig, ax = plt.subplots(figsize=(7,7))
+
+            ax.scatter(points_2d[:, 0], points_2d[:, 1], s=5, alpha=0.3, label="Points")
+
+            ax.set_aspect("equal")
+
+            # Force tick intervals to exactly 0.1 on both axes
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(grid_size))
+            ax.yaxis.set_major_locator(ticker.MultipleLocator(grid_size))
+            # ax.xaxis.set_major_locator(ticker.MultipleLocator(grid_size*5.0))
+            # ax.yaxis.set_major_locator(ticker.MultipleLocator(grid_size*5.0))
+
+            # ax.xaxis.set_minor_locator(ticker.MultipleLocator(grid_size))
+            # ax.yaxis.set_minor_locator(ticker.MultipleLocator(grid_size))
+
+            # ax.grid(True, which='both', linestyle='--', alpha=0.4)
+
+            # X-Axis rotation
+            ax.tick_params(axis='x', rotation=90)
+
+            # Make axis font smaller
+            ax.tick_params(axis='x', labelsize=8)
+            ax.tick_params(axis='y', labelsize=8)
+
+            # Fix specific bounds around the manhole center -> radius of 1m
+            center_x, center_y = np.mean(points_2d[:, 0]), np.mean(points_2d[:, 1])
+            ax.set_xlim(center_x - raster_size, center_x + raster_size)
+            ax.set_ylim(center_y - raster_size, center_y + raster_size)
+
+            # Make grid visible at every tick step
+            ax.grid(True, which='major', linestyle='--', alpha=0.6)
+            ax.legend()
+
+            stats_text = (
+                f"Points Count : {len(points_2d)}\n"
+                f"Avg Pt Dist  : {avg_point_dist:.4f} m\n"
+                f"Grid Raster  : {grid_size} m\n"
+                f"Raster Size  : {raster_size*2} m"
+            )
+
+            ax.text(
+                0.05, 0.95,           # X, Y coordinates (5% from left, 95% from bottom)
+                stats_text, 
+                transform=ax.transAxes,
+                fontsize=10, 
+                fontfamily='monospace',  # Keeps things aligned nicely like code
+                verticalalignment='top', 
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8, edgecolor='gray')
+            )
+
+            ax.set_title(f"Point Cloud Resolution Check - PC: {cur_pc} | Manhole: {cur_vis}", fontsize=12, pad=10)
+
+            save_file = os.path.join(path, plot_name)
+            plt.savefig(save_file, bbox_inches='tight', dpi=300)
+            print(f"Successfull saved to: '{save_file}'")
+
+            plt.close(fig)
+
+        cur_pc += 1
+
+    print("successfull finish resolution check!")
+
+
+from sklearn.linear_model import RANSACRegressor, LinearRegression
+
+def extract_scanlines_ransac(points_2d, residual_threshold=0.005, min_points=10):
+    remaining_points = points_2d.copy()
+    labels = np.full(len(points_2d), -1)
+    current_label = 0
+    
+    indices = np.arange(len(points_2d))
+    
+    while len(remaining_points) >= min_points:
+        X = remaining_points[:, 0].reshape(-1, 1)
+        y = remaining_points[:, 1]
+        
+        ransac = RANSACRegressor(
+            estimator=LinearRegression(),
+            residual_threshold=residual_threshold,
+            min_samples=2,
+            max_trials=1000
+        )
+        
+        try:
+            ransac.fit(X, y)
+        except ValueError:
+            break
+            
+        inlier_mask = ransac.inlier_mask_
+        if np.sum(inlier_mask) < min_points:
+            break
+            
+        # Assign cluster label to found line
+        original_indices = indices[inlier_mask]
+        labels[original_indices] = current_label
+        
+        # Remove inliers and repeat
+        remaining_points = remaining_points[~inlier_mask]
+        indices = indices[~inlier_mask]
+        current_label += 1
+        
+    return labels
+
+
+# FIXME -> remove noise or lines/points which not fit
+#       -> add stats (per patch and overall)
+def auto_point_cloud_resolution_finder(config, max_distance=0.01):
+    print("\n --- Center Shape Check ---")
+
+    print("Loading Data...")
+    data_loader = get_data_loader(config.data.name, config.data.path, 
+                                    type=config.data.type, 
+                                    transform=None,  # get_basic_transform(num_points=-1),
+                                    batch_size=1, shuffle=False, num_workers=0,
+                                    preprocessed=config.data.preprocessed, return_train_format=False)
+
+    # clear save path
+    path = f"./output/pc_resolution_auto_compute"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    # save_dir_creation(path)
+    os.makedirs(path, exist_ok=True)
+
+    print("Make resolution check")
+
+    stats = {
+        "total_mean_sl_distance": [],
+        "total_min_sl_distance": [],
+        "total_max_sl_distance": [],
+        "total_scanline_count": [],
+        "total_avg_scanline_spacing": [],
+        "per_patch_mean_sl_distances": [],
+        "per_patch_min_sl_distances": [],
+        "per_patch_max_sl_distances": [],
+        "per_patch_scanline_counts": [],
+        "per_patch_avg_scanline_spacings": []
+    }
+
+    cur_pc = 0
+    for batch in tqdm(data_loader, total=len(data_loader), desc="Auto Resolution Check"):
+        point_cloud = batch[0]
+
+        # get maholes
+        if config.data.name == "sud":
+            label_value = (1, 255) if config.data.preprocessed else 3
+        else:
+            label_value = (1, 255) if config.data.preprocessed else 104002
+        manholes = extract_manhole(point_cloud, label_value=label_value, points_around_dist=0)
+
+        for cur_vis, cur_manhole in enumerate(manholes):
+            # 1. Extract 2D coordinates
+            if isinstance(cur_manhole, o3d.t.geometry.PointCloud):
+                points = cur_manhole.point[get_coordinate_attribute(cur_manhole)].numpy()
+            points_2d = points[:, :2]
+            center_x, center_y = np.mean(points_2d[:, 0]), np.mean(points_2d[:, 1])
+
+            # 2. Cluster Points - Get Scanlines
+            # clustering = DBSCAN(eps=max_distance, min_samples=10).fit(points_2d)
+            # labels = clustering.labels_
+            labels = extract_scanlines_ransac(points_2d, residual_threshold=0.01, min_points=20)
+
+            # Cluster to Lines
+            unique_labels = [l for l in np.unique(labels) if l != -1]  # Noise (-1) filtern
+
+            if len(unique_labels) < 4:
+                print(f"Found not enough Scanlines. Found only {len(unique_labels)} scanlines.")
+                continue
+
+            slopes = []
+            intercepts = {}
+
+            for label in unique_labels:
+                cluster_points = points_2d[labels == label]
+                reg = LinearRegression().fit(cluster_points[:, 0].reshape(-1, 1), cluster_points[:, 1])
+                slopes.append(reg.coef_[0])
+                intercepts[label] = reg.intercept_
+
+            # Use mean slope for all lines, because they should be parallel
+            m_avg = np.mean(slopes)
+
+            # std warning, if std is too big
+            slope_std = np.std(slopes)
+
+            if slope_std > 0.1:
+                print(
+                    f"WARNING: Scanlines not sufficiently parallel "
+                    f"(slope std = {slope_std:.4f})"
+                )
+
+            # Get distance from scaline to each other
+            def line_distance(b1, b2, m):
+                """
+                Compute orthogonal distance between 2 parallel lines.
+                """
+                return abs(b2 - b1) / np.sqrt(1 + m**2)
+
+            print(f"Mittlere Steigung (m): {m_avg:.4f}\n")
+
+            # 4. Sort Lines (the lines are parallel but can have any rotation)
+            # 4.1 Compute cluster centroids and normal vector perpendicular to lines
+            centroids = {}
+            for label in unique_labels:
+                cluster_pts = points_2d[labels == label]
+                centroids[label] = np.mean(cluster_pts, axis=0)
+
+            # Normal vector perpendicular to line direction vector (1, m_avg)
+            # Depending on orientation preference, use (-m_avg, 1) or (m_avg, -1)
+            normal = np.array([-m_avg, 1.0])
+            normal = normal / np.linalg.norm(normal)  # Normalize to unit vector
+
+            # 4.2 Project centroids onto normal vector to order them spatially
+            sorted_labels = sorted(
+                unique_labels,
+                key=lambda l: np.dot(centroids[l], normal),
+                reverse=True  # True for highest-to-lowest / top-left
+            )
+            
+
+            # 5. Distance from only neighbor lines
+            # Compute distances between the sorted lines 
+            # we want the direct orthogonal distance between them
+            # 5.1 Store projected distances for sorted labels
+            projections = [np.dot(centroids[cur_label], normal) for cur_label in sorted_labels]
+
+            # 5.2 Compute distances between adjacent lines
+            neighbor_distances = []
+            for i in range(len(sorted_labels) - 1):
+                line_1 = sorted_labels[i]
+                line_2 = sorted_labels[i + 1]
+                
+                # Orthogonal distance along the normal vector
+                dist = abs(projections[i] - projections[i + 1])
+                neighbor_distances.append({
+                    "line_pair": (line_1, line_2),
+                    "distance": dist
+                })
+
+                # print(f"Distance between Line {line_1} and Line {line_2}: {dist:.6f} m")
+
+            # 5.3. Overall average resolution (step size) between adjacent scanlines
+            if not neighbor_distances:
+                print("[WARNING] No Neighbor Distances found, skipping this manhole...")
+                continue
+
+            avg_line_spacing = np.mean([d["distance"] for d in neighbor_distances])
+            # print(f"Average Scanline Spacing: {avg_line_spacing:.6f} m")
+                
+            # 6. Save Stats
+            stats["total_mean_sl_distance"].append(avg_line_spacing)
+            stats["total_min_sl_distance"].append(np.min([d["distance"] for d in neighbor_distances]))
+            stats["total_max_sl_distance"].append(np.max([d["distance"] for d in neighbor_distances]))
+            stats["total_scanline_count"].append(len(unique_labels))
+            stats["total_avg_scanline_spacing"].append(avg_line_spacing)
+            stats["per_patch_mean_sl_distances"].append([avg_line_spacing])
+            stats["per_patch_min_sl_distances"].append([np.min([d["distance"] for d in neighbor_distances])])
+            stats["per_patch_max_sl_distances"].append([np.max([d["distance"] for d in neighbor_distances])])
+            stats["per_patch_scanline_counts"].append([len(unique_labels)])
+            stats["per_patch_avg_scanline_spacings"].append([avg_line_spacing])
+
+            # 7.Debug visualization
+            # Plot Clustering + Plot extracted lines + Plot line distances
+            fig, ax = plt.subplots(nrows=1, ncols=4, figsize=(18, 6))
+
+            ax[0].scatter(points_2d[:, 0], points_2d[:, 1], s=5, alpha=0.3, label="Points")
+            ax[0].legend()
+            ax[0].set_title("Original Point Cloud")
+
+            # filter for only point sinside a cluster (not noise)
+            valid_mask = labels != -1
+
+            ax[1].scatter(points_2d[valid_mask, 0], points_2d[valid_mask, 1], c=labels[valid_mask], cmap='Set3', s=5, alpha=0.7)
+            # for label in unique_labels:
+            #     cluster_points = points_2d[labels == label]
+            #     ax[1].plot(cluster_points[:, 0], cluster_points[:, 1], 'o', markersize=5)
+            ax[1].set_title("DBSCAN Clustering of Scanlines")
+
+            ax[2].scatter(points_2d[valid_mask, 0], points_2d[valid_mask, 1], c=labels[valid_mask], cmap='Set3', s=5, alpha=0.7)
+            for label in unique_labels:
+                cluster_points = points_2d[labels == label]
+                centroid = centroids[label]
+                # ax[2].plot(cluster_points[:, 0], cluster_points[:, 1], 'o', markersize=5)
+                # Plot the fitted line
+                b_corr = centroid[1] - m_avg * centroid[0]
+    
+                x_vals = np.array([np.min(cluster_points[:, 0]), np.max(cluster_points[:, 0])])
+                y_vals = m_avg * x_vals + b_corr
+                ax[2].plot(x_vals, y_vals, '--', color='red', linewidth=1.5)
+
+            ax[2].set_title(f"Fitted Lines with Mean Slope (m_avg={m_avg:.4f})")
+
+            ax[3].scatter(points_2d[valid_mask, 0], points_2d[valid_mask, 1], c=labels[valid_mask], cmap='Set3', s=5, alpha=0.7)
+            for i, dist_info in enumerate(neighbor_distances):
+                line_1, line_2 = dist_info["line_pair"]
+                dist = dist_info["distance"]
+                centroid_1 = centroids[line_1]
+                centroid_2 = centroids[line_2]
+                mid_point = (centroid_1 + centroid_2) / 2.0
+
+                # plot distance line between centroids
+                ax[3].plot(
+                    [centroid_1[0], centroid_2[0]], 
+                    [centroid_1[1], centroid_2[1]], 
+                    color='blue', linestyle='--', linewidth=1.2, alpha=0.8
+                )
+                
+                # compute direction vector and perpendicular offset for text placement
+                mid_point = (centroid_1 + centroid_2) / 2.0
+                vec = centroid_2 - centroid_1
+                norm = np.linalg.norm(vec)
+                
+                if norm > 0:
+                    # perpendicular vector to the line connecting the two centroids
+                    perp_vec = np.array([-vec[1], vec[0]]) / norm
+                else:
+                    perp_vec = np.array([0.0, 1.0])
+                
+                # change per run the side of the text placement to avoid overlap
+                side = 1 if i % 2 == 0 else -1
+                offset_dist = 0.01
+                text_pos = mid_point + side * offset_dist * perp_vec
+                
+                # put text
+                if i%3 == 0:
+                    ax[3].text(
+                        text_pos[0], text_pos[1],
+                        f"{dist:.4f} m",
+                        fontsize=8,
+                        color='blue',
+                        ha='center',
+                        va='center',
+                        bbox=dict(boxstyle='round,pad=0.15', facecolor='white', edgecolor='none', alpha=0.7) # optional für bessere Lesbarkeit
+                    )
+
+                # ax[3].annotate(
+                #     f"{dist:.4f} m",
+                #     xy=mid_point,
+                #     xytext=(mid_point[0] + 0.02, mid_point[1] + 0.02),
+                #     arrowprops=dict(arrowstyle='->', color='blue'),
+                #     fontsize=8,
+                #     color='blue'
+                # ) 
+            # for cur_label in sorted_labels:
+            #     cur_centroid = centroids[cur_label]
+            #     ax[3].scatter(cur_centroid[0], cur_centroid[1], color='black', s=50, marker='x')
+            #     ax[3].text(cur_centroid[0], cur_centroid[1], f"Line {cur_label}", fontsize=8, color='black', ha='right')
+            ax[3].set_title(f"Orthogonal Distances Between Neighbor Lines")
+
+            dist_vals = [d["distance"] for d in neighbor_distances]
+            info_text = f"Lines found: {len(unique_labels)}\n" \
+                        f"Avg Spacing: {np.mean(dist_vals):.4f} m\n" \
+                        f"Min Spacing: {np.min(dist_vals):.4f} m\n" \
+                        f"Max Spacing: {np.max(dist_vals):.4f} m"
+
+            ax[3].text(0.03, 0.95, info_text, transform=ax[3].transAxes, fontsize=9,
+                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+            for a in ax:
+                a.set_aspect("equal")
+                # a.xaxis.set_major_locator(ticker.MultipleLocator(0.05))
+                # a.yaxis.set_major_locator(ticker.MultipleLocator(0.05))
+                a.grid(True, which='major', linestyle='--', alpha=0.6)
+
+            plt.savefig(os.path.join(path, f"pc_{cur_pc}_manhole_{cur_vis}_resolution_debug.png"), dpi=300)
+            plt.close(fig)
+
+        cur_pc += 1
+
+    # Stats Summarization
+    if stats["total_mean_sl_distance"]:
+        overall_mean = np.mean(stats["total_mean_sl_distance"])
+        overall_min = np.min(stats["total_min_sl_distance"])
+        overall_max = np.max(stats["total_max_sl_distance"])
+        overall_scanline_count = np.mean(stats["total_scanline_count"])
+        overall_avg_spacing = np.mean(stats["total_avg_scanline_spacing"])
+
+        result_str = "\n--- Overall Statistics ---"
+        result_str += f"\nMean Scanline Distance: {overall_mean:.4f} m"
+        result_str += f"\nMin Scanline Distance: {overall_min:.4f} m"
+        result_str += f"\nMax Scanline Distance: {overall_max:.4f} m"
+        result_str += f"\nAverage Scanline Count: {overall_scanline_count:.2f}"
+        result_str += f"\nAverage Scanline Spacing: {overall_avg_spacing:.4f} m"
+
+    if stats["per_patch_mean_sl_distances"]:
+        per_patch_mean = np.mean([np.mean(distances) for distances in stats["per_patch_mean_sl_distances"]])
+        per_patch_min = np.mean([np.min(distances) for distances in stats["per_patch_min_sl_distances"]])
+        per_patch_max = np.mean([np.max(distances) for distances in stats["per_patch_max_sl_distances"]])
+        per_patch_scanline_count = np.mean([len(distances) for distances in stats["per_patch_scanline_counts"]])
+        per_patch_avg_spacing = np.mean([np.mean(distances) for distances in stats["per_patch_avg_scanline_spacings"]])
+
+        result_str += "\n--- Per Patch Statistics ---"
+        result_str += f"\nMean Scanline Distance (Per Patch): {per_patch_mean:.4f} m"
+        result_str += f"\nMin Scanline Distance (Per Patch): {per_patch_min:.4f} m"
+        result_str += f"\nMax Scanline Distance (Per Patch): {per_patch_max:.4f} m"
+        result_str += f"\nAverage Scanline Count (Per Patch): {per_patch_scanline_count:.2f}"
+        result_str += f"\nAverage Scanline Spacing (Per Patch): {per_patch_avg_spacing:.4f} m"
+
+    print(result_str)
+
+    result_path = os.path.join(path, "resolution_stats.txt")
+    with open(result_path, "w") as f:
+        f.write(result_str)
+
+    print(f"successfull finish resolution check!\nSaved result: '{result_path}'")
+
+
 
 # --------------
 # > Playground <
@@ -3373,14 +3999,18 @@ def tryout(config):
     # manhole_sample_counting(config)
 
     # calculate_intensity_statistics(config)
-    calculate_dataset_statistics(config, max_percentile_samples=1_000_000)
+    # calculate_dataset_statistics(config, max_percentile_samples=1_000_000)
     # calculate_max_density(config)
 
     # not working, maybe on local work:
     # generate_presentation_plots(config)
     
+    # analyze_point_cloud_resolution(config, num_patches=200, patch_size_m=0.5)
+    # analyze_point_cloud_resolution(config, num_patches=200, patch_size_m=1.0)
+    # analyze_point_cloud_resolution_upgraded(config, raster_size=0.1, grid_size=0.01)
+    auto_point_cloud_resolution_finder(config, max_distance=0.05)
 
-
+    # ground_truth_2d_map_full_check(config)
 
 
 

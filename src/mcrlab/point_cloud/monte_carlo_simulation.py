@@ -11,6 +11,8 @@ from tqdm import tqdm
 from matplotlib.patches import Ellipse
 import matplotlib.transforms as transforms
 
+# from mcrlab.helper import save_dir_creation
+
 
 
 # -----------------
@@ -113,10 +115,11 @@ def eval_center_robustness(
 
     path = "./output/monte-carlo-gt-check"
     if reset_dir:
+        # save_dir_creation(path)
         os.makedirs(path, exist_ok=True)
         shutil.rmtree(path)
+        # save_dir_creation(path)
         os.makedirs(path, exist_ok=True)
-
 
     print("Starting with Center Robustness Evaluation")
 

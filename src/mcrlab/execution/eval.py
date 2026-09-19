@@ -9,6 +9,8 @@ import numpy as np
 import torch
 from scipy.ndimage import label, binary_closing
 from scipy.ndimage.morphology import generate_binary_structure # or skimage.morphology?
+from scipy.ndimage import center_of_mass
+from skimage.feature import peak_local_max
 from tqdm import tqdm
 
 import matplotlib.pyplot as plt
@@ -20,6 +22,8 @@ from mcrlab.point_cloud.shape_check import circle_shape_check
 from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDataset
 from mcrlab.projection import bev_projection, bev_pixel_to_3d
 from mcrlab.metrices import mask_to_polygon
+# from mcrlab.helper import save_dir_creation
+
 
 
 # --------------------
@@ -46,10 +50,23 @@ def plot_center_prediction_debug(
         img_bg = img_bg[0]  # Take 1st channel
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+    # Preparation for coloring GT & preds
+    # masking so that background is transparent in the overlay
+    preds_colored = np.where(labeled_preds > 0, labeled_preds, np.nan)
+    # remove ignore index
+    labels_clean = np.where(labels == 255, 0, labels) if np.any(labels == 255) else labels
+    labels_clean = np.squeeze(labels_clean)
+    labeled_gt, num_gt = label((labels_clean > 0).astype(int))
+    gt_colored = np.where(labeled_gt > 0, labeled_gt, np.nan)
+    # colormaps (we want different colors)
+    cmap_pred = plt.cm.get_cmap("tab10", max(num_preds, 1))
+    cmap_gt = plt.cm.get_cmap("Set1", max(num_gt, 1))
     
+    # Plotting
     # Panel 1: Ground Truth Mask / Heatmap
     axes[0, 0].imshow(img_bg, cmap="gray", alpha=0.4)
-    axes[0, 0].imshow(labels, cmap="jet", alpha=0.6)
+    axes[0, 0].imshow(gt_colored, cmap=cmap_gt, alpha=0.6, interpolation="none")  # labels, "jet"
     axes[0, 0].set_title("1. GT Mask / Heatmap Overlay")
     
     # Panel 2: Model Output Probability/Heatmap
@@ -58,26 +75,31 @@ def plot_center_prediction_debug(
     axes[0, 1].set_title("2. Raw Model Probability")
 
     # Panel 3: Thresholded Binary Mask (Seg Check)
-    axes[0, 2].imshow(preds_binary*255, cmap="binary")
-    axes[0, 2].set_title("3. Thresholded Mask (>= 0.5)")
+    axes[0, 2].imshow(preds_binary, cmap="binary")
+    axes[0, 2].set_title("3. Thresholded Mask (>= 0.5 -> FIXME right?)")  # FIXME
 
     # Panel 4: Post-Processed Binary Mask (Morphology Check)
-    axes[1, 0].imshow(preds_closed*255, cmap="binary")
-    axes[1, 0].set_title("4. Morphologically Closed Mask")
+    # axes[1, 0].imshow(preds_closed, cmap="binary")
+    # axes[1, 0].set_title("4. Morphologically Closed Mask")
+    axes[1, 0].imshow(img_bg, cmap="gray", alpha=0.3)
+    axes[1, 0].imshow(preds_colored, cmap=cmap_pred, alpha=0.8, interpolation="none")
+    axes[1, 0].set_title(f"4. Morphologically Closed Pred Objects (Count: {num_preds})")
 
     # Panel 5: Extracted Centers on 2D BEV
+    # axes[1, 1].imshow(img_bg, cmap="gray")
+    # axes[1, 1].imshow(preds_closed, cmap="Purples", alpha=0.4)
     axes[1, 1].imshow(img_bg, cmap="gray")
-    axes[1, 1].imshow(preds_closed, cmap="Purples", alpha=0.4)
+    axes[1, 1].imshow(preds_colored, cmap=cmap_pred, alpha=0.3, interpolation="none")
     
-    # Plot predicted centers (Red X)
-    for cx, cy in extracted_centers:
-        axes[1, 1].scatter(cx, cy, c="red", marker="x", s=100, linewidths=2, label="Pred Center")
-    
-    # Plot GT centers (Green hollow O) - Fixed warning by using edgecolors
+    # Plot GT centers
     for gx, gy in gt_centers:
-        axes[1, 1].scatter(gx, gy, edgecolors="lime", facecolors="none", marker="o", s=80, linewidths=2, label="GT Center")
+        axes[1, 1].scatter(gx, gy, edgecolors="lime", facecolors="none", marker="o", s=100, linewidths=2.5, label="GT")
     
-    axes[1, 1].set_title("5. Extracted Center(s) (BEV Pixel)")
+    # Plot predicted centers
+    for cx, cy in extracted_centers:
+        axes[1, 1].scatter(cx, cy, c="red", marker="x", s=120, linewidths=2.5, label="Pred")
+        
+    axes[1, 1].set_title("5. Extracted Centers (GT=Green O, Pred=Red X)")
 
     # Panel 6: 3D Point Cloud Local Overhead Check - Fixed 1D/2D array indexing crash
     pts = None
@@ -94,6 +116,7 @@ def plot_center_prediction_debug(
         axes[1, 2].scatter(pts[:, 0], pts[:, 1], c=pts[:, 2], cmap="viridis", s=2)
         axes[1, 2].set_title("6. 3D Point Cloud Patch (X/Y)")
         axes[1, 2].set_aspect("equal")
+        axes[1, 2].invert_yaxis()  # FIXME invertation is right? -> maybe just change x and y?
     else:
         axes[1, 2].text(0.5, 0.5, "No/Invalid 3D PC Data", ha="center", va="center")
         axes[1, 2].set_title("6. 3D Point Cloud Patch")
@@ -140,7 +163,8 @@ def extract_center_polygon_centroid(pred_mask, **kwargs):
     """
     mask_to_polygon_fn = kwargs.get("mask_to_polygon_fn")
     if mask_to_polygon_fn is None:
-        return None
+        raise ValueError("'mask_to_polygon_fn' must be provided in kwargs.")
+        # return None
 
     pred_poly = mask_to_polygon_fn(pred_mask)
 
@@ -154,25 +178,39 @@ def extract_center_polygon_centroid(pred_mask, **kwargs):
     # return pred_poly.centroid.x, pred_poly.centroid.y
 
     centroid = pred_poly.centroid
-    return centroid.x, centroid.y
+    return float(centroid.x), float(centroid.y)
 
 
 
 def extract_center_circle_least_squares(pred_mask, **kwargs):
     """
     Extracts the center by fitting a circle via least squares on the polygon exterior.
+
+    Gets one potential manhole points as input (not the whole patch).
     """
-    pred_poly = kwargs.get("mask_to_polygon_fn")(pred_mask)
-    if pred_poly is None:
+    mask_to_polygon_fn = kwargs.get("mask_to_polygon_fn")
+    fit_circle_fn = kwargs.get("fit_circle_fn")
+
+    if mask_to_polygon_fn is None or fit_circle_fn is None:
+        raise ValueError("Both 'mask_to_polygon_fn' and 'fit_circle_fn' must be provided in kwargs.")
+    
+    pred_poly = mask_to_polygon_fn(pred_mask)
+    if pred_poly is None or pred_poly.is_empty:
         return None
     
     polys_to_plot = pred_poly.geoms if hasattr(pred_poly, 'geoms') else [pred_poly]
     cur_manhole_pred_x, cur_manhole_pred_y = [], []
     
     for p in polys_to_plot:
+        if p.is_empty or p.exterior is None:
+            continue
         x, y = p.exterior.xy
         cur_manhole_pred_x.extend(x)
         cur_manhole_pred_y.extend(y)
+
+    # filter 
+    if len(cur_manhole_pred_x) < 20:
+        return None
         
     cur_manhole_pred_x = np.array(cur_manhole_pred_x)
     cur_manhole_pred_y = np.array(cur_manhole_pred_y)
@@ -187,9 +225,100 @@ def extract_center_peak_maxima(prediction, **kwargs):
     """
     Placeholder for extracting centers directly from heatmap peaks (e.g., using skimage.feature.peak_local_max).
     """
-    # Implement peak local maxima extraction for heatmaps here
-    raise NotImplementedError("Peak local maxima extraction not implemented yet.")
+    min_confidence_peak = kwargs.get("min_confidence_peak", 0.3)
+    min_distance = kwargs.get("min_distance", 3)
+    num_peaks = kwargs.get("num_peaks", 1)
 
+    if prediction is None or np.max(prediction) < min_confidence_peak:
+        return None
+
+    # Find peak coordinates (returned as array of shape [N, 2] in [row, col] format)
+    peaks = peak_local_max(
+        prediction,
+        min_distance=min_distance,
+        threshold_abs=min_confidence_peak,
+        num_peaks=num_peaks,
+        exclude_border=False,
+    )
+
+    if len(peaks) == 0:
+        return None
+
+    # Extract the highest probability peak if multiple are returned
+    if num_peaks == 1:
+        row, col = peaks[0]
+        return float(col), float(row)  # Return (x, y) = (col, row)
+
+    # Return list of tuples if searching for multiple manholes
+    return [(float(col), float(row)) for row, col in peaks]
+    # return np.array([(float(col), float(row)) for row, col in peaks]).mean()
+
+
+
+def extract_center_peak_maxima(pred_mask, prediction, **kwargs):
+    """
+    Finds heatmap-maximum inside a specific cadidate mask (proposal).
+    
+    Args:
+        pred_mask (np.ndarray): Binary mask from the single Candidate-Object.
+        prediction (np.ndarray): Continuous Heatmap/Probability Map [0..1].
+    """
+    min_confidence_peak = kwargs.get("min_confidence_peak", 0.3)
+    min_distance = kwargs.get("min_distance", 3)
+
+    if prediction is None or pred_mask is None:
+        return None
+
+    # Masking the prediction, so only heatmap values of the candidate are visible
+    masked_pred = np.where(pred_mask, prediction, 0.0)
+
+    # Break if the max probability is under the given threshold
+    if np.max(masked_pred) < min_confidence_peak:
+        return None
+
+    # search the peak (hopefully center) inside the instance
+    # we want only one peak, because it is one proposal manhole
+    peaks = peak_local_max(
+        masked_pred,
+        min_distance=min_distance,
+        threshold_abs=min_confidence_peak,
+        num_peaks=1,
+        exclude_border=False,
+    )
+
+    if len(peaks) == 0:
+        # Fallback: if peak_local_max cause of min_distancefinds nothing 
+        # then just take the argmax value
+        row, col = np.unravel_index(np.argmax(masked_pred), masked_pred.shape)
+        return float(col), float(row)
+
+    if len(peaks) > 1:
+        print(f"[Warning] {len(peaks)} Peaks in one Proposal found (we take simply the first).")
+
+    row, col = peaks[0]
+    return float(col), float(row)  # Return (x, y) = (col, row)
+
+
+
+def extract_center_intensity_weighted(pred_mask, prediction, **kwargs):
+    """
+    Extracts center using intensity-weighted Center of Mass (useful for smooth heatmaps).
+    """
+    min_confidence_peak = kwargs.get("min_confidence_peak", 0.1)
+    
+    if prediction is None or pred_mask is None:
+        return None
+
+    # check min confiedence on only the current object
+    masked_heatmap = np.where(pred_mask & (prediction >= min_confidence_peak), prediction, 0.0)
+    if np.sum(masked_heatmap) == 0:
+        return None
+
+    # scipy returns (row, col)
+    row_center, col_center = center_of_mass(masked_heatmap)
+    if np.isnan(row_center) or np.isnan(col_center):
+        return None
+    return float(col_center), float(row_center)
 
 
 # Registry for center extraction methods
@@ -197,14 +326,89 @@ CENTER_EXTRACTION_STRATEGIES = {
     "polygon_centroid": extract_center_polygon_centroid,
     "circle_least_squares": extract_center_circle_least_squares,
     "peak_maxima": extract_center_peak_maxima,
+    "intensity_weighted_center": extract_center_intensity_weighted
 }
+
+# Merging
+def merge_nearby_centers(centers, dist_threshold=0.8):
+    """
+    Merges predicted (x, y, z) centers that are closer than dist_threshold pixels.
+    """
+    if len(centers) <= 1:
+        return centers
+
+    merged_centers = []
+    used = [False] * len(centers)
+
+    for i in range(len(centers)):
+        if used[i]:
+            continue
+
+        cluster = [centers[i]]
+        used[i] = True
+
+        for j in range(i + 1, len(centers)):
+            if used[j]:
+                continue
+
+            # calculate 3d euclidean distance
+            dist = np.sqrt(
+                (centers[i][0] - centers[j][0])**2 +
+                (centers[i][1] - centers[j][1])**2 +
+                (centers[i][2] - centers[j][2])**2
+            )
+
+            if dist < dist_threshold:
+                cluster.append(centers[j])
+                used[j] = True
+
+        avg_x = sum(pt[0] for pt in cluster) / len(cluster)
+        avg_y = sum(pt[1] for pt in cluster) / len(cluster)
+        avg_z = sum(pt[2] for pt in cluster) / len(cluster)
+        merged_centers.append((avg_x, avg_y, avg_z))
+    return merged_centers
+
+
+
+def make_prediction(pixel_values, model, model_name, labels, min_confidence, ignore_index):
+    if isinstance(pixel_values, np.ndarray):
+        pixel_values = torch.from_numpy(pixel_values)
+
+    if isinstance(pixel_values, torch.Tensor):
+        pixel_values = pixel_values.float().to(model.device)
+
+    # print(f"Pixel Value Shape: {pixel_values.shape}")
+    # [1, 3, 500, 500]
+    # make center prediction
+    preds = predict_single_sample(model, model_name, None, pixel_values)
+    # print(f"DEBUGGING 1, shape: {preds.shape}")
+    # [1, 500, 500]
+
+    # apply closing + clustering
+    if isinstance(preds, torch.Tensor):
+        preds = preds.detach().cpu().numpy()
+    if isinstance(labels, torch.Tensor):
+        labels = labels.detach().cpu().numpy()
+    valid_mask = (labels != ignore_index)
+
+    # set confidence
+    preds_binary = ((preds >= min_confidence) & valid_mask).astype(np.uint8)
+    preds_binary = np.squeeze(preds_binary)
+    preds_prob = np.squeeze(preds)
+    preds_prob *= preds_binary
+
+    return preds_prob, preds_binary, valid_mask, preds, labels, pixel_values
+
+
 
 def center_eval(config):
 
     model_name = config.model.name.lower()
 
     enable_debug = getattr(config.center_eval, "save_debug_plots", False)
-    min_confidence = getattr(config.center_eval, "min_confidence", 0.5)
+    min_confidence = getattr(config.center_eval, "min_confidence")
+    min_confidence_peak = getattr(config.center_eval, "min_confidence_peak")
+    candidate_min_points = getattr(config.center_eval, "candidate_min_points")
     
     # extract params
     heatmap_path = config.data.heatmap_path
@@ -249,13 +453,14 @@ def center_eval(config):
     extract_center_fn = CENTER_EXTRACTION_STRATEGIES[extraction_method_name]
     print(f"Using center extraction strategy: {extraction_method_name}")
 
-    result = []
-
     for cur_dataset in ["whu", "sud"]:
+        result = []
         debug_save_dir = Path(f"./output/center_eval/debug_plots_{exp_name}_{cur_dataset}")
 
+        # save_dir_creation(str(debug_save_dir))
         os.makedirs(str(debug_save_dir), exist_ok=True)
         shutil.rmtree(str(debug_save_dir))
+        # save_dir_creation(str(debug_save_dir))
         os.makedirs(str(debug_save_dir), exist_ok=True)
 
 
@@ -288,8 +493,12 @@ def center_eval(config):
             normalization_mode=normalization_mode
         )
 
+        all_pc_ids = set()
+
         for idx, cur_data_path in tqdm(enumerate(all_test_paths), total=len(all_test_paths), desc="2D Center Pipe"):
             pc_id, x_start, y_start = test_bev_dataset.extract_grid_identifier(cur_data_path)
+
+            all_pc_ids.add(pc_id)
 
             # get data
             bev_dict = next(test_bev_dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True))
@@ -307,7 +516,8 @@ def center_eval(config):
 
             pixel_values = pixel_values.unsqueeze(0)
 
-            # --- Manhole Search ---
+            # -----------------
+            # Manhole Search
             if model_name == "traditional":
                 # print(f"Shape check, should be [C, W, H]: {pixel_values.shape}")
                 centers = get_manhole_candidates_hough(bev_image=pixel_values, resolution=0.01)
@@ -317,41 +527,11 @@ def center_eval(config):
                     center = transform_pixel_to_3d(pc, center_x, center_y, meta)
                     result = add_to_result(result, cur_dataset, pc_id, {"x": center[0], "y": center[1], "z": center[2]})
             else:
-                if isinstance(pixel_values, np.ndarray):
-                    pixel_values = torch.from_numpy(pixel_values)
-
-                if isinstance(pixel_values, torch.Tensor):
-                    pixel_values = pixel_values.float().to(model.device)
-
-                # print(f"Pixel Value Shape: {pixel_values.shape}")
-                # [1, 3, 500, 500]
-                # make center prediction
-                preds = predict_single_sample(model, model_name, None, pixel_values)
-                # print(f"DEBUGGING 1, shape: {preds.shape}")
-                # [1, 500, 500]
-
-                # apply closing + clustering
-                if isinstance(preds, torch.Tensor):
-                    preds = preds.detach().cpu().numpy()
-                if isinstance(labels, torch.Tensor):
-                    labels = labels.detach().cpu().numpy()
-                valid_mask = (labels != ignore_index)
-        
-                # set confidence
-                preds_binary = ((preds >= min_confidence) & valid_mask).astype(np.uint8)
-                preds_binary = np.squeeze(preds_binary)
-                preds_prob = np.squeeze(preds)
+                preds_prob, preds_binary, valid_mask, preds, gt_labels_numpy, pixel_values = make_prediction(pixel_values, model, model_name, labels, min_confidence, ignore_index)
 
                 orig_h, orig_w = int(meta["tile_size"] / meta["resolution"]), int(meta["tile_size"] / meta["resolution"])
                 pred_h, pred_w = preds_binary.shape
-
-                # if (pred_h, pred_w) != (orig_h, orig_w):
-                #     scale_x = orig_w / pred_w
-                #     scale_y = orig_h / pred_h
-                # else:
-                #     scale_x = scale_y = 1.0
                     
-                
                 struct = generate_binary_structure(2, 2)  # 8-Nachbarschaft
                 # bigger neighborhood against a problem, where multiple predictions are made due to little riffles
                 preds_closed = binary_closing(preds_binary, structure=struct, iterations=8).astype(np.uint8)
@@ -360,86 +540,56 @@ def center_eval(config):
                 extracted_pixel_centers = []
                 gt_pixel_centers = []
 
+                # ONLY FOR DEBUGGING:
                 # extract GT center from labels
-                labels[labels == ignore_index] = 0
-
+                # labels[labels == ignore_index] = 0
+                labels_clean = np.where(gt_labels_numpy == ignore_index, 0, gt_labels_numpy)
                 # close gaps
-                labels_binary = (labels >= 0.5).astype(np.uint8)
+                labels_binary = (labels_clean >= min_confidence).astype(np.uint8)
                 labels_binary = np.squeeze(labels_binary)
-                
                 struct = generate_binary_structure(2, 2)
                 labels_closed = binary_closing(labels_binary, structure=struct, iterations=8).astype(np.uint8)
 
-                if np.any(labels > 0):
+                if np.any(labels_closed > 0):
                     gt_labeled, num_gt = label(labels_closed)
                     for g_i in range(1, num_gt + 1):
                         gt_mask = (gt_labeled == g_i)
                         
                         # Skip small noise components with less than 4 pixels
-                        if np.count_nonzero(gt_mask) < 4:
+                        if np.count_nonzero(gt_mask) < 20:
                             continue
                             
                         g_coords = extract_center_fn(
                             pred_mask=gt_mask,
-                            prediction=labels_closed,
+                            prediction=labels_closed if not using_heatmap_as_gt else labels_clean.astype(np.float32),
                             mask_to_polygon_fn=mask_to_polygon,
                             fit_circle_fn=fit_circle_least_squares
                         )
                         if g_coords is not None:
                             gt_pixel_centers.append(g_coords)
                 
-                
+                # -----------------
+                # Prediction Center Extraction
                 for p_idx in range(1, num_pred_objects + 1):
                     pred_mask = (labeled_preds == p_idx)
+
+                    if np.sum(pred_mask) < candidate_min_points:
+                        continue
                     
                     # Extract center using the selected strategy function
                     center_coords = extract_center_fn(
                         pred_mask=pred_mask,
                         prediction=preds_prob,
                         mask_to_polygon_fn=mask_to_polygon,
-                        fit_circle_fn=fit_circle_least_squares
+                        fit_circle_fn=fit_circle_least_squares,
+                        min_confidence_peak=min_confidence_peak
                     )
-                    
+
                     if center_coords is None:
                         continue
-                        
+
                     center_x, center_y = center_coords
                     extracted_pixel_centers.append((center_x, center_y))
-
-                    # center_x = center_x   # * scale_x
-                    # center_y = center_y   # * scale_y
-
-                    # --- DEBUGGING Start ---
-                    # print(f"Meta Origin: X={meta['origin_x']}, Y={meta['origin_y']}")
-                    # print(f"PC Bounds X: [{pc[:,0].min():.2f}, {pc[:,0].max():.2f}]")
-                    # print(f"PC Bounds Y: [{pc[:,1].min():.2f}, {pc[:,1].max():.2f}]")
-
-                    # # Test corner 0,0 transformation
-                    # test_center = bev_pixel_to_3d(
-                    #     patch_points=pc, pixel_x=0, pixel_y=0,
-                    #     origin_x=meta["origin_x"], origin_y=meta["origin_y"],
-                    #     resolution=meta["resolution"], 
-                    #     search_radius=None, tile_size=meta["tile_size"]
-                    # )
-                    # print(f"Pixel (0,0) mapped to 3D: {test_center}")
-
-                    # tile_px = int(meta["tile_size"] / meta["resolution"]) # z.B. 500 Pixel
-
-                    # # Teste Top-Left (0,0) und Bottom-Right (max, max)
-                    # pt_top_left = bev_pixel_to_3d(pc, 0, 0, meta["origin_x"], meta["origin_y"], meta["resolution"], search_radius=None, tile_size=meta["tile_size"])
-                    # pt_bottom_right = bev_pixel_to_3d(pc, tile_px, tile_px, meta["origin_x"], meta["origin_y"], meta["resolution"], search_radius=None, tile_size=meta["tile_size"])
-
-                    # print(f"Pixel (0, 0)      -> 3D: X={pt_top_left[0]:.2f}, Y={pt_top_left[1]:.2f}")
-                    # print(f"Pixel ({tile_px}, {tile_px})  -> 3D: X={pt_bottom_right[0]:.2f}, Y={pt_bottom_right[1]:.2f}")
-                    
-                    # before change
-                        # Meta Origin: X=6192.0, Y=2083.5
-                        # PC Bounds X: [6192.00, 6197.00]
-                        # PC Bounds Y: [2083.50, 2088.50]
-                        # Pixel (0,0) mapped to 3D: [6192.005      2083.505        14.22782707]
-                        # Pixel (0, 0)      -> 3D: X=6192.01, Y=2083.51
-                        # Pixel (500, 500)  -> 3D: X=6197.01, Y=2088.51
-                    # --- DEBUGGING End ---
 
                     # Transform 2D pixel center to 3D point
                     center = bev_pixel_to_3d(
@@ -456,6 +606,9 @@ def center_eval(config):
                     )
 
                     # print(f"Center shape: {center.shape}")
+                    if center is None or len(center) < 3:
+                        print(f"[Warning] Skipped a center prediction -> pred: {center}")
+                        continue
                     
                     cur_center_point = {
                         "x": center[0],
@@ -482,6 +635,42 @@ def center_eval(config):
                         save_dir=debug_save_dir
                     )
 
+        # -----------------
+        # Post Processing
+        # Merge nearby predictions
+        print(f"Post-processing center predictions for {cur_dataset} (merging duplicates from patch overlaps).")
+        
+        cur_all_pred_centers = []
+        final_dataset_results = []
+
+        for target_pc_id in all_pc_ids:
+            # get all 3d centers
+            pc_3d_centers = [
+                (item["center"]["x"], item["center"]["y"], item["center"]["z"]) \
+                for item in result if item["pointcloud-id"] == target_pc_id
+            ]
+
+            if not pc_3d_centers:
+                continue
+
+            # add the merged version to the new results
+            merged_pixel_centers = merge_nearby_centers(pc_3d_centers, dist_threshold=0.8)
+            for cur_new_pixel_center in merged_pixel_centers:
+                cur_center_point = {
+                    "x": cur_new_pixel_center[0],
+                    "y": cur_new_pixel_center[1],
+                    "z": cur_new_pixel_center[2]
+                }
+                
+                final_dataset_results = add_to_result(final_dataset_results, cur_dataset, target_pc_id, cur_center_point)
+        
+        print(f"Reduced results from {len(result)} to {len(final_dataset_results)} ({len(result)-len(final_dataset_results)}).")
+        result = final_dataset_results
+
+       
+
+        # -----------------
+        # Saving
         # Save evaluation results per dataset
         output_path = Path(f"./output/{cur_dataset}_eval_{exp_name}.json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
