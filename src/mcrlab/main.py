@@ -98,7 +98,7 @@ def main():
 
         experiments = dict()
 
-        for cur_idx in range(10):
+        for cur_idx in range(4, 10):
             if cur_idx == 0:
                 config.train.exp_name = "seg_norm_check_unet_teb7_no_norm"
                 config.data.normalization = False
@@ -163,6 +163,7 @@ def main():
                 train(config)
                 experiments[config.train.exp_name] = "Passed"
             except Exception as e:
+                raise e
                 experiments[config.train.exp_name] = str(e)
         
         print("\n\nCustom Run Finished!\nProcess Info:")

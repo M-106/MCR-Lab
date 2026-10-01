@@ -153,6 +153,8 @@ class ModelForSemanticSegmentation(PreTrainedModel):
     def __init__(self, config, encoder_weights=None):
         super().__init__(config)
 
+        print("DEBUGGING, NUM_LABELS:", config.num_labels)
+
         if encoder_weights is None:
             if config.encoder_name in ['resnext101_32x48d', 'resnext101_32x32d']:
                 encoder_name = 'instagram'
@@ -172,7 +174,8 @@ class ModelForSemanticSegmentation(PreTrainedModel):
         self.config = config
 
         if self.config.heatmap_is_gt:
-            self.heatmap_loss = torch.nn.MSELoss()
+            # self.heatmap_loss = torch.nn.MSELoss()
+            self.heatmap_loss = torch.nn.BCEWithLogitsLoss()
         else:
             self.dice_loss = smp.losses.DiceLoss(mode="multiclass", ignore_index=self.config.ignore_index)
             # class_weights = torch.tensor([1.0, 100.0]) 
@@ -195,17 +198,28 @@ class ModelForSemanticSegmentation(PreTrainedModel):
                 labels = labels.squeeze(1)
 
             if self.config.heatmap_is_gt:
-                # we want the output in range: 0 - 1
-                preds = torch.sigmoid(logits)
-                if preds.dim() == 4 and preds.shape[1] == 1:
-                    preds = preds.squeeze(1)
+                if isinstance(self.heatmap_loss, torch.nn.BCEWithLogitsLoss):
+                    labels = labels.float()
+            
+                    # Reduce the logits to a single channel if necessary
+                    heatmap_logits = logits
+                    if heatmap_logits.dim() == 4 and heatmap_logits.shape[1] == 1:
+                        heatmap_logits = heatmap_logits.squeeze(1)
 
-                labels = labels.float()
+                    # directly pass the logits to the loss function (NO torch.sigmoid here!)
+                    loss = self.heatmap_loss(heatmap_logits, labels)
+                else:
+                    # we want the output in range: 0 - 1
+                    preds = torch.sigmoid(logits)
+                    if preds.dim() == 4 and preds.shape[1] == 1:
+                        preds = preds.squeeze(1)
 
-                # print(f"Labels shape: {labels.shape}")
-                # print(f"Preds shape: {preds.shape}")
+                    labels = labels.float()
 
-                loss = self.heatmap_loss(preds, labels)
+                    # print(f"Labels shape: {labels.shape}")
+                    # print(f"Preds shape: {preds.shape}")
+
+                    loss = self.heatmap_loss(preds, labels)
             else:
                 
                 # print("pixel_values:", pixel_values.shape)
@@ -219,6 +233,8 @@ class ModelForSemanticSegmentation(PreTrainedModel):
                 #        0.5 * self.dice_loss(logits, labels.long())
                 loss = 0.5 * self.focal_loss(logits, labels.long()) + \
                     0.5 * self.dice_loss(logits, labels.long())
+        # elif self.config.heatmap_is_gt and isinstance(self.heatmap_loss, torch.nn.BCEWithLogitsLoss):
+        #     logits = torch.sigmoid(logits)
 
 
         # HF Trainer wants an object with 'loss' and 'logits' attributes

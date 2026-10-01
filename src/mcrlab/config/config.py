@@ -99,7 +99,7 @@ class EvalExtractionConfig(BaseModel):
 class CenterEvalConfig(BaseModel):
     center_extraction_method: str
     save_debug_plots: bool
-    min_confidence: float
+    min_confidences: list
     min_confidence_peak: float
     candidate_min_points: int
 

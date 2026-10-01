@@ -1344,6 +1344,8 @@ class BEVDataset(Dataset):
 
     def _process_item_by_path(self, cur_file_path):
         data_name = "sud" if "sud-road" in cur_file_path.lower() else "whu"
+        # raise ValueError(f"Used data name: {data_name}!")
+
         pc_id, x_start, y_start = self.extract_grid_identifier(cur_file_path)
 
         tile, meta = load_single_bev_tile_as_pickle(cur_file_path)

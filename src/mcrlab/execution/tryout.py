@@ -3,6 +3,8 @@
 # -----------
 import shutil
 
+from collections import defaultdict
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -11,8 +13,9 @@ import torch
 import open3d as o3d
 
 from scipy.spatial import KDTree
+from scipy.ndimage import label, center_of_mass
 from sklearn.cluster import DBSCAN
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import RANSACRegressor, LinearRegression
 
 from tqdm import tqdm
 
@@ -56,7 +59,9 @@ def simple_viusalize_point_cloud(config):
                                   type=config.data.type, 
                                   transform=get_basic_transform(num_points=-1),
                                   batch_size=1, shuffle=False, num_workers=1,
-                                  preprocessed=config.data.preprocessed, return_train_format=False)
+                                  preprocessed=config.data.preprocessed, return_train_format=False,
+                                  bev_normalized=config.data.normalization, 
+                                  bev_normalize_mode=config.data.normalization_mode)
 
     point_cloud = next(iter(data_loader))[0]
 
@@ -309,7 +314,9 @@ def generate_presentation_plots(config):
         type=config.data.type, 
         transform=None,  # get_basic_transform(),
         batch_size=1, shuffle=False, num_workers=0,
-        preprocessed=config.data.preprocessed, return_train_format=False
+        preprocessed=config.data.preprocessed, return_train_format=False,
+        bev_normalized=config.data.normalization, 
+        bev_normalize_mode=config.data.normalization_mode
     )
 
     target_labels = [1, 255] if config.data.preprocessed else ([3] if config.data.name == "sud" else [104002])
@@ -340,7 +347,9 @@ def torch_tensor_loading(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     for batch in data_loader:
         point_cloud = batch[0]
@@ -429,7 +438,9 @@ def bev_segmentation_trying(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     for batch in data_loader:
         point_cloud = batch[0]
@@ -526,7 +537,9 @@ def bev_preprocessed_loading_working_testing(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1), 
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     bev_projection_testing(patch_gen=data_loader, atol=1e-4, dataset_name=config.data.name, save_path=f"./output/bev_projection_test_{config.data.name}.txt")
 
@@ -572,6 +585,8 @@ def bev_back_preprocessed_loading_working_testing(config):
             preprocessed=True, 
             return_train_format=True,
             return_dataset=True,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
         
         all_test_paths = test_3d_dataset.point_cloud_paths
@@ -613,7 +628,9 @@ def train_data_testing(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=1,
-                                    preprocessed=config.data.preprocessed, return_train_format=True)
+                                    preprocessed=config.data.preprocessed, return_train_format=True,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     for idx, (x_batch, y_batch) in enumerate(data_loader):
         print(f"Data check:")
@@ -644,7 +661,9 @@ def manhole_intensity_test(config):
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/manhole_intensity_{config.data.name}"
@@ -702,7 +721,9 @@ def manhole_BEV_intensity_test(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     path = f"./output/bev_image_manhole_investigation_{config.data.name}"
     if os.path.exists(path):
@@ -806,7 +827,9 @@ def BEV_investigation(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     path = f"./output/bev_channel_investigation_{config.data.name}"
     if os.path.exists(path):
@@ -920,7 +943,9 @@ def BEV_Density_investigation(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     path = f"./output/bev_density_{config.data.name}"
     if os.path.exists(path):
@@ -1027,7 +1052,9 @@ def bev_dataset_stat_investigation(config):
                                    num_workers=1,
                                    preprocessed=True, 
                                    return_train_format=True,
-                                   return_dataset=True)
+                                   return_dataset=True,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
     all_train_paths = train_dataset.point_cloud_paths
     train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
 
@@ -1059,7 +1086,9 @@ def manhole_3d_and_2d_intensity_test(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     path = f"./output/intensity_3d_2d_investigation_{config.data.name}"
     if os.path.exists(path):
@@ -1173,7 +1202,9 @@ def manhole_density_test(config):
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     total_result = dict()
 
@@ -1271,7 +1302,9 @@ def manhole_3d_and_2d_density_test(config):
                                     type="train", 
                                     transform=get_basic_transform(),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     n_manhole_pixels = []
     n_manhole_points = []
@@ -1356,7 +1389,9 @@ def circular_manhole_classification_test(config):
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/center_shape_check_{config.data.name}"
@@ -1408,7 +1443,9 @@ def center_robustnest_test(config):
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/center_estimation_stresstest_{config.data.name}"
@@ -1524,7 +1561,9 @@ def ransac_inlier_test(config):
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/ransac_inlier_test_{config.data.name}"
@@ -1586,7 +1625,9 @@ def ransac_downsampling_test(config):
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/ransac_downsampling_test_{config.data.name}"
@@ -1654,7 +1695,9 @@ def point_amount_check(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/center_estimation_stresstest_{config.data.name}"
@@ -1814,7 +1857,9 @@ def center_prediction_use_labels_as_candidates_test(config):
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/center_estimation_{config.data.name}"
@@ -1940,7 +1985,9 @@ def squares_circle_shape_test(config):
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/squares_circle_shape_{config.data.name}"
@@ -2027,7 +2074,9 @@ def classic_2D_pipeline_test(config):
                                     type=config.data.type, 
                                     transform=get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/center_estimation_2d_geomtry_{config.data.name}"
@@ -2063,7 +2112,9 @@ def make_split(config, test_size=0.2, val_size=0.1):
                                     type="all", 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=True, return_train_format=False)
+                                    preprocessed=True, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     dataset = data_loader.dataset
     paths = dataset.point_cloud_paths
@@ -2157,7 +2208,9 @@ def ground_truth_2d_map_test(config):
                                    num_workers=1,
                                    preprocessed=True, 
                                    return_train_format=True,
-                                   return_dataset=True)
+                                   return_dataset=True,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
     all_train_paths = train_dataset.point_cloud_paths
     train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
 
@@ -2246,7 +2299,9 @@ def ground_truth_2d_map_full_check(config):
                                    num_workers=1,
                                    preprocessed=True, 
                                    return_train_format=True,
-                                   return_dataset=True)
+                                   return_dataset=True,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
     all_train_paths = train_dataset.point_cloud_paths
     train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
 
@@ -2298,7 +2353,9 @@ def ground_truth_2d_and_3d_map_test(config):
                                    num_workers=1,
                                    preprocessed=True, 
                                    return_train_format=True,
-                                   return_dataset=True)
+                                   return_dataset=True,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
     all_train_paths = train_dataset.point_cloud_paths
     train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
 
@@ -2630,7 +2687,9 @@ def manhole_intensity_range_test(config):
                                     type="train", 
                                     transform=get_basic_transform(),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     whu_intensities = get_intensity_values(data_loader)
 
@@ -2638,7 +2697,9 @@ def manhole_intensity_range_test(config):
                                     type="train", 
                                     transform=get_basic_transform(),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     sud_intensities = get_intensity_values(data_loader)
 
@@ -2748,7 +2809,9 @@ def manhole_sample_counting(config):
                                             batch_size=1, shuffle=False, num_workers=0,
                                             preprocessed=config.data.preprocessed, 
                                             return_train_format=False,
-                                            return_dataset=True)
+                                            return_dataset=True,
+                                            bev_normalized=config.data.normalization, 
+                                            bev_normalize_mode=config.data.normalization_mode)
             all_paths = dataset.point_cloud_paths
             dataset = BEVDataset(path=all_paths, 
                                     file_paths=[], 
@@ -2940,7 +3003,9 @@ def calculate_intensity_statistics(config):
             shuffle=False,
             num_workers=0,
             preprocessed=False,
-            return_train_format=False
+            return_train_format=False,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
 
         all_intensities_3d = []
@@ -3017,7 +3082,9 @@ def calculate_intensity_statistics(config):
             shuffle=False,
             num_workers=0,
             preprocessed=True,
-            return_train_format=False
+            return_train_format=False,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
 
         all_intensities_2d = []
@@ -3167,7 +3234,9 @@ def calculate_dataset_statistics(config, max_percentile_samples=500_000):
             shuffle=False,
             num_workers=0,
             preprocessed=True,
-            return_train_format=False
+            return_train_format=False,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
 
         # Accumulators for 4 features: [X, Y, Z, Intensity]
@@ -3249,7 +3318,9 @@ def calculate_dataset_statistics(config, max_percentile_samples=500_000):
             num_workers=0,
             preprocessed=True,
             return_train_format=False,
-            bev_normalized=False
+            bev_normalized=False,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
 
         counts_2d = np.zeros(4, dtype=np.int64)
@@ -3357,7 +3428,9 @@ def calculate_max_density(config):
             shuffle=False, 
             num_workers=0,
             preprocessed=True, 
-            return_train_format=False
+            return_train_format=False,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
 
         pixel_counts_list = []
@@ -3410,7 +3483,9 @@ def analyze_point_cloud_resolution(config, num_patches=3, patch_size_m=0.5):
         shuffle=False, 
         num_workers=1,
         preprocessed=config.data.preprocessed, 
-        return_train_format=False
+        return_train_format=False,
+        bev_normalized=config.data.normalization, 
+        bev_normalize_mode=config.data.normalization_mode
     )
 
     # Reset Output-Folder
@@ -3503,7 +3578,9 @@ def analyze_point_cloud_resolution_upgraded(config, raster_size=0.8, grid_size=0
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
     path = f"./output/pc_resolution_check"
@@ -3604,7 +3681,6 @@ def analyze_point_cloud_resolution_upgraded(config, raster_size=0.8, grid_size=0
     print("successfull finish resolution check!")
 
 
-from sklearn.linear_model import RANSACRegressor, LinearRegression
 
 def extract_scanlines_ransac(points_2d, residual_threshold=0.005, min_points=10):
     remaining_points = points_2d.copy()
@@ -3655,10 +3731,12 @@ def auto_point_cloud_resolution_finder(config, max_distance=0.01):
                                     type=config.data.type, 
                                     transform=None,  # get_basic_transform(num_points=-1),
                                     batch_size=1, shuffle=False, num_workers=0,
-                                    preprocessed=config.data.preprocessed, return_train_format=False)
+                                    preprocessed=config.data.preprocessed, return_train_format=False,
+                                    bev_normalized=config.data.normalization, 
+                                    bev_normalize_mode=config.data.normalization_mode)
 
     # clear save path
-    path = f"./output/pc_resolution_auto_compute"
+    path = f"./output/pc_resolution_auto_compute_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
     # save_dir_creation(path)
@@ -3946,6 +4024,333 @@ def auto_point_cloud_resolution_finder(config, max_distance=0.01):
     print(f"successfull finish resolution check!\nSaved result: '{result_path}'")
 
 
+def visualize_patch_heights_and_scala(batch, path):
+    """Visualizes 2D and 3D patch heights alongside colorbar scales and cross-section
+
+    profiles to verify if height values are upright or inverted.
+    """
+
+    # 1. Extract inputs (assuming standard BEV tensor format: [C, H, W] or [H, W, C])
+    pixel_values = batch["pixel_values"].detach().cpu().numpy()
+    if pixel_values.ndim == 3 and pixel_values.shape[0] in [1, 3, 4, 5]:
+        # Convert C, H, W -> H, W, C
+        pixel_values = np.transpose(pixel_values, (1, 2, 0))
+
+    # Channel 0 is commonly height / max height in BEV projections
+    height_2d = pixel_values[:, :, 0]
+
+    # 2. Extract or mock 3D ground-truth height map for comparison
+    # If 3d map exists in batch/disk, extract it, otherwise extract z-coordinates
+    if "gt_3d_map" in batch:
+        height_3d = batch["gt_3d_map"].detach().cpu().numpy()
+        if height_3d.ndim == 3:
+            height_3d = height_3d[:, :, 0]
+    else:
+        # Fallback using normalized or inverse height channel if secondary channel present
+        height_3d = (
+            pixel_values[:, :, 1]
+            if pixel_values.shape[-1] > 1
+            else np.flipud(height_2d)
+        )
+
+    # 3. Compute cross-sections through center pixel
+    mid_y, mid_x = height_2d.shape[0] // 2, height_2d.shape[1] // 2
+    profile_2d_x = height_2d[mid_y, :]
+    profile_3d_x = height_3d[mid_y, :]
+
+    # 4. Compute difference map to detect polarity inversion
+    diff_map = height_3d - height_2d
+
+    # 5. Plotting Pipeline
+    fig = plt.figure(figsize=(20, 10))
+    gs = fig.add_gridspec(2, 4, height_ratios=[1.2, 1])
+
+    # Subplot 1: 2D Channel Height Map
+    ax1 = fig.add_subplot(gs[0, 0])
+    im1 = ax1.imshow(height_2d, cmap="turbo", origin="lower")
+    ax1.set_title(
+        f"2D Patch Height (Ch 0)\nMin: {height_2d.min():.3f}, Max: {height_2d.max():.3f}"
+    )
+    plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04, label="Height (m)")
+
+    # Subplot 2: 3D Reference / GT Height Map
+    ax2 = fig.add_subplot(gs[0, 1])
+    im2 = ax2.imshow(height_3d, cmap="turbo", origin="lower")
+    ax2.set_title(
+        f"3D Patch Height\nMin: {height_3d.min():.3f}, Max: {height_3d.max():.3f}"
+    )
+    plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04, label="Height (m)")
+
+    # Subplot 3: Height Difference Map (3D - 2D)
+    ax3 = fig.add_subplot(gs[0, 2])
+    im3 = ax3.imshow(diff_map, cmap="coolwarm", origin="lower")
+    ax3.set_title(
+        f"Difference (3D - 2D)\nMean Diff: {diff_map.mean():.4f}"
+    )
+    plt.colorbar(
+        im3, ax=ax3, fraction=0.046, pad=0.04, label="Delta Height (m)"
+    )
+
+    # Subplot 4: Height Histogram / Distribution
+    ax4 = fig.add_subplot(gs[0, 3])
+    ax4.hist(
+        height_2d.ravel(),
+        bins=40,
+        alpha=0.6,
+        color="blue",
+        label="2D Height Ch",
+    )
+    ax4.hist(
+        height_3d.ravel(),
+        bins=40,
+        alpha=0.6,
+        color="orange",
+        label="3D Height GT",
+    )
+    ax4.set_title("Height Value Distributions")
+    ax4.set_xlabel("Height (m)")
+    ax4.set_ylabel("Pixel Frequency")
+    ax4.legend()
+    ax4.grid(True, linestyle="--", alpha=0.5)
+
+    # Subplot 5: Center Slice Profile (X-Axis Cross Section)
+    ax5 = fig.add_subplot(gs[1, :2])
+    ax5.plot(
+        profile_2d_x, label="2D Patch Slice (Y=Center)", color="blue", lw=2
+    )
+    ax5.plot(
+        profile_3d_x,
+        label="3D Patch Slice (Y=Center)",
+        color="orange",
+        linestyle="--",
+        lw=2,
+    )
+    ax5.axhline(0, color="gray", linestyle=":", alpha=0.7)
+    ax5.set_title("Mid-Slice Height Profile (X-Axis Transverse)")
+    ax5.set_xlabel("Pixel Index (X)")
+    ax5.set_ylabel("Height Value (m)")
+    ax5.legend()
+    ax5.grid(True, linestyle="--", alpha=0.6)
+
+    # Subplot 6: Orientation Diagnostic Text Indicator
+    ax6 = fig.add_subplot(gs[1, 2:])
+    ax6.axis("off")
+
+    # Inversion heuristic test
+    correlation = np.corrcoef(height_2d.ravel(), height_3d.ravel())[0, 1]
+    is_inverted = correlation < 0
+
+    status_color = "red" if is_inverted else "green"
+    status_text = "INVERTED (-Z)" if is_inverted else "CORRECT (+Z)"
+
+    diagnostic_msg = (
+        f"--- HEIGHT DIAGNOSTIC ---\n\n"
+        f"Status: {status_text}\n"
+        f"Pearson Correlation (2D vs 3D): {correlation:.4f}\n\n"
+        f"• 2D Range: [{height_2d.min():.3f}, {height_2d.max():.3f}]\n"
+        f"• 3D Range: [{height_3d.min():.3f}, {height_3d.max():.3f}]\n\n"
+        f"Tip: If correlation is close to -1.0 or profiles mirror each other\n"
+        f"across the axis, flip the channel: height = -1 * height"
+    )
+
+    ax6.text(
+        0.1,
+        0.5,
+        diagnostic_msg,
+        fontsize=12,
+        verticalalignment="center",
+        bbox=dict(
+            boxstyle="round,pad=0.8",
+            facecolor="lightyellow",
+            edgecolor=status_color,
+            lw=2,
+        ),
+    )
+
+    plt.suptitle(
+        f"Height Scale & Inversion Check",
+        fontsize=16,
+        weight="bold",
+    )
+    plt.tight_layout()
+
+    plt.savefig(path, dpi=300)
+    plt.close(fig)
+    print(f"Height visualization saved to '{path}'")
+
+
+def height_2d_and_3d_test(config):
+    print("\n --- Center Estimation (with labels) ---")
+
+    if config.data.name == "sud":
+        # label_value = (1, 255) if config.data.preprocessed else 3
+        label_value = 1 if config.data.preprocessed else 3
+    else:
+        # label_value = (1, 255) if config.data.preprocessed else 104002
+        label_value = 1 if config.data.preprocessed else 104002
+
+    print("Loading Data...")
+    train_dataset = get_data_loader(config.data.name, 
+                                   config.data.path, 
+                                   type="train", 
+                                   transform=get_basic_transform(),
+                                   batch_size=1, 
+                                   shuffle=False, 
+                                   num_workers=1,
+                                   preprocessed=True, 
+                                   return_train_format=True,
+                                   return_dataset=True,
+                                   bev_normalized=False)
+    all_train_paths = train_dataset.point_cloud_paths
+    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
+
+    all_file_paths = train_dataset.file_paths
+
+    path = f"./output/mcr_height_test_{config.data.name}"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    # save_dir_creation(path)
+    os.makedirs(path, exist_ok=True)
+
+    for idx, batch in enumerate(train_dataset):
+        file_name = os.path.split(all_file_paths[idx])[-1]
+        file_name = ".".join(file_name.split(".")[:-1])  # Remove extension
+        full_file_path = os.path.join(path, f"height_check_{file_name}.png")
+
+        # x = batch["pixel_values"].detach().cpu().permute(1, 2, 0).numpy()
+        # # x = np.permute_dims(x, (1, 2, 0))
+        # y = batch["labels"].detach().cpu().numpy()
+        # # y[y == 255] = 0
+        # y = np.ma.masked_where(y == 255, y)
+        # # find the created gt map (if there is one)
+        # file_name = os.path.split(all_file_paths[idx])[-1]
+        # pc_id, x_start, y_start = train_dataset.extract_grid_identifier(file_name)
+
+        # gt_path = f"./2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}.npy"
+        # if not os.path.exists(gt_path):
+        #     continue
+
+        # gt_2d_map = np.load(gt_path)
+
+        # gt_path = f"./2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}_3d.npy"
+        # if not os.path.exists(gt_path):
+        #     raise ValueError(f"Can find 2D Heatmap but not 3D heatmap: '{gt_path}'")
+
+        # gt_3d_map = np.load(gt_path)
+        # gt_3d_map = np.mean(gt_3d_map[:, :]).reshape(gt_3d_map.shape[:-2])
+
+        visualize_patch_heights_and_scala(batch, path=full_file_path)
+        
+
+    print("Successfull finished!")
+
+
+
+def count_shared_manholes_test(config):
+    print("\n --- Overlapping Manhole Detection Test ---")
+
+    label_value = 1 if config.data.preprocessed else (3 if config.data.name == "sud" else 104002)
+
+    print("Loading Data...")
+    train_dataset = get_data_loader(
+        config.data.name, 
+        config.data.path, 
+        type="train", 
+        transform=get_basic_transform(),
+        batch_size=1, 
+        shuffle=False, 
+        num_workers=1,
+        preprocessed=True, 
+        return_train_format=True,
+        return_dataset=True,
+        bev_normalized=False
+    )
+    
+    all_train_paths = train_dataset.point_cloud_paths
+    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
+    all_file_paths = train_dataset.file_paths
+
+    # Set spatial parameters based on your patch generation:
+    # If x_start / y_start in filename are pixel offsets, resolution is meters/pixel.
+    # If x_start / y_start are already meter offsets, set resolution to pixel scale and multiplier to 1.
+    resolution = getattr(config.data, "resolution", 1.0) 
+    
+    # Matching radius (in same units as x_start/y_start, e.g., meters or pixels)
+    # A threshold of 5-10 pixels or 0.5m accounts for small centroid differences across crops.
+    matching_distance_threshold = getattr(config.data, "manhole_matching_threshold", 0.5)
+
+    # Stores detected physical manholes:
+    # [{'pc_id': str, 'pos': np.array([x, y]), 'tiles': set([file_name1, file_name2])}]
+    global_manholes = []
+
+    for idx, batch in enumerate(train_dataset):
+        file_path = all_file_paths[idx]
+        file_name = os.path.basename(file_path)
+        
+        # 1. Extract and cast grid identifiers from string to float/int
+        pc_id, str_x_start, str_y_start = train_dataset.extract_grid_identifier(file_name)
+        x_start = float(str_x_start)
+        y_start = float(str_y_start)
+
+        # Extract binary mask for ground truth labels
+        labels = batch["labels"].detach().cpu().numpy().squeeze()
+        binary_mask = (labels == label_value)
+
+        if not np.any(binary_mask):
+            continue
+
+        # 2. Extract connected regions (individual manholes in this tile)
+        labeled_mask, num_features = label(binary_mask)
+        if num_features == 0:
+            continue
+
+        # 3. Get pixel centroids (local y, local x) for each manhole
+        centroids_pixel = center_of_mass(binary_mask, labeled_mask, range(1, num_features + 1))
+
+        # 4. Map local centroids to global coordinates & match across tiles
+        for local_y, local_x in centroids_pixel:
+            # Global position = patch start offset + local pixel offset * resolution
+            global_x = x_start + (local_x * resolution)
+            global_y = y_start + (local_y * resolution)
+            current_pos = np.array([global_x, global_y])
+
+            matched = False
+            for mh in global_manholes:
+                # Only compare against manholes from the same parent point cloud (pc_id)
+                if mh['pc_id'] == pc_id:
+                    dist = np.linalg.norm(mh['pos'] - current_pos)
+                    if dist <= matching_distance_threshold:
+                        mh['tiles'].add(file_name)
+                        matched = True
+                        break
+
+            if not matched:
+                global_manholes.append({
+                    'pc_id': pc_id,
+                    'pos': current_pos,
+                    'tiles': {file_name}
+                })
+
+    # --- Summary Statistics ---
+    total_unique_manholes = len(global_manholes)
+    single_tile_manholes = sum(1 for m in global_manholes if len(m['tiles']) == 1)
+    shared_manholes = sum(1 for m in global_manholes if len(m['tiles']) > 1)
+
+    bev_overlap_counts = defaultdict(int)
+    for m in global_manholes:
+        bev_overlap_counts[len(m['tiles'])] += 1
+
+    print("\n--- Overlap Analysis Results ---")
+    print(f"Total Unique Physical Manholes: {total_unique_manholes}")
+    print(f"Manholes in ONLY 1 BEV tile:   {single_tile_manholes}")
+    print(f"Manholes shared by >1 BEV tiles: {shared_manholes}")
+    print("\nDetailed Distribution (BEV Count -> Manhole Count):")
+    for count in sorted(bev_overlap_counts.keys()):
+        print(f"  - Visible in {count} BEVs: {bev_overlap_counts[count]} manholes")
+
+    print("\nSuccessfully finished!")
+
+
 
 # --------------
 # > Playground <
@@ -4011,6 +4416,8 @@ def tryout(config):
     auto_point_cloud_resolution_finder(config, max_distance=0.05)
 
     # ground_truth_2d_map_full_check(config)
+
+    # height_2d_and_3d_test(config)
 
 
 

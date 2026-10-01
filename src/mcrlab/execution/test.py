@@ -323,6 +323,8 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
             preprocessed=True, 
             return_train_format=True,
             return_dataset=True,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
         all_test_paths = test_loader_raw.point_cloud_paths
 
@@ -337,6 +339,8 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
             preprocessed=True, 
             return_train_format=True,
             return_dataset=True,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
         all_test_paths.extend(test_loader_raw.point_cloud_paths)
     else:
@@ -351,6 +355,8 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
             preprocessed=True, 
             return_train_format=True,
             return_dataset=True,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
         
         all_test_paths = test_loader_raw.point_cloud_paths
@@ -575,7 +581,16 @@ def evaluate_hf_pipeline(config, use_all_test_data, use_testset_1=True, print_ou
 
 
 
-def predict_single_sample(model, model_name, processor, image, device="cuda"):
+def predict_single_sample(
+    model, 
+    model_name, 
+    processor, 
+    image, 
+    device="cuda",
+    using_heatmap_as_gt=False, 
+    as_prob=True, 
+    manhole_class_idx=1
+):
 
     model.to(device)
     model.eval()
@@ -616,7 +631,10 @@ def predict_single_sample(model, model_name, processor, image, device="cuda"):
         outputs, 
         model_name=model_name,
         processor=processor, 
-        target_sizes=target_sizes
+        target_sizes=target_sizes,
+        using_heatmap_as_gt=using_heatmap_as_gt, 
+        as_prob=as_prob, 
+        manhole_class_idx=manhole_class_idx
     )
 
     return prediction
@@ -652,10 +670,13 @@ def test(config):
         # ["tu-samvit_huge_patch16.sa1b", "tu-maxvit_xlarge_tf_512", "tu-beit_large_patch16_512.in22k_ft_in22k_in1k"]
     ]
     checkpoint_paths = [  # dont forget to adjust the norm in the settings
-        ["/out/checkpoints/2d/2026_09_17_10_30_unet_whu_seg_norm_check_unet_teb7_no_norm/checkpoint-476",
-        "/out/checkpoints/2d/2026_09_17_12_10_unet_whu_seg_norm_check_unet_teb7_local_minmax/checkpoint-1530",
-        "/out/checkpoints/2d/2026_09_17_13_45_unet_whu_seg_norm_check_unet_teb7_global_minmax/checkpoint-1343",
-        "/out/checkpoints/2d/2026_09_17_15_22_unet_whu_seg_norm_check_unet_teb7_local_standard/checkpoint-1445"],
+        [
+
+        ],
+        # ["/out/checkpoints/2d/2026_09_17_10_30_unet_whu_seg_norm_check_unet_teb7_no_norm/checkpoint-476",
+        # "/out/checkpoints/2d/2026_09_17_12_10_unet_whu_seg_norm_check_unet_teb7_local_minmax/checkpoint-1530",
+        # "/out/checkpoints/2d/2026_09_17_13_45_unet_whu_seg_norm_check_unet_teb7_global_minmax/checkpoint-1343",
+        # "/out/checkpoints/2d/2026_09_17_15_22_unet_whu_seg_norm_check_unet_teb7_local_standard/checkpoint-1445"],
         # ["/out/checkpoints/2d/2026_09_14_12_19_unet_whu_comparison_1_teb7_improved_norm_v3_minmax"]
         # ["/out/checkpoints/2d/checkpoints/2026_07_17_22_10_unet_whu_comparison_1_teb7/checkpoint-702"],
         # ["/out/checkpoints/2d/checkpoints/2026_09_07_09_48_unet_whu_comparison_1_teb7_improved_norm_v2_minmax/checkpoint-595",
@@ -716,14 +737,21 @@ def test(config):
             config.model.encoder = encoder
             config.model.check_point_path = path
 
-            if "local_minmax" in path:
-                config.data.normalization = "local_minmax"
-            elif "global_minmax" in path:
-                config.data.normalization = "global_minmax"
-            elif "local_standard" in path:  
-                config.data.normalization = "local_standard"
-            elif "no_norm" in path or "no_normalization" in path:
-                config.data.normalization = "none"
+            config.data.normalization = True
+            config.data.normalization_mode = "global_minmax"
+
+            # if "local_minmax" in path:
+            #     config.data.normalization = True
+            #     config.data.normalization_mode = "local_minmax"
+            # elif "global_minmax" in path:
+            #     config.data.normalization = True
+            #     config.data.normalization_mode = "global_minmax"
+            # elif "local_standard" in path:  
+            #     config.data.normalization = True
+            #     config.data.normalization_mode = "global_standard"
+            # elif "no_norm" in path or "no_normalization" in path:
+            #     config.data.normalization = False
+            #     config.data.normalization_mode = "none"
 
 
             evaluate_hf_pipeline(config, use_all_test_data=False, use_testset_1=True, print_out_results=False)

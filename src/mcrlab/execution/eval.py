@@ -30,8 +30,9 @@ from mcrlab.metrices import mask_to_polygon
 # > Debugging helper <
 # --------------------
 def plot_center_prediction_debug(
-    pixel_values, labels, preds_prob, preds_binary, preds_closed, 
-    extracted_centers, gt_centers, pc_points, meta, pc_id, idx, save_dir
+    pixel_values, labels, labeled_preds, preds_prob, preds_binary, preds_closed, 
+    extracted_centers, gt_centers, pc_points, meta, pc_id, idx, save_dir,
+    num_preds
 ):
     """
     Generates a 6-panel visual diagnostic grid to isolate failures between 
@@ -60,8 +61,8 @@ def plot_center_prediction_debug(
     labeled_gt, num_gt = label((labels_clean > 0).astype(int))
     gt_colored = np.where(labeled_gt > 0, labeled_gt, np.nan)
     # colormaps (we want different colors)
-    cmap_pred = plt.cm.get_cmap("tab10", max(num_preds, 1))
-    cmap_gt = plt.cm.get_cmap("Set1", max(num_gt, 1))
+    cmap_pred = plt.colormaps.get_cmap("tab10").resampled(max(num_preds, 1))
+    cmap_gt = plt.colormaps.get_cmap("Set1").resampled(max(num_preds, 1))
     
     # Plotting
     # Panel 1: Ground Truth Mask / Heatmap
@@ -370,7 +371,17 @@ def merge_nearby_centers(centers, dist_threshold=0.8):
 
 
 
-def make_prediction(pixel_values, model, model_name, labels, min_confidence, ignore_index):
+def make_prediction(
+    pixel_values, 
+    model, 
+    model_name, 
+    labels, 
+    min_confidence, 
+    ignore_index, 
+    using_heatmap_as_gt,
+    as_prob=True, 
+    manhole_class_idx=1
+):
     if isinstance(pixel_values, np.ndarray):
         pixel_values = torch.from_numpy(pixel_values)
 
@@ -380,7 +391,14 @@ def make_prediction(pixel_values, model, model_name, labels, min_confidence, ign
     # print(f"Pixel Value Shape: {pixel_values.shape}")
     # [1, 3, 500, 500]
     # make center prediction
-    preds = predict_single_sample(model, model_name, None, pixel_values)
+    preds = predict_single_sample(
+        model, 
+        model_name, 
+        None, 
+        pixel_values,
+        using_heatmap_as_gt=using_heatmap_as_gt, 
+        as_prob=True, 
+        manhole_class_idx=1)
     # print(f"DEBUGGING 1, shape: {preds.shape}")
     # [1, 500, 500]
 
@@ -406,9 +424,14 @@ def center_eval(config):
     model_name = config.model.name.lower()
 
     enable_debug = getattr(config.center_eval, "save_debug_plots", False)
-    min_confidence = getattr(config.center_eval, "min_confidence")
+    min_confidences = getattr(config.center_eval, "min_confidences")
     min_confidence_peak = getattr(config.center_eval, "min_confidence_peak")
     candidate_min_points = getattr(config.center_eval, "candidate_min_points")
+
+    if model_name == "traditional":
+        min_confidences = [-999]
+
+    print(f"Confidences: {min_confidences}")
     
     # extract params
     heatmap_path = config.data.heatmap_path
@@ -445,6 +468,12 @@ def center_eval(config):
     pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
     normalization = config.data.normalization
     normalization_mode = config.data.normalization_mode
+
+    if heatmap_path is None or heatmap_path == "None":
+        using_heatmap_as_gt = False
+        heatmap_path = None
+    else:
+        using_heatmap_as_gt = True
     
     extraction_method_name = getattr(config.center_eval, "center_extraction_method", "polygon_centroid")
     if extraction_method_name not in CENTER_EXTRACTION_STRATEGIES:
@@ -454,229 +483,275 @@ def center_eval(config):
     print(f"Using center extraction strategy: {extraction_method_name}")
 
     for cur_dataset in ["whu", "sud"]:
-        result = []
-        debug_save_dir = Path(f"./output/center_eval/debug_plots_{exp_name}_{cur_dataset}")
+        # result list over all thresholds of one dataset
+        all_dataset_results = []
 
-        # save_dir_creation(str(debug_save_dir))
-        os.makedirs(str(debug_save_dir), exist_ok=True)
-        shutil.rmtree(str(debug_save_dir))
-        # save_dir_creation(str(debug_save_dir))
-        os.makedirs(str(debug_save_dir), exist_ok=True)
+        for min_confidence in min_confidences:
+            raw_threshold_results = []
+
+            debug_save_dir = Path(f"./output/center_eval/debug_plots_{exp_name}_{cur_dataset}_{min_confidence}")
+            # save_dir_creation(str(debug_save_dir))
+            os.makedirs(str(debug_save_dir), exist_ok=True)
+            shutil.rmtree(str(debug_save_dir))
+            # save_dir_creation(str(debug_save_dir))
+            os.makedirs(str(debug_save_dir), exist_ok=True)
 
 
-        test_3d_dataset = get_data_loader(
-            cur_dataset, 
-            config.data.path if cur_dataset == "whu" else config.data.path_2, 
-            type="test",
-            transform=get_basic_transform(),
-            batch_size=1, 
-            shuffle=False, 
-            num_workers=4,
-            preprocessed=True, 
-            return_train_format=True,
-            return_dataset=True,
-        )
-        
-        all_test_paths = test_3d_dataset.point_cloud_paths
-
-        test_bev_dataset = BEVDataset(
-            path=all_test_paths, 
-            file_paths=[], 
-            has_labels=True, 
-            image_training=True, 
-            preprocessor=processor,
-            augment=False,
-            pass_label_in_preprocessor=pass_label_in_preprocessor,
-            heatmap_gt_path=heatmap_path,
-            used_heatmap_channel=used_heatmap_channel,
-            normalize=normalization, 
-            normalization_mode=normalization_mode
-        )
-
-        all_pc_ids = set()
-
-        for idx, cur_data_path in tqdm(enumerate(all_test_paths), total=len(all_test_paths), desc="2D Center Pipe"):
-            pc_id, x_start, y_start = test_bev_dataset.extract_grid_identifier(cur_data_path)
-
-            all_pc_ids.add(pc_id)
-
-            # get data
-            bev_dict = next(test_bev_dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True))
-            meta = bev_dict["meta"]
-            pixel_values = bev_dict["pixel_values"]
-            labels = bev_dict["labels"]
+            test_3d_dataset = get_data_loader(
+                cur_dataset, 
+                config.data.path if cur_dataset == "whu" else config.data.path_2, 
+                type="test",
+                transform=get_basic_transform(),
+                batch_size=1, 
+                shuffle=False, 
+                num_workers=4,
+                preprocessed=True, 
+                return_train_format=True,
+                return_dataset=True,
+                bev_normalized=config.data.normalization, 
+                bev_normalize_mode=config.data.normalization_mode
+            )
             
-            # pc = test_3d_dataset[idx]  # -> wrong patch?
-            pc, pc_labels = test_3d_dataset.get_patch_via_identifier(pc_id, x_start, y_start)
-            # [type(x) for x in pc]=[<class 'torch.Tensor'>, <class 'torch.Tensor'>]
-            # [x.shape for x in pc]=[torch.Size([424, 4]), torch.Size([424, 1])]
-            # print(f"{type(pc)=}")
-            # print(f"{[type(x) for x in pc]=}")
-            # print(f"{[x.shape for x in pc]=}")
+            all_test_paths = test_3d_dataset.point_cloud_paths
 
-            pixel_values = pixel_values.unsqueeze(0)
+            test_bev_dataset = BEVDataset(
+                path=all_test_paths, 
+                file_paths=[], 
+                has_labels=True, 
+                image_training=True, 
+                preprocessor=processor,
+                augment=False,
+                pass_label_in_preprocessor=pass_label_in_preprocessor,
+                heatmap_gt_path=heatmap_path,
+                used_heatmap_channel=used_heatmap_channel,
+                normalize=normalization, 
+                normalization_mode=normalization_mode
+            )
+
+            all_pc_ids = set()
+
+            for idx, cur_data_path in tqdm(enumerate(all_test_paths), total=len(all_test_paths), desc="2D Center Pipe"):
+                pc_id, x_start, y_start = test_bev_dataset.extract_grid_identifier(cur_data_path)
+
+                all_pc_ids.add(pc_id)
+
+                # get data
+                bev_dict = next(test_bev_dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True))
+                meta = bev_dict["meta"]
+                pixel_values = bev_dict["pixel_values"]
+                labels = bev_dict["labels"]
+                
+                # pc = test_3d_dataset[idx]  # -> wrong patch?
+                pc, pc_labels = test_3d_dataset.get_patch_via_identifier(pc_id, x_start, y_start)
+                # [type(x) for x in pc]=[<class 'torch.Tensor'>, <class 'torch.Tensor'>]
+                # [x.shape for x in pc]=[torch.Size([424, 4]), torch.Size([424, 1])]
+                # print(f"{type(pc)=}")
+                # print(f"{[type(x) for x in pc]=}")
+                # print(f"{[x.shape for x in pc]=}")
+
+                pixel_values = pixel_values.unsqueeze(0)
+
+                # -----------------
+                # Manhole Search
+                if model_name == "traditional":
+                    # print(f"Shape check, should be [C, W, H]: {pixel_values.shape}")
+                    centers = get_manhole_candidates_hough(bev_image=pixel_values, resolution=0.01)
+                    
+                    for elem in centers:
+                        center_x, center_y = elem["center_px"][0], elem["center_px"][1]
+                        center = transform_pixel_to_3d(pc, center_x, center_y, meta)
+                        raw_threshold_results = add_to_result(raw_threshold_results, cur_dataset, pc_id, {"x": center[0], "y": center[1], "z": center[2]})
+                else:
+                    preds_prob, preds_binary, valid_mask, preds, gt_labels_numpy, pixel_values = make_prediction(
+                        pixel_values, 
+                        model, 
+                        model_name, 
+                        labels, 
+                        min_confidence, 
+                        ignore_index,
+                        using_heatmap_as_gt,
+                        as_prob=True, 
+                        manhole_class_idx=1)
+
+                    orig_h, orig_w = int(meta["tile_size"] / meta["resolution"]), int(meta["tile_size"] / meta["resolution"])
+                    pred_h, pred_w = preds_binary.shape
+                        
+                    struct = generate_binary_structure(2, 2)  # 8-Nachbarschaft
+                    # bigger neighborhood against a problem, where multiple predictions are made due to little riffles
+                    preds_closed = binary_closing(preds_binary, structure=struct, iterations=8).astype(np.uint8)
+                    labeled_preds, num_pred_objects = label(preds_closed)
+
+                    extracted_pixel_centers = []
+                    gt_pixel_centers = []
+
+                    # ONLY FOR DEBUGGING:
+                    # extract GT center from labels
+                    # labels[labels == ignore_index] = 0
+                    labels_clean = np.where(gt_labels_numpy == ignore_index, 0, gt_labels_numpy)
+                    # close gaps
+                    labels_binary = (labels_clean >= min_confidence).astype(np.uint8)
+                    labels_binary = np.squeeze(labels_binary)
+                    struct = generate_binary_structure(2, 2)
+                    labels_closed = binary_closing(labels_binary, structure=struct, iterations=8).astype(np.uint8)
+
+                    if np.any(labels_closed > 0):
+                        gt_labeled, num_gt = label(labels_closed)
+                        for g_i in range(1, num_gt + 1):
+                            gt_mask = (gt_labeled == g_i)
+                            
+                            # Skip small noise components with less than 4 pixels
+                            if np.count_nonzero(gt_mask) < 20:
+                                continue
+                                
+                            g_coords = extract_center_fn(
+                                pred_mask=gt_mask,
+                                prediction=labels_closed if not using_heatmap_as_gt else labels_clean.astype(np.float32),
+                                mask_to_polygon_fn=mask_to_polygon,
+                                fit_circle_fn=fit_circle_least_squares
+                            )
+                            if g_coords is not None:
+                                gt_pixel_centers.append(g_coords)
+                    
+                    # -----------------
+                    # Prediction Center Extraction
+                    for p_idx in range(1, num_pred_objects + 1):
+                        pred_mask = (labeled_preds == p_idx)
+
+                        if np.sum(pred_mask) < candidate_min_points:
+                            continue
+                        
+                        # Extract center using the selected strategy function
+                        center_coords = extract_center_fn(
+                            pred_mask=pred_mask,
+                            prediction=preds_prob,
+                            mask_to_polygon_fn=mask_to_polygon,
+                            fit_circle_fn=fit_circle_least_squares,
+                            min_confidence_peak=min_confidence_peak
+                        )
+
+                        if center_coords is None:
+                            continue
+
+                        center_x, center_y = center_coords
+                        extracted_pixel_centers.append((center_x, center_y))
+
+                        # Transform 2D pixel center to 3D point
+                        center = bev_pixel_to_3d(
+                            patch_points=pc,
+                            pixel_x=center_x,
+                            pixel_y=center_y,
+                            origin_x=meta["origin_x"],
+                            origin_y=meta["origin_y"],
+                            resolution=meta["resolution"],
+                            search_radius=None,
+                            tile_size=meta["tile_size"],
+                            invert_y=False,
+                            invert_x=False
+                        )
+
+                        # print(f"Center shape: {center.shape}")
+                        if center is None or len(center) < 3:
+                            print(f"[Warning] Skipped a center prediction -> pred: {center}")
+                            continue
+                        
+                        cur_center_point = {
+                            "x": center[0],
+                            "y": center[1],
+                            "z": center[2],
+                            "confidence": min_confidence
+                        }
+                        
+                        raw_threshold_results = add_to_result(raw_threshold_results, cur_dataset, pc_id, cur_center_point)
+
+                    # --- Execute Debug Plotting ---
+                    labels_np = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else labels
+                    if enable_debug and (num_pred_objects > 0 or np.any(labels_np > 0)):
+                        plot_center_prediction_debug(
+                            pixel_values=pixel_values,
+                            labels=labels_np,
+                            labeled_preds=labeled_preds,
+                            preds_prob=preds_prob,
+                            preds_binary=preds_binary,
+                            preds_closed=preds_closed,
+                            extracted_centers=extracted_pixel_centers,
+                            gt_centers=gt_pixel_centers,
+                            pc_points=pc,
+                            meta=meta,
+                            pc_id=pc_id,
+                            idx=idx,
+                            save_dir=debug_save_dir,
+                            num_preds=num_pred_objects
+                        )
 
             # -----------------
-            # Manhole Search
-            if model_name == "traditional":
-                # print(f"Shape check, should be [C, W, H]: {pixel_values.shape}")
-                centers = get_manhole_candidates_hough(bev_image=pixel_values, resolution=0.01)
-                
-                for elem in centers:
-                    center_x, center_y = elem["center_px"][0], elem["center_px"][1]
-                    center = transform_pixel_to_3d(pc, center_x, center_y, meta)
-                    result = add_to_result(result, cur_dataset, pc_id, {"x": center[0], "y": center[1], "z": center[2]})
-            else:
-                preds_prob, preds_binary, valid_mask, preds, gt_labels_numpy, pixel_values = make_prediction(pixel_values, model, model_name, labels, min_confidence, ignore_index)
+            # Post Processing
+            # Merge nearby predictions
+            print(f"Post-processing center predictions for {cur_dataset} (merging duplicates from patch overlaps).")
+            
+            threshold_merged_results = []
 
-                orig_h, orig_w = int(meta["tile_size"] / meta["resolution"]), int(meta["tile_size"] / meta["resolution"])
-                pred_h, pred_w = preds_binary.shape
-                    
-                struct = generate_binary_structure(2, 2)  # 8-Nachbarschaft
-                # bigger neighborhood against a problem, where multiple predictions are made due to little riffles
-                preds_closed = binary_closing(preds_binary, structure=struct, iterations=8).astype(np.uint8)
-                labeled_preds, num_pred_objects = label(preds_closed)
+            for cur_result in raw_threshold_results:
+                target_pc_id = cur_result["pointcloud-id"]
+                target_confidence = min_confidence
+                centers = cur_result.get("centers", [])
 
-                extracted_pixel_centers = []
-                gt_pixel_centers = []
+                if not centers:
+                    continue
 
-                # ONLY FOR DEBUGGING:
-                # extract GT center from labels
-                # labels[labels == ignore_index] = 0
-                labels_clean = np.where(gt_labels_numpy == ignore_index, 0, gt_labels_numpy)
-                # close gaps
-                labels_binary = (labels_clean >= min_confidence).astype(np.uint8)
-                labels_binary = np.squeeze(labels_binary)
-                struct = generate_binary_structure(2, 2)
-                labels_closed = binary_closing(labels_binary, structure=struct, iterations=8).astype(np.uint8)
+                for pt in centers:
+                    if pt.get("confidence", -999) != target_confidence:
+                        raise ValueError(f"Found another confidence inside ofthe current result.")
 
-                if np.any(labels_closed > 0):
-                    gt_labeled, num_gt = label(labels_closed)
-                    for g_i in range(1, num_gt + 1):
-                        gt_mask = (gt_labeled == g_i)
-                        
-                        # Skip small noise components with less than 4 pixels
-                        if np.count_nonzero(gt_mask) < 20:
-                            continue
-                            
-                        g_coords = extract_center_fn(
-                            pred_mask=gt_mask,
-                            prediction=labels_closed if not using_heatmap_as_gt else labels_clean.astype(np.float32),
-                            mask_to_polygon_fn=mask_to_polygon,
-                            fit_circle_fn=fit_circle_least_squares
-                        )
-                        if g_coords is not None:
-                            gt_pixel_centers.append(g_coords)
-                
-                # -----------------
-                # Prediction Center Extraction
-                for p_idx in range(1, num_pred_objects + 1):
-                    pred_mask = (labeled_preds == p_idx)
+                # extract points & confidence
+                pc_points = [
+                    (pt["x"], pt["y"], pt["z"])
+                    for pt in centers
+                ]
 
-                    if np.sum(pred_mask) < candidate_min_points:
-                        continue
-                    
-                    # Extract center using the selected strategy function
-                    center_coords = extract_center_fn(
-                        pred_mask=pred_mask,
-                        prediction=preds_prob,
-                        mask_to_polygon_fn=mask_to_polygon,
-                        fit_circle_fn=fit_circle_least_squares,
-                        min_confidence_peak=min_confidence_peak
-                    )
+                # merging
+                merged_pixel_centers = merge_nearby_centers(
+                    pc_points, 
+                    dist_threshold=0.8
+                )
 
-                    if center_coords is None:
-                        continue
-
-                    center_x, center_y = center_coords
-                    extracted_pixel_centers.append((center_x, center_y))
-
-                    # Transform 2D pixel center to 3D point
-                    center = bev_pixel_to_3d(
-                        patch_points=pc,
-                        pixel_x=center_x,
-                        pixel_y=center_y,
-                        origin_x=meta["origin_x"],
-                        origin_y=meta["origin_y"],
-                        resolution=meta["resolution"],
-                        search_radius=None,
-                        tile_size=meta["tile_size"],
-                        invert_y=False,
-                        invert_x=False
-                    )
-
-                    # print(f"Center shape: {center.shape}")
-                    if center is None or len(center) < 3:
-                        print(f"[Warning] Skipped a center prediction -> pred: {center}")
-                        continue
-                    
+                # rebuild merged version
+                for cur_new_pixel_center in merged_pixel_centers:
                     cur_center_point = {
-                        "x": center[0],
-                        "y": center[1],
-                        "z": center[2]
+                        "x": cur_new_pixel_center[0],
+                        "y": cur_new_pixel_center[1],
+                        "z": cur_new_pixel_center[2],
+                        "confidence": min_confidence
                     }
                     
-                    result = add_to_result(result, cur_dataset, pc_id, cur_center_point)
+                    threshold_merged_results = add_to_result(threshold_merged_results, cur_dataset, target_pc_id, cur_center_point)
+            
+            print(f"Conf {min_confidence}: Reduced results from {len(raw_threshold_results)} to {len(threshold_merged_results)} ({len(raw_threshold_results)-len(threshold_merged_results)}).")
 
-                # --- Execute Debug Plotting ---
-                if enable_debug and (num_pred_objects > 0 or np.any(labels > 0)):
-                    plot_center_prediction_debug(
-                        pixel_values=pixel_values,
-                        labels=labels,
-                        preds_prob=preds_prob,
-                        preds_binary=preds_binary,
-                        preds_closed=preds_closed,
-                        extracted_centers=extracted_pixel_centers,
-                        gt_centers=gt_pixel_centers,
-                        pc_points=pc,
-                        meta=meta,
-                        pc_id=pc_id,
-                        idx=idx,
-                        save_dir=debug_save_dir
-                    )
+            # add new found manhole centers of this threshold to the overall results
+            # all_dataset_results.extend(threshold_merged_results)
+            for res in threshold_merged_results:
+                target_pc_id = res["pointcloud-id"]
+                new_centers = res.get("centers", [])
 
-        # -----------------
-        # Post Processing
-        # Merge nearby predictions
-        print(f"Post-processing center predictions for {cur_dataset} (merging duplicates from patch overlaps).")
+                # Find if an entry for this pc_id already exists in all_dataset_results
+                existing_entry = next((e for e in all_dataset_results if e.get("pointcloud-id") == target_pc_id), None)
+
+                if existing_entry is not None:
+                    existing_entry["centers"].extend(new_centers)
+                else:
+                    all_dataset_results.append(res)
+
         
-        cur_all_pred_centers = []
-        final_dataset_results = []
-
-        for target_pc_id in all_pc_ids:
-            # get all 3d centers
-            pc_3d_centers = [
-                (item["center"]["x"], item["center"]["y"], item["center"]["z"]) \
-                for item in result if item["pointcloud-id"] == target_pc_id
-            ]
-
-            if not pc_3d_centers:
-                continue
-
-            # add the merged version to the new results
-            merged_pixel_centers = merge_nearby_centers(pc_3d_centers, dist_threshold=0.8)
-            for cur_new_pixel_center in merged_pixel_centers:
-                cur_center_point = {
-                    "x": cur_new_pixel_center[0],
-                    "y": cur_new_pixel_center[1],
-                    "z": cur_new_pixel_center[2]
-                }
-                
-                final_dataset_results = add_to_result(final_dataset_results, cur_dataset, target_pc_id, cur_center_point)
-        
-        print(f"Reduced results from {len(result)} to {len(final_dataset_results)} ({len(result)-len(final_dataset_results)}).")
-        result = final_dataset_results
-
-       
 
         # -----------------
         # Saving
-        # Save evaluation results per dataset
+        # Save evaluation results per dataset (and over all thresholds)
         output_path = Path(f"./output/{cur_dataset}_eval_{exp_name}.json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w") as file_:
-            json.dump(result, file_, indent=4)
+            json.dump(all_dataset_results, file_, indent=4)
         print(f"Saved Eval Center Results in: '{output_path}'")
+
 
 
 def main(config):

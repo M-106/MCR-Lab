@@ -412,13 +412,20 @@ def get_model_and_processor(model_name, encoder_name,
     else:
         # config = AutoConfig.from_pretrained(checkpoint)
         config = ModelConfig.from_pretrained(checkpoint)
+        config.num_labels = num_labels
+        config.ignore_index=ignore_index
+        config.heatmap_is_gt=heatmap_is_gt
+        # config.model_name=model_name, 
+        # config.encoder_name=encoder_name
+
+        # print("DEBUGGING NUM_LABELS (after loading):", config.num_labels)
     
-        if checkpoint is not None:  # mode != "train" and 
-            model = ModelForSemanticSegmentation.from_pretrained(
-                checkpoint,
-                config=config,
-                ignore_mismatched_sizes=True
-            )
+        # if checkpoint is not None:  # mode != "train" and 
+        model = ModelForSemanticSegmentation.from_pretrained(
+            checkpoint,
+            config=config,
+            ignore_mismatched_sizes=True
+        )
         # model.config.ignore_index = ignore_index
         # model.config.num_labels = num_labels
 
@@ -511,9 +518,20 @@ def get_segmentation_prediction(outputs, model_name, processor=None, target_size
             # using bilinear for smooth transitions -> probabilities
             mode = "bilinear" if (using_heatmap_as_gt or as_prob) else "nearest"
 
-            if mode == "nearest" or as_prob:
-                # Interpolate needs 4D: (B, 1, H, W)
-                preds = preds.unsqueeze(1).float()
+            # if mode == "nearest" or as_prob:
+            #     # Interpolate needs 4D: (B, 1, H, W)
+            #     preds = preds.unsqueeze(1).float()
+
+            # always unsqueeze to 4D for interpolation, then squeeze back to 3D
+            # FIXME -> really right, without confidence also?
+            if preds.ndim == 3:
+                preds = preds.unsqueeze(1)
+                
+            # interpolation expects float, so convert to float before interpolation
+            preds = preds.float()
+
+            # if using_heatmap_as_gt:
+            #     preds = preds.squeeze(1)  # (B, H, W)
             
             preds = F.interpolate(preds, size=size, mode=mode)
             
@@ -763,6 +781,7 @@ def train_hf_pipeline(config):
             using_heatmap_as_gt=using_heatmap_as_gt,
             confident_threshold_start=0.5, confident_threshold_end=0.55, confident_threshold_step=0.05, 
             iou_threshold_start=0.5, iou_threshold_end=0.55, iou_threshold_step=0.05,
+            return_micro_fps_fpn=False,
         )
 
     # FIXME -> make many of the settings adjustable via config

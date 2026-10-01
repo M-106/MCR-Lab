@@ -89,7 +89,9 @@ def ground_truth_extraction(config):
                                       transform=None,  # get_basic_transform(num_points=-1),
                                       batch_size=1, shuffle=False, num_workers=0,
                                       preprocessed=config.eval_extraction.preprocessed, 
-                                      return_train_format=False)
+                                      return_train_format=False, 
+                                      bev_normalized=config.data.normalization, 
+                                      bev_normalize_mode=config.data.normalization_mode)
 
         point_cloud_paths = data_loader.dataset.point_cloud_paths
 
@@ -304,6 +306,8 @@ def ground_truth_extraction_heatmap(config):
             num_workers=0,
             preprocessed=config.eval_extraction.preprocessed,
             return_train_format=False,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
         )
 
         point_cloud_paths = data_loader.dataset.point_cloud_paths

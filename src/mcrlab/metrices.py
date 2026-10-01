@@ -366,7 +366,7 @@ def get_mean_from_multiple_results(value_name, obj_results, choosen_iou_threshol
 def compute_metrics(preds, labels, 
                     confident_threshold_start=0.0, confident_threshold_end=0.95, confident_threshold_step=0.05, 
                     iou_threshold_start=0.5, iou_threshold_end=0.55, iou_threshold_step=0.05, 
-                    ignore_index=255, using_heatmap_as_gt=False):
+                    ignore_index=255, using_heatmap_as_gt=False, return_micro_fps_fpn=True):
     # logits = eval_pred.predictions
     # labels = eval_pred.label_ids
 
@@ -520,24 +520,41 @@ def compute_metrics(preds, labels,
     # Mean Absolute Error
     mae_score = np.abs(preds[mask] - labels[mask]).mean()
 
-    return {
-        "mae_score": float(mae_score),
-        "manhole_iou": float(manhole_iou),
-        "f1": float(f1),
-        "precision": float(precision),
-        "recall": float(recall),
-        "mean_iou": float(mean_iou),
-        "pixel_auc": float(pixel_auc),
-        "pixel_fpr": pixel_fpr.tolist(),  # converted to list for serialization
-        "pixel_tpr": pixel_tpr.tolist(),
-        "obj_mA_f1": float(mAF1),
-        "obj_mA_recall": float(mAR),
-        "obj_mA_precision": float(mAP),
-        "obj_mA_iou": float(mAIOU),
-        "obj_results": obj_results,
-        "avg_true_objects_per_img": avg_true_objects_per_img,
-        "avg_pred_objects_per_img": avg_pred_objects_per_img
-    }
+    if return_micro_fps_fpn:
+        return {
+            "mae_score": float(mae_score),
+            "manhole_iou": float(manhole_iou),
+            "f1": float(f1),
+            "precision": float(precision),
+            "recall": float(recall),
+            "mean_iou": float(mean_iou),
+            "pixel_auc": float(pixel_auc),
+            "pixel_fpr": pixel_fpr.tolist(),  # converted to list for serialization
+            "pixel_tpr": pixel_tpr.tolist(),
+            "obj_mA_f1": float(mAF1),
+            "obj_mA_recall": float(mAR),
+            "obj_mA_precision": float(mAP),
+            "obj_mA_iou": float(mAIOU),
+            "obj_results": obj_results,
+            "avg_true_objects_per_img": avg_true_objects_per_img,
+            "avg_pred_objects_per_img": avg_pred_objects_per_img
+        }
+    else:
+        return {
+            "mae_score": float(mae_score),
+            "manhole_iou": float(manhole_iou),
+            "f1": float(f1),
+            "precision": float(precision),
+            "recall": float(recall),
+            "mean_iou": float(mean_iou),
+            "pixel_auc": float(pixel_auc),
+            "obj_mA_f1": float(mAF1),
+            "obj_mA_recall": float(mAR),
+            "obj_mA_precision": float(mAP),
+            "obj_mA_iou": float(mAIOU),
+            "avg_true_objects_per_img": avg_true_objects_per_img,
+            "avg_pred_objects_per_img": avg_pred_objects_per_img
+        }
 
 
 

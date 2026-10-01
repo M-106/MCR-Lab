@@ -175,7 +175,10 @@ def inference(config):
                                    num_workers=1,
                                    preprocessed=True, 
                                    return_train_format=False,
-                                   return_dataset=False)
+                                   return_dataset=False,
+                                   bev_normalized=config.data.normalization, 
+                                   bev_normalize_mode=config.data.normalization_mode
+                                   )
     all_paths = dataset.point_cloud_paths
     bev_dataset = BEVDataset(
         path=all_paths, 
