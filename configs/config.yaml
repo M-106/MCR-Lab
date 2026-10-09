@@ -15,7 +15,7 @@ custom_train:
 
 # FIXME -> currently most of the train args are not connected yet
 train:
-  batch_size: 2 # 8, 6 12
+  batch_size: 1 # 8, 6 12
   epochs: 600  # 400, 600, 50
   learning_rate: 0.0005
   use_amp: False

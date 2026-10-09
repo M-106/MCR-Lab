@@ -824,148 +824,150 @@ def manhole_BEV_test_data_check(config):
 
     print(f"\n--- Starting Manhole BEV Test Data Check ---")
 
-    # Setup DataLoader
-    print("Loading Data...")
-    data_loader = get_data_loader(
-        config.data.name, 
-        config.data.path, 
-        type="test", 
-        transform=get_basic_transform(),
-        batch_size=1, 
-        shuffle=False, 
-        num_workers=0,
-        preprocessed=True, 
-        return_train_format=False,
-        return_dataset=True,
-        bev_normalized=config.data.normalization, 
-        bev_normalize_mode=config.data.normalization_mode
-    )
+    for (cur_data_name, cur_data_path) in [(config.data.name, config.data.path), (config.data.name_2, config.data.path_2)]:
 
-    all_test_paths = data_loader.point_cloud_paths
+        # Setup DataLoader
+        print("Loading Data...")
+        data_loader = get_data_loader(
+            cur_data_name, 
+            cur_data_path, 
+            type="test", 
+            transform=get_basic_transform(),
+            batch_size=1, 
+            shuffle=False, 
+            num_workers=0,
+            preprocessed=True, 
+            return_train_format=False,
+            return_dataset=True,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
+        )
 
-    test_bev_dataloader = BEVDataset(
-        path=all_test_paths, 
-        file_paths=[], 
-        has_labels=True, 
-        image_training=True, 
-        preprocessor=None,
-        augment=False,
-        pass_label_in_preprocessor=False,
-        heatmap_gt_path=None,
-        used_heatmap_channel=False,
-        normalize=True, 
-        normalization_mode="global_standard"
-    )
+        all_test_paths = data_loader.point_cloud_paths
 
-    # 3. Setup output directory
-    output_dir = f"./output/bev_image_manhole_check_{config.data.name}"
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
+        test_bev_dataloader = BEVDataset(
+            path=all_test_paths, 
+            file_paths=[], 
+            has_labels=True, 
+            image_training=True, 
+            preprocessor=None,
+            augment=False,
+            pass_label_in_preprocessor=False,
+            heatmap_gt_path=None,
+            used_heatmap_channel=False,
+            normalize=True, 
+            normalization_mode="global_standard"
+        )
 
-    saved_count = 0
+        # 3. Setup output directory
+        output_dir = f"./output/bev_image_manhole_check_{cur_data_name}"
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
 
-    for cur_pc, batch in enumerate(test_bev_dataloader, start=1):
-        img = batch["pixel_values"].detach().cpu().numpy()
-        labels = batch["labels"].detach().cpu().numpy()
-        meta = batch["meta"]
+        saved_count = 0
 
-        cur_pc = meta['pc_id']
-        origin_x = meta['origin_x']
-        origin_y = meta['origin_y']
+        for cur_pc, batch in enumerate(test_bev_dataloader, start=1):
+            img = batch["pixel_values"].detach().cpu().numpy()
+            labels = batch["labels"].detach().cpu().numpy()
+            meta = batch["meta"]
 
-        # if x.ndim == 3 and x.shape[0] in [1, 3, 4, 5]:
-        #     x = np.transpose(x, (1, 2, 0))
+            cur_pc = meta['pc_id']
+            origin_x = meta['origin_x']
+            origin_y = meta['origin_y']
 
-        # y = batch_seg["labels"].detach().cpu().numpy()
-        if labels.ndim == 3:
-            labels = labels.squeeze(0)
-                
-        print(f"\nProcessing PointCloud {cur_pc}...")
+            # if x.ndim == 3 and x.shape[0] in [1, 3, 4, 5]:
+            #     x = np.transpose(x, (1, 2, 0))
 
-        # Obtain BEV generator/data
-        # if getattr(point_cloud, "bev_data", None) is None:
-        #     raise ValueError()
-        #     print("BEV data not pre-loaded. Generating dynamic projection...")
-        #     tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)
-        #     bev_gen = bev_gen_wrapper(tiles, metas)
-        # else:
-        #     print("Using loaded BEVs...")
-        #     bev_gen = point_cloud.get_bev()
+            # y = batch_seg["labels"].detach().cpu().numpy()
+            if labels.ndim == 3:
+                labels = labels.squeeze(0)
+                    
+            print(f"\nProcessing PointCloud {cur_pc}...")
 
-        
+            # Obtain BEV generator/data
+            # if getattr(point_cloud, "bev_data", None) is None:
+            #     raise ValueError()
+            #     print("BEV data not pre-loaded. Generating dynamic projection...")
+            #     tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)
+            #     bev_gen = bev_gen_wrapper(tiles, metas)
+            # else:
+            #     print("Using loaded BEVs...")
+            #     bev_gen = point_cloud.get_bev()
 
-        # Condition check: Check if any target manhole label exists in tile
-        if not np.any(np.isin(labels, [1])):
-            continue  # Skip frames without manholes
+            
 
-        H, W = labels.shape
+            # Condition check: Check if any target manhole label exists in tile
+            if not np.any(np.isin(labels, [1])):
+                continue  # Skip frames without manholes
 
-        # Handle C, H, W -> H, W, C ordering
-        if img.ndim == 3 and img.shape[0] < img.shape[1]:
-            img_t = np.transpose(img, (1, 2, 0))
-        else:
-            img_t = img
+            H, W = labels.shape
 
-        # Extract height and intensity channels safely
-        height_channel = img_t[:, :, 0]
-        
-        # Robust normalization for intensity channel
-        intensity_norm = img_t[:, :, 1]
+            # Handle C, H, W -> H, W, C ordering
+            if img.ndim == 3 and img.shape[0] < img.shape[1]:
+                img_t = np.transpose(img, (1, 2, 0))
+            else:
+                img_t = img
 
-        # int_min, int_max = intensity_raw.min(), intensity_raw.max()
-        # if int_max > int_min:
-        #     intensity_norm = (intensity_raw - int_min) / (int_max - int_min)
-        # else:
-        #     intensity_norm = np.zeros_like(intensity_raw)
+            # Extract height and intensity channels safely
+            height_channel = img_t[:, :, 0]
+            
+            # Robust normalization for intensity channel
+            intensity_norm = img_t[:, :, 1]
 
-        # Create mask for target labels
-        manhole_mask = np.isin(labels, [1])
-        struct = generate_binary_structure(2, 2)
-        manhole_mask = binary_closing(
-            manhole_mask, structure=struct, iterations=8
-        ).astype(np.uint8)
+            # int_min, int_max = intensity_raw.min(), intensity_raw.max()
+            # if int_max > int_min:
+            #     intensity_norm = (intensity_raw - int_min) / (int_max - int_min)
+            # else:
+            #     intensity_norm = np.zeros_like(intensity_raw)
 
-        # Plotting 4 panels:
-        fig, ax = plt.subplots(figsize=(20, 5), ncols=4, nrows=1)
+            # Create mask for target labels
+            manhole_mask = np.isin(labels, [1])
+            struct = generate_binary_structure(2, 2)
+            manhole_mask = binary_closing(
+                manhole_mask, structure=struct, iterations=8
+            ).astype(np.uint8)
 
-        # Panel 1: Height Channel
-        # im0 = ax[0].imshow(height_channel, cmap="viridis")
-        # ax[0].set_title("Height Map", fontsize=12, fontweight='bold')
-        # ax[0].axis("off")
+            # Plotting 4 panels:
+            fig, ax = plt.subplots(figsize=(20, 5), ncols=4, nrows=1)
 
-        # Panel 2: Intensity Channel
-        # im1 = ax[1].imshow(intensity_norm, cmap="gray")
-        # ax[1].set_title("Intensity (Normalized)", fontsize=12, fontweight='bold')
-        # ax[1].axis("off")
+            # Panel 1: Height Channel
+            # im0 = ax[0].imshow(height_channel, cmap="viridis")
+            # ax[0].set_title("Height Map", fontsize=12, fontweight='bold')
+            # ax[0].axis("off")
 
-        # Panel 3: Label Mask
-        cmap_mask = mcolors.ListedColormap(['black', 'red'])
-        ax[1].imshow(manhole_mask.astype(int), cmap=cmap_mask, vmin=0, vmax=1)
-        ax[1].set_title("Manhole Mask (M. Closed)", fontsize=12, fontweight='bold')
-        ax[1].axis("off")
+            # Panel 2: Intensity Channel
+            # im1 = ax[1].imshow(intensity_norm, cmap="gray")
+            # ax[1].set_title("Intensity (Normalized)", fontsize=12, fontweight='bold')
+            # ax[1].axis("off")
 
-        # Panel 4: Intensity + Label Overlay
-        overlay = np.stack([intensity_norm] * 3, axis=-1)  # RGB gray background
-        # overlay[manhole_mask] = [1.0, 0.0, 0.0]           # Highlight manhole in Red
-        ax[0].imshow(overlay)
-        ax[0].set_title("Intensity BEV", fontsize=12, fontweight='bold')
-        ax[0].axis("off")
+            # Panel 3: Label Mask
+            cmap_mask = mcolors.ListedColormap(['black', 'red'])
+            ax[1].imshow(manhole_mask.astype(int), cmap=cmap_mask, vmin=0, vmax=1)
+            ax[1].set_title("Manhole Mask (M. Closed)", fontsize=12, fontweight='bold')
+            ax[1].axis("off")
 
-        # plt.tight_layout()
-        plt.title(f"pc_{cur_pc}_bev_{origin_x}_{origin_y}")
+            # Panel 4: Intensity + Label Overlay
+            overlay = np.stack([intensity_norm] * 3, axis=-1)  # RGB gray background
+            # overlay[manhole_mask] = [1.0, 0.0, 0.0]           # Highlight manhole in Red
+            ax[0].imshow(overlay)
+            ax[0].set_title("Intensity BEV", fontsize=12, fontweight='bold')
+            ax[0].axis("off")
 
-        # Save frame
-        file_name = f"pc_{cur_pc}_bev_{origin_x}_{origin_y}.png"
-        save_path = os.path.join(output_dir, file_name)
-        plt.savefig(save_path, dpi=150)
-        plt.close(fig)
+            # plt.tight_layout()
+            plt.title(f"pc_{cur_pc}_bev_{origin_x}_{origin_y}")
 
-        saved_count += 1
-        print(f"  -> Saved frame with manhole: {file_name}")
+            # Save frame
+            file_name = f"pc_{cur_pc}_bev_{origin_x}_{origin_y}.png"
+            save_path = os.path.join(output_dir, file_name)
+            plt.savefig(save_path, dpi=150)
+            plt.close(fig)
 
-    print(f"\nFinished! Total BEV images containing manholes saved: {saved_count}")
-    print(f"Results saved to: {output_dir}")
+            saved_count += 1
+            print(f"  -> Saved frame with manhole: {file_name}")
+
+        print(f"\nFinished! Total BEV images containing manholes saved: {saved_count}")
+        print(f"Results saved to: {output_dir}")
 
 
 def manhole_BEV_test_overlap_check(config):
@@ -2729,11 +2731,13 @@ def eval_center_gt(config):
     summary_points_fig.subplots_adjust(hspace=0.5)
 
     sigma_samples_fig.subplots_adjust(
+        top=0.88,     # Reserve top 12% space for the figure legend
         hspace=0.7,   # vertical spacing
         wspace=0.3    # horizontal spacing
     )
 
     n_points_samples_fig.subplots_adjust(
+        top=0.88,     # Reserve top 12% space for the figure legend
         hspace=0.7,   # vertical spacing
         wspace=0.3    # horizontal spacing
     )

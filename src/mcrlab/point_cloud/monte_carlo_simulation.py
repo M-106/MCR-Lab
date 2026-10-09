@@ -581,6 +581,40 @@ def eval_center_robustness(
     plot_sample_input(sample_inputs_points, is_sigma=False, method=method)
     
 
+    # Write summary statistics (mean, std, std_error, min, sum) to a text file
+    txt_filepath = os.path.join(path, f"{method}_metrics_summary.txt")
+    
+    with open(txt_filepath, "w") as f:
+        f.write(f"=== METRICS SUMMARY FOR METHOD: {method.upper()} ===\n\n")
+        
+        f.write("--- OCCLUSION / SIGMA RESULTS ---\n")
+        for r in plot_results:
+            sigma = r["sigma"]
+            mean = r["mean"]
+            std = r["std"]
+            std_err = std / np.sqrt(len(r["preds"]))
+            min_val = r["min"]
+            sum_val = r["sum"]
+            f.write(
+                f"Occlusion Serenity: {sigma:<6} | Mean: {mean:.6f} | Std: {std:.6f} | "
+                f"StdErr: {std_err:.6f} | Min: {min_val:.6f} | Sum: {sum_val:.6f}\n"
+            )
+            
+        f.write("\n--- N-POINTS RESULTS ---\n")
+        for r in plot_point_results:
+            n_pts = r["n_points"]
+            mean = r["mean"]
+            std = r["std"]
+            std_err = std / np.sqrt(len(r["preds"]))
+            min_val = r["min"]
+            sum_val = r["sum"]
+            f.write(
+                f"Points: {n_pts:<6} | Mean: {mean:.6f} | Std: {std:.6f} | "
+                f"StdErr: {std_err:.6f} | Min: {min_val:.6f} | Sum: {sum_val:.6f}\n"
+            )
+
+    print(f"Metrics saved to '{txt_filepath}'")
+
 
 def summary_plot(ax, values, means, stds, mins, sums, method, plot_limit, x_label, save_plot=True):
     plt.style.use("ggplot")

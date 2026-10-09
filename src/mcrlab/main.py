@@ -63,38 +63,54 @@ def main():
             "tu-beit_large_patch16_512.in22k_ft_in22k_in1k": "tblp16512",
         }
 
+#         - (unet, tu-swinv2_base_window12to16_192to256.ms_in22k_ft_in1k) = False
+#       -> Input height (500) doesn't match model (256).
+#   - (deeplabv3, timm-efficientnet-b7) = True
+#   - (deeplabv3, tu-convnext_large.fb_in22k_ft_in1k_384) = True
+#   - (deeplabv3, mit_b5) = False
+#       -> NVML_SUCCESS == r INTERNAL ASSERT FAILED at "../c10/cuda/CUDACachingAllocator.cpp":838, please report a bug to PyTorch. 
+#   - (deeplabv3, tu-swinv2_base_window12to16_192to256.ms_in22k_ft_in1k) = False
+#       -> Input height (512) doesn't match model (256).
+#   - (dpt, tu-maxvit_xlarge_tf_512) = False
+#       -> NVML_SUCCESS == r INTERNAL ASSERT FAILED at "../c10/cuda/CUDACachingAllocator.cpp":838, please report a bug to PyTorch. 
+#   - (dpt, tu-maxvit_base_tf_512.in21k_ft_in1k) = False
+#       -> NVML_SUCCESS == r INTERNAL ASSERT FAILED at "../c10/cuda/CUDACachingAllocator.cpp":838, please report a bug to PyTorch. 
+#   - (dpt, tu-swinv2_base_window16_256.ms_in1k) = False
+#       -> NVML_SUCCESS == r INTERNAL ASSERT FAILED at "../c10/cuda/CUDACachingAllocator.cpp":838, please report a bug to PyTorch. 
+
+
         names = [
-            "unet",
+            # "unet",
             # "fpn", 
             "deeplabv3", 
             # "deeplabv3plus", 
             "dpt"
         ]
         encoders = [ 
-            [
-                "timm-efficientnet-b7",
+            # [
+            #     "timm-efficientnet-b7",
 
-                # 1. Kanten- & Präzision: ConvNet SOTA  
-                "tu-convnext_large.fb_in22k_ft_in1k_384",  
+            #     # 1. Kanten- & Präzision: ConvNet SOTA  
+            #     "tu-convnext_large.fb_in22k_ft_in1k_384",  
+                
+            #     # 2. Multi-Scale Transformer: SegFormer-Encoder 
+            #     "mit_b5",                                    
+                
+            #     # 3. Hybrid: Swin-Attention + CNN Stem
+            #     # "tu-swinv2_base_window12to16_192to256.ms_in22k_ft_in1k"  
+            # ],
+            [
+                # # 0. EfficientNet (Strong CNN)
+                # "timm-efficientnet-b7",
+
+                # # 1. Kanten- & Präzision: ConvNet SOTA  
+                # "tu-convnext_large.fb_in22k_ft_in1k_384",  
                 
                 # 2. Multi-Scale Transformer: SegFormer-Encoder 
                 "mit_b5",                                    
                 
                 # 3. Hybrid: Swin-Attention + CNN Stem
-                "tu-swinv2_base_window12to16_192to256.ms_in22k_ft_in1k"  
-            ],
-            [
-                # 0. EfficientNet (Strong CNN)
-                "timm-efficientnet-b7",
-
-                # 1. Kanten- & Präzision: ConvNet SOTA  
-                "tu-convnext_large.fb_in22k_ft_in1k_384",  
-                
-                # 2. Multi-Scale Transformer: SegFormer-Encoder 
-                "mit_b5",                                    
-                
-                # 3. Hybrid: Swin-Attention + CNN Stem
-                "tu-swinv2_base_window12to16_192to256.ms_in22k_ft_in1k"  
+                # "tu-swinv2_base_window12to16_192to256.ms_in22k_ft_in1k"  
             ],
             # ["timm-efficientnet-b7", "mit_b5", "resnet101", "resnext101_32x32d", "densenet161", "mobileone_s4"], 
             # ["timm-efficientnet-b7", "resnet101", "resnext101_32x32d", "mobileone_s4"],
