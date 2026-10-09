@@ -659,7 +659,7 @@ def test(config):
         # "fpn", 
         # "deeplabv3", 
         # "deeplabv3plus", 
-        #"dpt"
+        # "dpt"
     ]
     encoders = [
         ["timm-efficientnet-b7"]

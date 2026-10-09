@@ -88,7 +88,6 @@ class PreprocessingConfig(BaseModel):
 class EvalExtractionConfig(BaseModel):
     names: list
     data_paths: list
-    preprocessed: bool
     type: str
     save_path: str
     center_algorithm: str

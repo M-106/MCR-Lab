@@ -403,10 +403,11 @@ class FilterAndRelabelingTransform:
     - 1: manholes
     - 255: ignore -> special cases (not round manholes)
     """
-    def __init__(self, manhole_label=104002):
+    def __init__(self, manhole_label=104002, apply_filter=True):
         self.manhole_label = manhole_label
+        self.apply_filter = apply_filter
 
-    def __call__(self, point_cloud, ):
+    def __call__(self, point_cloud):
         if not isinstance(point_cloud, o3d.t.geometry.PointCloud):
             raise ValueError(f"Can't apply FilterAndRelabelingTransform on '{type(point_cloud)}'")
 
@@ -463,7 +464,7 @@ class FilterAndRelabelingTransform:
                             threshold=0.6
                         )
             
-            if is_circle:
+            if is_circle or not self.apply_filter:
                 semantic_out[global_indices] = 1
             else:
                 semantic_out[global_indices] = 255
@@ -701,7 +702,7 @@ def get_basic_transform(num_points=-1):
 
 
 
-def get_preprocessing_transform(grid_size=0.01, do_voxelation=True, manhole_label=104002, invert_z=False):
+def get_preprocessing_transform(grid_size=0.01, do_voxelation=False, manhole_label=104002, invert_z=False):
     transformations = [
         # ToFixPointsTransform(num_points=1000000, allow_padding=False, reduction_by_height=True),  # 7250451 -> 5000000
         # NaivMinHistoGroundKeepFilterTransform(),
@@ -719,6 +720,16 @@ def get_preprocessing_transform(grid_size=0.01, do_voxelation=True, manhole_labe
     if do_voxelation:
         transformations.append(VoxelDownsamplerTransform(grid_size=grid_size))
     
+    transform = Compose(transformations)
+    return transform
+
+
+
+def get_filtered_raw_transform(manhole_label=104002, apply_filter=True):
+    transformations = [
+        FilterAndRelabelingTransform(manhole_label=manhole_label, apply_filter=apply_filter)
+    ]
+
     transform = Compose(transformations)
     return transform
 
@@ -904,7 +915,10 @@ class WHUUrban3DDataset(Dataset):
         # '/data/whu3d-dataset-wo-test-label/mls/h5/preprocessed/preprocessed_patch_2447_7177.5_3739.5.h5'
         
         searched_root_path = os.path.dirname(self.point_cloud_paths[0])
-        searched_full_path = os.path.join(searched_root_path, f"preprocessed_patch_{pc_id}_{x_start}_{y_start}.h5")
+        if self.preprocessed:
+            searched_full_path = os.path.join(searched_root_path, f"preprocessed_patch_{pc_id}_{x_start}_{y_start}.h5")
+        else:
+            searched_full_path = os.path.join(searched_root_path, f"{pc_id}.h5")
 
         try:
             # find first index with this value
@@ -912,6 +926,35 @@ class WHUUrban3DDataset(Dataset):
             return self[index]
         except ValueError:
             raise ValueError(f"Can't find '{searched_full_path}' in 3D Dataset.")
+
+    def get_idx_by_pc_id(self, target_id):
+        """
+        Finds the dataset index for a given point cloud ID without mutating point_cloud_paths.
+        """
+        try:
+            target_int = int(target_id)
+        except ValueError:
+            target_int = None
+        target_str = str(target_id).strip()
+
+        for idx, data_path in enumerate(self.point_cloud_paths):
+            filename = os.path.basename(data_path)
+            stem = os.path.splitext(filename)[0]
+
+            # Integer match (e.g. 10 == "0010")
+            if target_int is not None:
+                try:
+                    if int(stem) == target_int:
+                        return idx
+                except ValueError:
+                    pass
+
+            # String match fallback
+            if stem == target_str:
+                return idx
+
+        raise KeyError(f"Point cloud ID '{target_id}' not found in dataset paths.\nData Paths: {self.point_cloud_paths}")
+
 
 
 class SUDROADDataset(Dataset):
@@ -1017,7 +1060,10 @@ class SUDROADDataset(Dataset):
         '/data/whu3d-dataset-wo-test-label/mls/h5/preprocessed/preprocessed_patch_2447_7177.5_3739.5.h5'
         
         searched_root_path = os.path.dirname(self.point_cloud_paths[0])
-        searched_full_path = os.path.join(searched_root_path, f"preprocessed_patch_{pc_id}_{x_start}_{y_start}.h5")
+        if self.preprocessed:
+            searched_full_path = os.path.join(searched_root_path, f"preprocessed_patch_{pc_id}_{x_start}_{y_start}.h5")
+        else:
+            searched_full_path = os.path.join(searched_root_path, f"{pc_id}.h5")
 
         try:
             # find first index with this value
@@ -1025,6 +1071,34 @@ class SUDROADDataset(Dataset):
             return self[index]
         except ValueError:
             raise ValueError(f"Can't find '{searched_full_path}' in 3D Dataset.")
+
+    def get_idx_by_pc_id(self, target_id):
+        """
+        Finds the dataset index for a given point cloud ID without mutating point_cloud_paths.
+        """
+        try:
+            target_int = int(target_id)
+        except ValueError:
+            target_int = None
+        target_str = str(target_id).strip()
+
+        for idx, data_path in enumerate(self.point_cloud_paths):
+            filename = os.path.basename(data_path)
+            stem = os.path.splitext(filename)[0]
+
+            # Integer match (e.g. 10 == "0010")
+            if target_int is not None:
+                try:
+                    if int(stem) == target_int:
+                        return idx
+                except ValueError:
+                    pass
+
+            # String match fallback
+            if stem == target_str:
+                return idx
+
+        raise KeyError(f"Point cloud ID '{target_id}' not found in dataset paths.")
 
 
 
@@ -1203,7 +1277,7 @@ class BEVDataset(Dataset):
                  augment=False, pass_label_in_preprocessor=False,
                  heatmap_gt_path=None, used_heatmap_channel=2,
                  normalize=True,
-                 normalization_mode="local_minmax"  # "local_minmax", "global_minmax", "global_standard"
+                 normalization_mode="global_standard"  # "local_minmax", "global_minmax", "global_standard"
                  ):
         """
         path is a list of point cloud file or a list of paths to search the bev images.
@@ -1518,7 +1592,7 @@ def extract_tiles_metas(bev_gen, amount=5, as_numpy=True):
 def get_data_loader(data_name, path, type="train", transform=None,
                     batch_size=32, shuffle=True, num_workers=4,
                     preprocessed=False, return_train_format=False,
-                    return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax",
+                    return_dataset=False, bev_normalized=True, bev_normalize_mode="global_standard",
                     invert_z=False):
     if data_name == "paris":
         data_loader = get_paris_data_loader(path, type=type, transform=transform,

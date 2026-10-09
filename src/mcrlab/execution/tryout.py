@@ -2,18 +2,22 @@
 # > Imports <
 # -----------
 import shutil
+import json
 
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.ticker as ticker
+import matplotlib.patches as mpatches
 import torch
 import open3d as o3d
 
-from scipy.spatial import KDTree
-from scipy.ndimage import label, center_of_mass
+from scipy.spatial import KDTree, cKDTree
+from scipy.ndimage import label, center_of_mass, binary_closing
+from scipy.ndimage.morphology import generate_binary_structure
+from skimage.feature import peak_local_max
 from sklearn.cluster import DBSCAN
 from sklearn.linear_model import RANSACRegressor, LinearRegression
 
@@ -26,7 +30,7 @@ from dotenv import load_dotenv
 from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_basic_transform, \
                                     preprocess_data, get_preprocessing_transform, \
                                     bev_gen_wrapper, extract_tiles_metas, \
-                                    BEVDataset
+                                    BEVDataset, get_filtered_raw_transform
 from mcrlab.point_cloud.inspect import print_pc, visualize, visualize_intensity_in_2d, \
                                        analyze_point_distribution
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
@@ -809,6 +813,228 @@ def manhole_BEV_intensity_test(config):
                 # break
     
         # break
+
+
+
+def manhole_BEV_test_data_check(config):
+    """
+    Visualizes and saves all BEV images containing at least one label equal to 1 
+    (or dataset-specific manhole label value).
+    """
+
+    print(f"\n--- Starting Manhole BEV Test Data Check ---")
+
+    # Setup DataLoader
+    print("Loading Data...")
+    data_loader = get_data_loader(
+        config.data.name, 
+        config.data.path, 
+        type="test", 
+        transform=get_basic_transform(),
+        batch_size=1, 
+        shuffle=False, 
+        num_workers=0,
+        preprocessed=True, 
+        return_train_format=False,
+        return_dataset=True,
+        bev_normalized=config.data.normalization, 
+        bev_normalize_mode=config.data.normalization_mode
+    )
+
+    all_test_paths = data_loader.point_cloud_paths
+
+    test_bev_dataloader = BEVDataset(
+        path=all_test_paths, 
+        file_paths=[], 
+        has_labels=True, 
+        image_training=True, 
+        preprocessor=None,
+        augment=False,
+        pass_label_in_preprocessor=False,
+        heatmap_gt_path=None,
+        used_heatmap_channel=False,
+        normalize=True, 
+        normalization_mode="global_standard"
+    )
+
+    # 3. Setup output directory
+    output_dir = f"./output/bev_image_manhole_check_{config.data.name}"
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    saved_count = 0
+
+    for cur_pc, batch in enumerate(test_bev_dataloader, start=1):
+        img = batch["pixel_values"].detach().cpu().numpy()
+        labels = batch["labels"].detach().cpu().numpy()
+        meta = batch["meta"]
+
+        cur_pc = meta['pc_id']
+        origin_x = meta['origin_x']
+        origin_y = meta['origin_y']
+
+        # if x.ndim == 3 and x.shape[0] in [1, 3, 4, 5]:
+        #     x = np.transpose(x, (1, 2, 0))
+
+        # y = batch_seg["labels"].detach().cpu().numpy()
+        if labels.ndim == 3:
+            labels = labels.squeeze(0)
+                
+        print(f"\nProcessing PointCloud {cur_pc}...")
+
+        # Obtain BEV generator/data
+        # if getattr(point_cloud, "bev_data", None) is None:
+        #     raise ValueError()
+        #     print("BEV data not pre-loaded. Generating dynamic projection...")
+        #     tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.05)
+        #     bev_gen = bev_gen_wrapper(tiles, metas)
+        # else:
+        #     print("Using loaded BEVs...")
+        #     bev_gen = point_cloud.get_bev()
+
+        
+
+        # Condition check: Check if any target manhole label exists in tile
+        if not np.any(np.isin(labels, [1])):
+            continue  # Skip frames without manholes
+
+        H, W = labels.shape
+
+        # Handle C, H, W -> H, W, C ordering
+        if img.ndim == 3 and img.shape[0] < img.shape[1]:
+            img_t = np.transpose(img, (1, 2, 0))
+        else:
+            img_t = img
+
+        # Extract height and intensity channels safely
+        height_channel = img_t[:, :, 0]
+        
+        # Robust normalization for intensity channel
+        intensity_norm = img_t[:, :, 1]
+
+        # int_min, int_max = intensity_raw.min(), intensity_raw.max()
+        # if int_max > int_min:
+        #     intensity_norm = (intensity_raw - int_min) / (int_max - int_min)
+        # else:
+        #     intensity_norm = np.zeros_like(intensity_raw)
+
+        # Create mask for target labels
+        manhole_mask = np.isin(labels, [1])
+        struct = generate_binary_structure(2, 2)
+        manhole_mask = binary_closing(
+            manhole_mask, structure=struct, iterations=8
+        ).astype(np.uint8)
+
+        # Plotting 4 panels:
+        fig, ax = plt.subplots(figsize=(20, 5), ncols=4, nrows=1)
+
+        # Panel 1: Height Channel
+        # im0 = ax[0].imshow(height_channel, cmap="viridis")
+        # ax[0].set_title("Height Map", fontsize=12, fontweight='bold')
+        # ax[0].axis("off")
+
+        # Panel 2: Intensity Channel
+        # im1 = ax[1].imshow(intensity_norm, cmap="gray")
+        # ax[1].set_title("Intensity (Normalized)", fontsize=12, fontweight='bold')
+        # ax[1].axis("off")
+
+        # Panel 3: Label Mask
+        cmap_mask = mcolors.ListedColormap(['black', 'red'])
+        ax[1].imshow(manhole_mask.astype(int), cmap=cmap_mask, vmin=0, vmax=1)
+        ax[1].set_title("Manhole Mask (M. Closed)", fontsize=12, fontweight='bold')
+        ax[1].axis("off")
+
+        # Panel 4: Intensity + Label Overlay
+        overlay = np.stack([intensity_norm] * 3, axis=-1)  # RGB gray background
+        # overlay[manhole_mask] = [1.0, 0.0, 0.0]           # Highlight manhole in Red
+        ax[0].imshow(overlay)
+        ax[0].set_title("Intensity BEV", fontsize=12, fontweight='bold')
+        ax[0].axis("off")
+
+        # plt.tight_layout()
+        plt.title(f"pc_{cur_pc}_bev_{origin_x}_{origin_y}")
+
+        # Save frame
+        file_name = f"pc_{cur_pc}_bev_{origin_x}_{origin_y}.png"
+        save_path = os.path.join(output_dir, file_name)
+        plt.savefig(save_path, dpi=150)
+        plt.close(fig)
+
+        saved_count += 1
+        print(f"  -> Saved frame with manhole: {file_name}")
+
+    print(f"\nFinished! Total BEV images containing manholes saved: {saved_count}")
+    print(f"Results saved to: {output_dir}")
+
+
+def manhole_BEV_test_overlap_check(config):
+
+    print(f"\n--- Starting Manhole BEV Test Overlap Check ---")
+
+    # Setup DataLoader
+    print("Loading Data...")
+    data_loader = get_data_loader(
+        config.data.name, 
+        config.data.path, 
+        type="test", 
+        transform=get_basic_transform(),
+        batch_size=1, 
+        shuffle=False, 
+        num_workers=0,
+        preprocessed=True, 
+        return_train_format=False,
+        return_dataset=True,
+        bev_normalized=config.data.normalization, 
+        bev_normalize_mode=config.data.normalization_mode
+    )
+
+    all_test_paths = data_loader.point_cloud_paths
+
+    test_bev_dataloader = BEVDataset(
+        path=all_test_paths, 
+        file_paths=[], 
+        has_labels=True, 
+        image_training=True, 
+        preprocessor=None,
+        augment=False,
+        pass_label_in_preprocessor=False,
+        heatmap_gt_path=None,
+        used_heatmap_channel=False,
+        normalize=True, 
+        normalization_mode="global_standard"
+    )
+
+    overlapped_patches = 0
+
+    last_x = None
+    last_y = None
+
+    for cur_pc, batch in enumerate(test_bev_dataloader, start=1):
+        img = batch["pixel_values"].detach().cpu().numpy()
+        labels = batch["labels"].detach().cpu().numpy()
+        meta = batch["meta"]
+
+        cur_pc = meta['pc_id']
+        origin_x = meta['origin_x']
+        origin_y = meta['origin_y']
+
+        # Condition check: Check if any target manhole label exists in tile
+        if not np.any(np.isin(labels, [1])):
+            continue  # Skip frames without manholes
+
+        if last_x is not None:
+            if (origin_x > last_x and origin_x < last_x + 5.0) and \
+               (origin_y > last_y and origin_y < last_y + 5.0):
+               overlapped_patches += 1
+
+
+        last_x = origin_x
+        last_y = origin_y
+
+        
+
+    print(f"\nFinished! Overlapped Patches: {overlapped_patches}")
 
 
 
@@ -2188,7 +2414,7 @@ def make_split(config, test_size=0.2, val_size=0.1):
     return train_set, val_set, test_set
 
 
-def ground_truth_2d_map_test(config):
+def ground_truth_2d_map_test(config, only_channel=None):
     print("\n --- Center Estimation (with labels) ---")
 
     if config.data.name == "sud":
@@ -2212,7 +2438,10 @@ def ground_truth_2d_map_test(config):
                                     bev_normalized=config.data.normalization, 
                                     bev_normalize_mode=config.data.normalization_mode)
     all_train_paths = train_dataset.point_cloud_paths
-    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
+    train_dataset = BEVDataset(
+        path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None, 
+        heatmap_gt_path=config.data.heatmap_path, used_heatmap_channel=config.data.used_heatmap_channel,
+        normalize=True, normalization_mode="global_standard")
 
     all_file_paths = train_dataset.file_paths
 
@@ -2244,7 +2473,10 @@ def ground_truth_2d_map_test(config):
 
         gt_2d_map = np.load(gt_path)
 
-        fig, axes = plt.subplots(1, 5, figsize=(8*5, 7))
+        plt.style.use('seaborn-v0_8-whitegrid' if 'seaborn-v0_8-whitegrid' in plt.style.available else 'default')
+
+        plots = 5 if only_channel is None else 3 
+        fig, axes = plt.subplots(1, plots, figsize=(8*plots, 7))
 
         axes[0].imshow(x[:, :, 1], cmap="viridis")
         axes[0].axis("off")
@@ -2254,19 +2486,24 @@ def ground_truth_2d_map_test(config):
         axes[1].axis("off")
         axes[1].set_title("Labels")
 
-        axes[2].imshow(gt_2d_map[:, :, 0], cmap="viridis")
-        axes[2].axis("off")
-        axes[2].set_title("GT Heatmap (sigma 10)")
+        if only_channel is not None:
+            axes[2].imshow(gt_2d_map[:, :, only_channel], cmap="viridis")
+            axes[2].axis("off")
+            axes[2].set_title(f"GT Heatmap (sigma {10*(only_channel+1)})")
+        else:
+            axes[2].imshow(gt_2d_map[:, :, 0], cmap="viridis")
+            axes[2].axis("off")
+            axes[2].set_title("GT Heatmap (sigma 10)")
 
-        axes[3].imshow(gt_2d_map[:, :, 1], cmap="viridis")
-        axes[3].axis("off")
-        axes[3].set_title("GT Heatmap (sigma 20)")
+            axes[3].imshow(gt_2d_map[:, :, 1], cmap="viridis")
+            axes[3].axis("off")
+            axes[3].set_title("GT Heatmap (sigma 20)")
 
-        axes[4].imshow(gt_2d_map[:, :, 2], cmap="viridis")
-        axes[4].axis("off")
-        axes[4].set_title("GT Heatmap (sigma 60)")
+            axes[4].imshow(gt_2d_map[:, :, 2], cmap="viridis")
+            axes[4].axis("off")
+            axes[4].set_title("GT Heatmap (sigma 60)")
 
-        plt.tight_layout()
+        # plt.tight_layout()
 
         current_name = f"comparison_{config.data.name}_{pc_id}_{x_start}_{y_start}.png"
         plt.savefig(os.path.join(path, current_name))
@@ -2303,7 +2540,7 @@ def ground_truth_2d_map_full_check(config):
                                     bev_normalized=config.data.normalization, 
                                     bev_normalize_mode=config.data.normalization_mode)
     all_train_paths = train_dataset.point_cloud_paths
-    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
+    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None, normalize=True, normalization_mode="global_standard")
 
     all_file_paths = train_dataset.file_paths
 
@@ -2345,15 +2582,15 @@ def ground_truth_2d_and_3d_map_test(config):
 
     print("Loading Data...")
     train_dataset = get_data_loader(config.data.name, 
-                                   config.data.path, 
-                                   type="train", 
-                                   transform=get_basic_transform(),
-                                   batch_size=1, 
-                                   shuffle=False, 
-                                   num_workers=1,
-                                   preprocessed=True, 
-                                   return_train_format=True,
-                                   return_dataset=True,
+                                    config.data.path, 
+                                    type="train", 
+                                    transform=get_basic_transform(),
+                                    batch_size=1, 
+                                    shuffle=False, 
+                                    num_workers=1,
+                                    preprocessed=True, 
+                                    return_train_format=True,
+                                    return_dataset=True,
                                     bev_normalized=config.data.normalization, 
                                     bev_normalize_mode=config.data.normalization_mode)
     all_train_paths = train_dataset.point_cloud_paths
@@ -2361,7 +2598,7 @@ def ground_truth_2d_and_3d_map_test(config):
 
     all_file_paths = train_dataset.file_paths
 
-    path = f"./output/mcr_gt_2d_map_test_{config.data.name}"
+    path = f"./output/mcr_gt_3d_and_2d_map_test_{config.data.name}"
     if os.path.exists(path):
         shutil.rmtree(path)
     # save_dir_creation(path)
@@ -2473,9 +2710,9 @@ def eval_center_gt(config):
         return center_points
 
 
-    methods = ["mesqra", "mean", "ransac", "least_square"]
+    methods = ["mean", "ransac", "least_square"]  # "mesqra", 
     # sigmas = [0.00, 0.01, 0.02, 0.05, 0.10]
-    sigmas = [0.00, 0.05, 0.5]
+    sigmas = [0.05, 0.5, 1.0]
     point_amounts = [50, 100, 1000]
     first_run = True
 
@@ -2485,7 +2722,7 @@ def eval_center_gt(config):
     sigma_samples_fig, sigma_samples_axes = plt.subplots(nrows=len(methods), ncols=len(sigmas), figsize=(4 * len(sigmas), 3 * len(methods)))
     n_points_samples_fig, n_points_samples_axes = plt.subplots(nrows=len(methods), ncols=len(point_amounts), figsize=(4 * len(point_amounts), 3 * len(methods)))
 
-    summary_fig.suptitle("Center GT Noise Robustness", fontsize=14)
+    summary_fig.suptitle("Center GT Occlusion Robustness", fontsize=14)
     summary_points_fig.suptitle("Center GT Points Robustness", fontsize=14)
 
     summary_fig.subplots_adjust(hspace=0.5)
@@ -2557,7 +2794,7 @@ def eval_center_gt(config):
         #     labelpad=25
         # )
         sigma_samples_axes[0, i].set_title(
-            f"\u03C3 = {sigma}",  # \u03C3
+            f"Occlusion Severity = {sigma}", # f"\u03C3 = {sigma}",  # \u03C3
             fontsize=14,
             pad=25
         )
@@ -2640,6 +2877,8 @@ def eval_center_gt(config):
     plt.close(summary_points_fig)
     plt.close(sigma_samples_fig)
     plt.close(n_points_samples_fig)
+
+    print("Successfull saved to './output/monte-carlo-gt-check'.")
 
 
 def manhole_intensity_range_test(config):
@@ -3319,8 +3558,6 @@ def calculate_dataset_statistics(config, max_percentile_samples=500_000):
             preprocessed=True,
             return_train_format=False,
             bev_normalized=False,
-            bev_normalized=config.data.normalization, 
-            bev_normalize_mode=config.data.normalization_mode
         )
 
         counts_2d = np.zeros(4, dtype=np.int64)
@@ -4267,7 +4504,7 @@ def count_shared_manholes_test(config):
     )
     
     all_train_paths = train_dataset.point_cloud_paths
-    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None)
+    train_dataset = BEVDataset(path=all_train_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None, normalize=True, normalization_mode="global_standard")
     all_file_paths = train_dataset.file_paths
 
     # Set spatial parameters based on your patch generation:
@@ -4351,6 +4588,1869 @@ def count_shared_manholes_test(config):
     print("\nSuccessfully finished!")
 
 
+def compute_dataset_stats(dataset, dataset_name="WHU", split_name="Train-Set", resolution=1.0, matching_thresh=0.5):
+    """
+    Computes comprehensive manhole statistics for a given dataset split.
+    """
+    print(f"\n==================================================")
+    print(f"   ANALYZING DATASET: {dataset_name} ({split_name})")
+    print(f"==================================================")
+
+    # 1. Physical Manhole Aggregator
+    # Key: (pc_id, manhole_idx) -> Metadata
+    global_manholes = []
+
+    # Map file paths to easy access
+    all_file_paths = dataset.file_paths
+
+    for idx, batch in enumerate(dataset):
+        file_path = all_file_paths[idx]
+        file_name = os.path.basename(file_path)
+        
+        # Parse grid identifier
+        pc_id, str_x_start, str_y_start = dataset.extract_grid_identifier(file_name)
+        x_start, y_start = float(str_x_start), float(str_y_start)
+
+        # Labels & raw points/features if available
+        labels = batch["labels"].detach().cpu().numpy().squeeze()
+        
+        # Handle label value dynamically based on setup
+        label_value = 1 if getattr(dataset, "preprocessed", True) else 3
+        binary_mask = (labels == label_value)
+
+        if not np.any(binary_mask):
+            continue
+
+        # Extract connected instances
+        labeled_mask, num_features = label(binary_mask)
+        if num_features == 0:
+            continue
+
+        centroids_pixel = center_of_mass(binary_mask, labeled_mask, range(1, num_features + 1))
+
+        # Iterating over each detected manhole component in tile
+        for feat_idx, (local_y, local_x) in enumerate(centroids_pixel, start=1):
+            global_x = x_start + (local_x * resolution)
+            global_y = y_start + (local_y * resolution)
+            current_pos = np.array([global_x, global_y])
+
+            # Measure point count / pixel density for this specific instance
+            instance_pixel_count = np.sum(labeled_mask == feat_idx)
+
+            # Spatial matching across overlapping tiles
+            matched = False
+            for mh in global_manholes:
+                if mh['pc_id'] == pc_id:
+                    dist = np.linalg.norm(mh['pos'] - current_pos)
+                    if dist <= matching_thresh:
+                        mh['tiles'].add(file_name)
+                        mh['pixel_counts'].append(instance_pixel_count)
+                        matched = True
+                        break
+
+            if not matched:
+                global_manholes.append({
+                    'pc_id': pc_id,
+                    'pos': current_pos,
+                    'tiles': {file_name},
+                    'pixel_counts': [instance_pixel_count]
+                })
+
+    # --- Metrics Computation ---
+    pc_grouped = defaultdict(list)
+    for mh in global_manholes:
+        pc_grouped[mh['pc_id']].append(mh)
+
+    print(f"\n[{dataset_name} - {split_name}] Structural Summary:")
+    print(f"Total Point Clouds: {len(pc_grouped)}")
+    print(f"Total Unique Physical Manholes: {len(global_manholes)}")
+    print("\n--- Breakdown by Point Cloud ID ---")
+
+    all_point_counts = []
+
+    for pc_id in sorted(pc_grouped.keys()):
+        mhs = pc_grouped[pc_id]
+        count = len(mhs)
+        
+        # Consolidate point counts per physical instance
+        pc_pts = [max(m['pixel_counts']) for m in mhs] # or sum depending on 3D aggregation
+        all_point_counts.extend(pc_pts)
+        
+        avg_tiles = np.mean([len(m['tiles']) for m in mhs])
+        print(f"  - PC {pc_id}: {count} Manholes (Avg BEV overlap: {avg_tiles:.2f} tiles/mh)")
+
+    # Statistical distribution metrics (Min, Max, Mean, Median, P95, Std)
+    if all_point_counts:
+        pts = np.array(all_point_counts)
+        stats = {
+            "Min": np.min(pts),
+            "Max": np.max(pts),
+            "Mean": np.mean(pts),
+            "Median": np.median(pts),
+            "P95": np.percentile(pts, 95),
+            "Std": np.std(pts)
+        }
+
+        print("\n--- Point / Pixel Density Distribution per Manhole ---")
+        for stat_name, val in stats.items():
+            print(f"  - {stat_name:<6}: {val:.2f}")
+
+    return global_manholes, pc_grouped
+
+
+
+# def compare_2d_seg_and_heatmap_datasets(
+#     config,
+#     max_samples_to_plot=20,
+#     save_dir=None,
+#     only_channel=None,
+#     ignore_label=255,
+# ):
+#     """
+#     Creates two BEVDataset instances (Standard 2D Seg vs. 2D Heatmap GT)
+#     to compare both representations side-by-side and calculate dataset statistics.
+#     """
+#     print("\n--- Comparing Standard 2D Segmentation vs. 2D Heatmap Regression ---")
+
+#     if config.data.heatmap_path is None or config.data.heatmap_path == "None":
+#         raise ValueError(
+#             "Heatmap path must be provided in config.data.heatmap_path for comparison."
+#         )
+
+#     # Output path
+#     if save_dir is None:
+#         save_dir = f"./output/compare_2d_seg_vs_heatmap_{config.data.name}"
+
+#     if os.path.exists(save_dir):
+#         shutil.rmtree(save_dir)
+#     os.makedirs(save_dir, exist_ok=True)
+
+#     # 1. Base Data Loading
+#     print("Loading Base Point Cloud Paths...")
+#     base_loader = get_data_loader(
+#         config.data.name,
+#         config.data.path,
+#         type="train",
+#         transform=get_basic_transform(),
+#         batch_size=1,
+#         shuffle=False,
+#         num_workers=1,
+#         preprocessed=True,
+#         return_train_format=True,
+#         return_dataset=True,
+#         bev_normalized=config.data.normalization,
+#         bev_normalize_mode=config.data.normalization_mode,
+#     )
+#     all_train_paths = base_loader.point_cloud_paths
+
+#     # 2. Dataset 1: Standard 2D Segmentation (heatmap_gt_path = None)
+#     print("Initializing Dataset 1: Standard 2D Segmentation...")
+#     dataset_seg = BEVDataset(
+#         path=all_train_paths,
+#         file_paths=[],
+#         has_labels=True,
+#         image_training=True,
+#         preprocessor=None,
+#         heatmap_gt_path=None,  # No heatmap path passed
+#         normalize=True,
+#         normalization_mode="global_standard",
+#     )
+
+#     # 3. Dataset 2: 2D Heatmap Regression
+#     print("Initializing Dataset 2: 2D Heatmap GT...")
+#     dataset_heatmap = BEVDataset(
+#         path=all_train_paths,
+#         file_paths=[],
+#         has_labels=True,
+#         image_training=True,
+#         preprocessor=None,
+#         heatmap_gt_path=config.data.heatmap_path,
+#         used_heatmap_channel=config.data.used_heatmap_channel,
+#         normalize=True,
+#         normalization_mode="global_standard",
+#     )
+
+#     all_file_paths = dataset_seg.file_paths
+
+#     # 4. Statistics Tracking
+#     stats = {
+#         "total_patches": len(dataset_seg),
+#         "patches_with_manhole": 0,
+#         "total_manhole_pixels": 0,
+#         "total_manhole_instances": 0,
+#         "missing_heatmap_files": 0,
+#     }
+
+#     plt.style.use(
+#         "seaborn-v0_8-whitegrid"
+#         if "seaborn-v0_8-whitegrid" in plt.style.available
+#         else "default"
+#     )
+
+#     # 5. Dual Iteration Loop
+#     for idx, (batch_seg, batch_hm) in enumerate(zip(dataset_seg, dataset_heatmap)):
+#         file_name = os.path.split(all_file_paths[idx])[-1]
+#         pc_id, x_start, y_start = dataset_seg.extract_grid_identifier(file_name)
+
+#         # Extract 2D Inputs & Segmentation Labels from Dataset 1
+#         x = batch_seg["pixel_values"].detach().cpu().numpy()
+#         if x.ndim == 3 and x.shape[0] in [1, 3, 4, 5]:
+#             x = np.transpose(x, (1, 2, 0))  # [C, H, W] -> [H, W, C]
+
+#         y = batch_seg["labels"].detach().cpu().numpy()
+#         if y.ndim == 3:
+#             y = y.squeeze(0)
+
+#         # Process segmentation masks
+#         valid_mask = (y != ignore_label)
+#         binary_manhole_mask = (y == 1) & valid_mask
+#         struct = generate_binary_structure(2, 2)
+#         binary_manhole_mask = binary_closing(binary_manhole_mask, structure=struct, iterations=8).astype(np.uint8)
+
+#         # --- Compute Statistics ---
+#         manhole_pixels = np.sum(binary_manhole_mask)
+#         if manhole_pixels > 0:
+#             stats["patches_with_manhole"] += 1
+#             stats["total_manhole_pixels"] += manhole_pixels
+#             _, num_instances = label(binary_manhole_mask)
+#             stats["total_manhole_instances"] += num_instances
+
+#         # --- Extract Heatmap GT from Dataset 2 or file ---
+#         has_heatmap = False
+#         gt_2d_map = None
+
+#         if "heatmap" in batch_hm and batch_hm["heatmap"] is not None:
+#             gt_2d_map = batch_hm["heatmap"].detach().cpu().numpy()
+#             has_heatmap = True
+#         else:
+#             # Fallback array load if returned via separate patch directory
+#             gt_path = f"/data/2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}.npy"
+#             if os.path.exists(gt_path):
+#                 gt_2d_map = np.load(gt_path)
+#                 has_heatmap = True
+#             else:
+#                 stats["missing_heatmap_files"] += 1
+
+#         # --- Plotting Side-by-Side ---
+#         if idx < max_samples_to_plot:
+#             num_cols = 5 if (only_channel is None and has_heatmap) else 3
+#             fig, axes = plt.subplots(1, num_cols, figsize=(5 * num_cols, 4.5))
+
+#             # Channel 1: Intensity (Fallback to Channel 0)
+#             intensity = x[:, :, 1] if x.shape[-1] > 1 else x[:, :, 0]
+
+#             # Subplot 1: BEV Input (Dataset 1)
+#             axes[0].imshow(intensity, cmap="viridis")
+#             axes[0].set_title(f"2D Input (Intensity)\nPatch: {pc_id}_{x_start}_{y_start}")
+#             axes[0].axis("off")
+
+#             # Subplot 2: GT Segmentation (Dataset 1)
+#             y_vis = np.ma.masked_where(y == ignore_label, y)
+#             axes[1].imshow(y_vis, cmap="tab10", vmin=0, vmax=2)
+#             axes[1].set_title(f"2D GT Seg Mask\nManhole Pixels: {manhole_pixels}")
+#             axes[1].axis("off")
+
+#             # Subplots 3+: GT Heatmaps (Dataset 2)
+#             if has_heatmap:
+#                 if only_channel is not None:
+#                     axes[2].imshow(gt_2d_map[:, :, only_channel], cmap="magma")
+#                     axes[2].set_title(f"2D Heatmap\nChannel {only_channel}")
+#                     axes[2].axis("off")
+#                 else:
+#                     axes[2].imshow(gt_2d_map[:, :, 0], cmap="magma")
+#                     axes[2].set_title("2D Heatmap (σ = 10)")
+#                     axes[2].axis("off")
+
+#                     axes[3].imshow(gt_2d_map[:, :, 1], cmap="magma")
+#                     axes[3].set_title("2D Heatmap (σ = 20)")
+#                     axes[3].axis("off")
+
+#                     axes[4].imshow(gt_2d_map[:, :, 2], cmap="magma")
+#                     axes[4].set_title("2D Heatmap (σ = 60)")
+#                     axes[4].axis("off")
+#             else:
+#                 axes[2].text(
+#                     0.5, 0.5, "Heatmap GT\nNot Found",
+#                     ha="center", va="center", color="red", transform=axes[2].transAxes
+#                 )
+#                 axes[2].axis("off")
+
+#             plt.tight_layout()
+#             out_name = f"comparison_2d_{idx:04d}_{config.data.name}_{pc_id}_{x_start}_{y_start}.png"
+#             plt.savefig(os.path.join(save_dir, out_name), dpi=150)
+#             plt.close(fig)
+
+#     # 6. Report Summary
+#     print("\n================ DATASET COMPARISON STATISTICS ================")
+#     print(f"Dataset Name               : {config.data.name}")
+#     print(f"Total Patches Evaluated    : {stats['total_patches']}")
+#     print(f"Patches Containing Manholes: {stats['patches_with_manhole']} ({stats['patches_with_manhole'] / max(1, stats['total_patches']) * 100:.2f}%)")
+#     print(f"Total Manhole Pixels       : {stats['total_manhole_pixels']}")
+#     print(f"Total Manhole Objects (CCL): {stats['total_manhole_instances']}")
+#     print(f"Missing Heatmap GT Files   : {stats['missing_heatmap_files']}")
+#     print(f"Plots Saved To             : {save_dir}")
+#     print("===============================================================")
+
+#     return stats
+
+def compare_2d_seg_and_heatmap_datasets(
+    config,
+    max_samples_to_plot=20,
+    save_dir=None,
+    only_channel=None,
+    ignore_label=255,
+    # heatmap_threshold=0.5,
+    min_peak_distance=1.0,
+):
+    """Creates two BEVDataset instances (Standard 2D Seg vs.
+
+    2D Heatmap GT) to compare both representations side-by-side and calculate
+    comparative dataset statistics.
+    """
+    print(
+        "\n--- Comparing Standard 2D Segmentation vs. 2D Heatmap Regression ---"
+    )
+
+    if config.data.heatmap_path is None or config.data.heatmap_path == "None":
+        raise ValueError(
+            "Heatmap path must be provided in config.data.heatmap_path for"
+            " comparison."
+        )
+
+    # Output path
+    if save_dir is None:
+        save_dir = f"/out/checkpoints/2d/output/compare_2d_seg_vs_heatmap_{config.data.name}"
+
+    if os.path.exists(save_dir):
+        shutil.rmtree(save_dir)
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 1. Base Data Loading
+    print("Loading Base Point Cloud Paths...")
+    base_loader = get_data_loader(
+        config.data.name,
+        config.data.path,
+        type="train",
+        transform=get_basic_transform(),
+        batch_size=1,
+        shuffle=False,
+        num_workers=1,
+        preprocessed=True,
+        return_train_format=True,
+        return_dataset=True,
+        bev_normalized=config.data.normalization,
+        bev_normalize_mode=config.data.normalization_mode,
+    )
+    all_train_paths = base_loader.point_cloud_paths
+
+    # 2. Dataset 1: Standard 2D Segmentation
+    print("Initializing Dataset 1: Standard 2D Segmentation...")
+    dataset_seg = BEVDataset(
+        path=all_train_paths,
+        file_paths=[],
+        has_labels=True,
+        image_training=True,
+        preprocessor=None,
+        heatmap_gt_path=None,
+        normalize=True,
+        normalization_mode="global_standard",
+    )
+
+    # 3. Dataset 2: 2D Heatmap Regression
+    print("Initializing Dataset 2: 2D Heatmap GT...")
+    dataset_heatmap = BEVDataset(
+        path=all_train_paths,
+        file_paths=[],
+        has_labels=True,
+        image_training=True,
+        preprocessor=None,
+        heatmap_gt_path=config.data.heatmap_path,
+        used_heatmap_channel=config.data.used_heatmap_channel,
+        normalize=True,
+        normalization_mode="global_standard",
+    )
+
+    all_file_paths = dataset_seg.file_paths
+
+    # 4. Comparative Statistics Tracking
+    stats = {
+        "total_patches": len(dataset_seg),
+        "missing_heatmap_files": 0,
+        # Segmentation Stats
+        "seg_patches_with_manhole": 0,
+        "seg_total_pixels": 0,
+        "seg_total_instances": 0,
+        # Heatmap Stats
+        "hm_patches_with_manhole": 0,
+        "hm_total_instances": 0,
+        # Comparison / Consistency Metrics
+        "count_mismatched_patches": 0,
+        "presence_mismatched_patches": 0,
+    }
+
+    plt.style.use(
+        "seaborn-v0_8-whitegrid"
+        if "seaborn-v0_8-whitegrid" in plt.style.available
+        else "default"
+    )
+
+    # Select default heatmap channel for extraction if multi-channel array is present
+    hm_channel_idx = (
+        only_channel
+        if only_channel is not None
+        else getattr(config.data, "used_heatmap_channel", 0)
+    )
+
+    # 5. Dual Iteration Loop
+    for idx, (batch_seg, batch_hm) in enumerate(
+        zip(dataset_seg, dataset_heatmap)
+    ):
+        file_name = os.path.split(all_file_paths[idx])[-1]
+        pc_id, x_start, y_start = dataset_seg.extract_grid_identifier(
+            file_name
+        )
+
+        # Extract 2D Inputs & Segmentation Labels
+        x = batch_seg["pixel_values"].detach().cpu().numpy()
+        if x.ndim == 3 and x.shape[0] in [1, 3, 4, 5]:
+            x = np.transpose(x, (1, 2, 0))
+
+        y = batch_seg["labels"].detach().cpu().numpy()
+        if y.ndim == 3:
+            y = y.squeeze(0)
+
+        # --- A. Process Segmentation Mask Stats ---
+        valid_mask = y != ignore_label
+        binary_manhole_mask = (y == 1) & valid_mask
+        struct = generate_binary_structure(2, 2)
+        binary_manhole_mask = binary_closing(
+            binary_manhole_mask, structure=struct, iterations=8
+        ).astype(np.uint8)
+        
+
+        manhole_pixels = np.sum(binary_manhole_mask)
+        _, num_seg_instances = label(binary_manhole_mask)
+
+        if manhole_pixels > 0:
+            stats["seg_patches_with_manhole"] += 1
+            stats["seg_total_pixels"] += manhole_pixels
+            stats["seg_total_instances"] += num_seg_instances
+
+        # --- B. Process Heatmap GT Stats ---
+        has_heatmap = False
+        gt_2d_map = None
+
+        if "heatmap" in batch_hm and batch_hm["heatmap"] is not None:
+            gt_2d_map = batch_hm["heatmap"].detach().cpu().numpy()
+            has_heatmap = True
+        else:
+            gt_path = f"/data/2d_gt_patches/{config.data.name}_{pc_id}_{x_start}_{y_start}.npy"
+            if os.path.exists(gt_path):
+                gt_2d_map = np.load(gt_path)
+                has_heatmap = True
+            else:
+                stats["missing_heatmap_files"] += 1
+
+        num_hm_instances = 0
+        hm_peaks = []
+
+        if has_heatmap:
+            # Extract target heatmap channel
+            if gt_2d_map.ndim == 3:
+                curr_hm = gt_2d_map[
+                    :, :, min(hm_channel_idx, gt_2d_map.shape[-1] - 1)
+                ]
+            else:
+                curr_hm = gt_2d_map
+
+            # Detect local maxima peaks ("mountain tops")
+            hm_peaks = peak_local_max(
+                curr_hm,
+                # threshold_abs=heatmap_threshold,
+                min_distance=min_peak_distance,
+            )
+            num_hm_instances = len(hm_peaks)
+
+            if num_hm_instances > 0:
+                stats["hm_patches_with_manhole"] += 1
+                stats["hm_total_instances"] += num_hm_instances
+
+        # --- C. Comparative Analysis ---
+        if has_heatmap:
+            seg_has_obj = num_seg_instances > 0
+            hm_has_obj = num_hm_instances > 0
+
+            if seg_has_obj != hm_has_obj:
+                stats["presence_mismatched_patches"] += 1
+
+            if num_seg_instances != num_hm_instances:
+                stats["count_mismatched_patches"] += 1
+
+        # --- Plotting Side-by-Side ---
+        if idx < max_samples_to_plot:
+            num_cols = 5 if (only_channel is None and has_heatmap) else 3
+            fig, axes = plt.subplots(1, num_cols, figsize=(5 * num_cols, 4.5))
+
+            intensity = x[:, :, 1] if x.shape[-1] > 1 else x[:, :, 0]
+
+            axes[0].imshow(intensity, cmap="viridis")
+            axes[0].set_title(
+                f"2D Input (Intensity)\nPatch: {pc_id}_{x_start}_{y_start}"
+            )
+            axes[0].axis("off")
+
+            # Segmentation Plot
+            y_vis = np.ma.masked_where(y == ignore_label, y)
+            axes[1].imshow(y_vis, cmap="tab10", vmin=0, vmax=2)
+            axes[1].set_title(
+                f"2D GT Seg Mask\nInstances: {num_seg_instances}"
+            )
+            axes[1].axis("off")
+
+            # Heatmap Plot (Overlay Peak Coordinates as Red Crosses)
+            if has_heatmap:
+                if only_channel is not None or gt_2d_map.ndim == 2:
+                    axes[2].imshow(curr_hm, cmap="magma")
+                    if len(hm_peaks) > 0:
+                        axes[2].scatter(
+                            hm_peaks[:, 1],
+                            hm_peaks[:, 0],
+                            color="cyan",
+                            marker="x",
+                            s=40,
+                        )
+                    axes[2].set_title(
+                        f"2D Heatmap (Ch {hm_channel_idx})\nHM Instances:"
+                        f" {num_hm_instances}"
+                    )
+                    axes[2].axis("off")
+                else:
+                    for c in range(min(3, gt_2d_map.shape[-1])):
+                        axes[2 + c].imshow(gt_2d_map[:, :, c], cmap="magma")
+                        axes[2 + c].set_title(f"2D Heatmap (Ch {c})")
+                        axes[2 + c].axis("off")
+            else:
+                axes[2].text(
+                    0.5,
+                    0.5,
+                    "Heatmap GT\nNot Found",
+                    ha="center",
+                    va="center",
+                    color="red",
+                    transform=axes[2].transAxes,
+                )
+                axes[2].axis("off")
+
+            plt.tight_layout()
+            out_name = (
+                f"comparison_2d_{idx:04d}_{config.data.name}_{pc_id}_{x_start}_{y_start}.png"
+            )
+            plt.savefig(os.path.join(save_dir, out_name), dpi=150)
+            plt.close(fig)
+
+    # 6. Comparative Report Summary
+    print("\n================ DATASET COMPARISON STATISTICS ================")
+    print(f"Dataset Name                   : {config.data.name}")
+    print(f"Total Patches Evaluated        : {stats['total_patches']}")
+    print(
+        "Missing Heatmap GT Files       :"
+        f" {stats['missing_heatmap_files']}\n"
+    )
+    print("--- Segmentation GT ---")
+    print(
+        "Patches with Manholes          :"
+        f" {stats['seg_patches_with_manhole']}"
+    )
+    print(
+        "Total Manhole Instances (CCL)  :"
+        f" {stats['seg_total_instances']}\n"
+    )
+    print("--- Heatmap GT ---")
+    print(
+        "Patches with Manholes          :"
+        f" {stats['hm_patches_with_manhole']}"
+    )
+    print(
+        "Total Manhole Instances (Peaks):"
+        f" {stats['hm_total_instances']}\n"
+    )
+    print("--- Consistency / Discrepancies ---")
+    print(
+        "Presence Mismatch Patches      :"
+        f" {stats['presence_mismatched_patches']}"
+    )
+    print(
+        "Instance Count Mismatch Patches:"
+        f" {stats['count_mismatched_patches']}"
+    )
+    print(f"Plots Saved To                 : {save_dir}")
+    print("===============================================================")
+
+    return stats
+
+
+# ----------------------
+# > Data Stat Analysis <
+# ----------------------
+
+# def run_ultimate_dataset_audit(config, split="train", output_dir="./output/stats"):
+#     print(f"\n========================================================")
+#     print(f"   STARTING MASTER AUDIT: {config.data.name.upper()} ({split.upper()})")
+#     print(f"========================================================")
+
+#     # ----------------------------------------------------
+#     # STAGE 0: RAW DATASET EVALUATION
+#     # ----------------------------------------------------
+#     print("\n[STAGE 0] Loading Raw Point Cloud Data...")
+#     raw_loader = get_data_loader(
+#         config.data.name, 
+#         config.data.path, 
+#         type=split, 
+#         transform=get_filtered_raw_transform(manhole_label=3 if "sud" in config.data.name.lower() else 104002, apply_filter=False),  # get_basic_transform(),
+#         batch_size=1, 
+#         shuffle=False, 
+#         num_workers=1,
+#         preprocessed=False, # RAW
+#         return_train_format=True,
+#         return_dataset=True,
+#         bev_normalized=False
+#     )
+
+#     raw_pc_paths = raw_loader.point_cloud_paths
+#     raw_pc_count = len(raw_pc_paths)
+#     raw_points_per_cloud = []
+    
+#     # Analyze raw point counts if accessible directly via dataset
+#     for idx in range(raw_pc_count):
+#         if hasattr(raw_loader, "get_point_cloud"):
+#             pc_data = raw_loader.get_point_cloud(idx)
+#             raw_points_per_cloud.append(len(pc_data))
+
+
+#     # ----------------------------------------------------
+#     # STAGE 1: RAW FILTERED DATASET EVALUATION
+#     # ----------------------------------------------------
+#     print("\n[STAGE 1] Loading Raw Filtered Point Cloud Data...")
+#     raw_filtered_loader = get_data_loader(
+#         config.data.name, 
+#         config.data.path, 
+#         type=split, 
+#         transform=get_filtered_raw_transform(manhole_label=3 if "sud" in config.data.name.lower() else 104002),  # get_basic_transform(),
+#         batch_size=1, 
+#         shuffle=False, 
+#         num_workers=1,
+#         preprocessed=False, # RAW
+#         return_train_format=True,
+#         return_dataset=True,
+#         bev_normalized=False
+#     )
+
+#     raw_filtered_pc_paths = raw_filtered_loader.point_cloud_paths
+#     raw_filtered_pc_count = len(raw_filtered_pc_paths)
+#     raw_filtered_points_per_cloud = []
+    
+#     # Analyze raw point counts if accessible directly via dataset
+#     for idx in range(raw_filtered_pc_count):
+#         if hasattr(raw_filtered_loader, "get_point_cloud"):
+#             pc_data = raw_filtered_loader.get_point_cloud(idx)
+#             raw_filtered_points_per_cloud.append(len(pc_data))
+
+#     # ----------------------------------------------------
+#     # STAGE 2: FULL PREPROCESSED PATCHES (UNFILTERED)
+#     # ----------------------------------------------------
+#     print("\n[STAGE 2] Loading Preprocessed Patches (Unfiltered)...")
+#     prep_loader = get_data_loader(
+#         config.data.name, 
+#         config.data.path, 
+#         type=split, 
+#         transform=get_basic_transform(),
+#         batch_size=1, 
+#         shuffle=False, 
+#         num_workers=1,
+#         preprocessed=True,
+#         return_train_format=True,
+#         return_dataset=True,
+#         bev_normalized=False
+#     )
+
+#     all_paths = prep_loader.point_cloud_paths
+#     full_bev_dataset = BEVDataset(
+#         path=all_paths, 
+#         file_paths=[], 
+#         has_labels=True, 
+#         image_training=True, 
+#         preprocessor=None,
+#         augment=False
+#     )
+
+#     label_val = 1 # if config.data.preprocessed else (3 if "sud" in config.data.name.lower() else 104002)
+#     resolution = getattr(config.data, "resolution", 1.0)
+#     matching_thresh = getattr(config.data, "matching_threshold", 0.5)
+
+#     full_stats = analyze_bev_stage(full_bev_dataset, label_val, resolution, matching_thresh, name="STAGE 2 (Full Preprocessed)")
+
+#     # ----------------------------------------------------
+#     # STAGE 3: FILTERED TRAINING / VAL SETS
+#     # ----------------------------------------------------
+#     print("\n[STAGE 3] Applying `manhole_filter`...")
+#     filtered_bev_dataset = BEVDataset(
+#         path=all_paths, 
+#         file_paths=[], 
+#         has_labels=True, 
+#         image_training=True, 
+#         preprocessor=None,
+#         augment=False
+#     )
+    
+#     # Apply filtering config
+#     if split == "train":
+#         filtered_bev_dataset.manhole_filter(required_manhole_points=50, amount_non_manhole_samples=10)
+#     else:
+#         filtered_bev_dataset.manhole_filter(required_manhole_points=50)
+
+#     filtered_stats = analyze_bev_stage(filtered_bev_dataset, label_val, resolution, matching_thresh, name="STAGE 3 (Filtered)")
+
+#     # ----------------------------------------------------
+#     # FINAL STATISTICAL PRINT OUT & FILE SAVE
+#     # ----------------------------------------------------
+#     generate_and_save_master_report(
+#         ds_name=config.data.name, 
+#         split=split, 
+#         raw_count=raw_pc_count, 
+#         raw_pts=raw_points_per_cloud,
+#         raw_filtered_count=raw_filtered_pc_count,
+#         raw_filtered_pts=raw_filtered_points_per_cloud,
+#         full_stats=full_stats, 
+#         filt_stats=filtered_stats,
+#         output_dir=output_dir
+#     )
+
+
+# def analyze_bev_stage(dataset, label_val, resolution, matching_thresh, name=""):
+#     """Evaluates patches, manhole overlap, and point/pixel distributions."""
+#     total_patches = len(dataset)
+#     pos_patches = 0
+#     neg_patches = 0
+
+#     global_manholes = []
+#     patch_pixel_counts = []
+
+#     all_file_paths = dataset.file_paths
+
+#     for idx, batch in enumerate(dataset):
+#         file_name = os.path.basename(all_file_paths[idx])
+#         pc_id, str_x, str_y = dataset.extract_grid_identifier(file_name)
+#         x_start, y_start = float(str_x), float(str_y)
+
+#         labels = batch["labels"].detach().cpu().numpy().squeeze()
+#         binary_mask = (labels == label_val)
+
+#         pixel_count = np.sum(binary_mask)
+        
+#         if pixel_count == 0:
+#             neg_patches += 1
+#             continue
+        
+#         pos_patches += 1
+#         patch_pixel_counts.append(pixel_count)
+
+#         # Instance segmentation via connected components
+#         labeled_mask, num_features = label(binary_mask)
+#         if num_features == 0:
+#             continue
+
+#         centroids = center_of_mass(binary_mask, labeled_mask, range(1, num_features + 1))
+
+#         for feat_idx, (local_y, local_x) in enumerate(centroids, start=1):
+#             global_x = x_start + (local_x * resolution)
+#             global_y = y_start + (local_y * resolution)
+#             current_pos = np.array([global_x, global_y])
+#             inst_pts = np.sum(labeled_mask == feat_idx)
+
+#             matched = False
+#             for mh in global_manholes:
+#                 if mh['pc_id'] == pc_id:
+#                     if np.linalg.norm(mh['pos'] - current_pos) <= matching_thresh:
+#                         mh['tiles'].add(file_name)
+#                         mh['pts'].append(inst_pts)
+#                         matched = True
+#                         break
+
+#             if not matched:
+#                 global_manholes.append({
+#                     'pc_id': pc_id,
+#                     'pos': current_pos,
+#                     'tiles': {file_name},
+#                     'pts': [inst_pts]
+#                 })
+
+#     # Grouping by Point Cloud ID
+#     pc_grouped = defaultdict(list)
+#     for mh in global_manholes:
+#         pc_grouped[mh['pc_id']].append(mh)
+
+#     return {
+#         'total_patches': total_patches,
+#         'pos_patches': pos_patches,
+#         'neg_patches': neg_patches,
+#         'global_manholes': global_manholes,
+#         'pc_grouped': pc_grouped,
+#         'patch_pixel_counts': patch_pixel_counts
+#     }
+
+
+# def compute_distribution_dict(arr):
+#     if len(arr) == 0:
+#         return {k: 0.0 for k in ["Min", "Max", "Mean", "Median", "P95", "Std"]}
+#     pts = np.array(arr)
+#     return {
+#         "Min": np.min(pts),
+#         "Max": np.max(pts),
+#         "Mean": np.mean(pts),
+#         "Median": np.median(pts),
+#         "P95": np.percentile(pts, 95),
+#         "Std": np.std(pts)
+#     }
+
+
+
+# def generate_and_save_master_report(ds_name, split, raw_count, raw_pts, raw_filtered_count, raw_filtered_pts, full_stats, filt_stats, output_dir="./output/stats"):
+#     os.makedirs(output_dir, exist_ok=True)
+    
+#     txt_filepath = os.path.join(output_dir, f"stats_report_{ds_name.lower()}_{split.lower()}.txt")
+#     json_filepath = os.path.join(output_dir, f"stats_data_{ds_name.lower()}_{split.lower()}.json")
+
+#     report_lines = []
+
+#     def log(text=""):
+#         print(text)
+#         report_lines.append(text)
+
+#     # --- 1. BUILD TEXT REPORT ---
+#     log("=" * 70)
+#     log(f"            MASTER THESIS STATS REPORT: {ds_name.upper()} ({split.upper()})")
+#     log("=" * 70)
+
+#     log("\n--- STAGE 0: RAW POINT CLOUDS ---")
+#     log(f"Total Raw Point Clouds: {raw_count}")
+#     raw_dist = compute_distribution_dict(raw_pts) if raw_pts else {}
+#     if raw_pts:
+#         log("Raw Points/Cloud Distribution:")
+#         for k, v in raw_dist.items():
+#             log(f"  - {k:<6}: {v:,.2f}")
+
+#     log("\n--- STAGE 1: RAW FILTERED POINT CLOUDS ---")
+#     log(f"Total Raw Filtered Point Clouds: {raw_filtered_count}")
+#     raw_filtered_dist = compute_distribution_dict(raw_filtered_pts) if raw_filtered_pts else {}
+#     if raw_filtered_pts:
+#         log("Raw Filtered Points/Cloud Distribution:")
+#         for k, v in raw_filtered_dist.items():
+#             log(f"  - {k:<6}: {v:,.2f}")
+
+#     log("\n--- STAGE 2: FULL PREPROCESSED PATCHES (BEFORE FILTERING) ---")
+#     log(f"Total Generated Patches: {full_stats['total_patches']}")
+#     log(f"  - Positive Patches (has manhole): {full_stats['pos_patches']}")
+#     log(f"  - Negative Patches (background):  {full_stats['neg_patches']}")
+#     log(f"Total Unique Physical Manholes:   {len(full_stats['global_manholes'])}")
+    
+#     stage2_pc_breakdown = {}
+#     log("\nPoint Cloud Breakdown (Stage 2):")
+#     for pc_id, mhs in sorted(full_stats['pc_grouped'].items()):
+#         avg_tiles = float(np.mean([len(m['tiles']) for m in mhs])) if mhs else 0.0
+#         stage2_pc_breakdown[pc_id] = {"manhole_count": len(mhs), "avg_overlap": avg_tiles}
+#         log(f"  - PC {pc_id}: {len(mhs)} Manholes | Avg Overlap: {avg_tiles:.2f} BEV tiles/manhole")
+
+#     full_inst_pts = [max(m['pts']) for m in full_stats['global_manholes']] if full_stats['global_manholes'] else []
+#     stage2_dist = compute_distribution_dict(full_inst_pts)
+#     log("\nManhole Size Distribution (Pixels/Points per Manhole - Stage 2):")
+#     for k, v in stage2_dist.items():
+#         log(f"  - {k:<6}: {v:.2f}")
+
+#     log("\n--- STAGE 3: FILTERED DATASET (AFTER `manhole_filter`) ---")
+#     pos_retention = (filt_stats['pos_patches'] / full_stats['pos_patches'] * 100) if full_stats['pos_patches'] > 0 else 0.0
+#     neg_retention = (filt_stats['neg_patches'] / full_stats['neg_patches'] * 100) if full_stats['neg_patches'] > 0 else 0.0
+#     total_retention = (filt_stats['total_patches'] / full_stats['total_patches'] * 100) if full_stats['total_patches'] > 0 else 0.0
+
+#     log(f"Total Filtered Patches Kept: {filt_stats['total_patches']} (Retained {total_retention:.1f}%)")
+#     log(f"  - Positive Patches Kept:    {filt_stats['pos_patches']} (Retained {pos_retention:.1f}%)")
+#     log(f"  - Negative Patches Kept:    {filt_stats['neg_patches']} (Retained {neg_retention:.1f}%)")
+#     log(f"Surviving Physical Manholes:  {len(filt_stats['global_manholes'])} / {len(full_stats['global_manholes'])}")
+
+#     stage3_pc_breakdown = {}
+#     log("\nPoint Cloud Breakdown (Stage 3):")
+#     for pc_id, mhs in sorted(filt_stats['pc_grouped'].items()):
+#         avg_tiles = float(np.mean([len(m['tiles']) for m in mhs])) if mhs else 0.0
+#         stage3_pc_breakdown[pc_id] = {"manhole_count": len(mhs), "avg_overlap": avg_tiles}
+#         log(f"  - PC {pc_id}: {len(mhs)} Manholes | Avg Overlap: {avg_tiles:.2f} BEV tiles/manhole")
+
+#     filt_inst_pts = [max(m['pts']) for m in filt_stats['global_manholes']] if filt_stats['global_manholes'] else []
+#     stage3_dist = compute_distribution_dict(filt_inst_pts)
+#     log("\nManhole Size Distribution (Pixels/Points per Manhole - Stage 3):")
+#     for k, v in stage3_dist.items():
+#         log(f"  - {k:<6}: {v:.2f}")
+#     log("=" * 70 + "\n")
+
+#     # --- 2. SAVE TXT REPORT ---
+#     with open(txt_filepath, "w", encoding="utf-8") as f:
+#         f.write("\n".join(report_lines))
+
+#     # --- 3. SAVE JSON DATA FILE ---
+#     structured_data = {
+#         "dataset_name": ds_name,
+#         "split": split,
+#         "stage1_raw": {
+#             "total_raw_point_clouds": raw_count,
+#             "distribution": {k: float(v) for k, v in raw_dist.items()}
+#         },
+#         "stage2_full_preprocessed": {
+#             "total_patches": full_stats['total_patches'],
+#             "pos_patches": full_stats['pos_patches'],
+#             "neg_patches": full_stats['neg_patches'],
+#             "total_unique_manholes": len(full_stats['global_manholes']),
+#             "point_cloud_breakdown": stage2_pc_breakdown,
+#             "manhole_size_distribution": {k: float(v) for k, v in stage2_dist.items()}
+#         },
+#         "stage3_filtered": {
+#             "total_patches": filt_stats['total_patches'],
+#             "pos_patches": filt_stats['pos_patches'],
+#             "neg_patches": filt_stats['neg_patches'],
+#             "surviving_physical_manholes": len(filt_stats['global_manholes']),
+#             "retention_percentages": {
+#                 "total": float(total_retention),
+#                 "positive": float(pos_retention),
+#                 "negative": float(neg_retention)
+#             },
+#             "point_cloud_breakdown": stage3_pc_breakdown,
+#             "manhole_size_distribution": {k: float(v) for k, v in stage3_dist.items()}
+#         }
+#     }
+
+#     with open(json_filepath, "w", encoding="utf-8") as f:
+#         json.dump(structured_data, f, indent=4)
+
+#     print(f"[Saved Text Report] -> {txt_filepath}")
+#     print(f"[Saved JSON Data]   -> {json_filepath}\n")
+
+
+# # HELPER FUNCTIONS & DISTRIBUTIONS
+# def compute_distribution_dict(arr):
+#     """Calculates granular descriptive statistics for any array."""
+#     if arr is None or len(arr) == 0:
+#         return {k: 0.0 for k in ["Count", "Min", "Max", "Mean", "Median", "P25", "P75", "P95", "Std"]}
+#     pts = np.array(arr, dtype=np.float64)
+#     return {
+#         "Count": int(len(pts)),
+#         "Min": float(np.min(pts)),
+#         "Max": float(np.max(pts)),
+#         "Mean": float(np.mean(pts)),
+#         "Median": float(np.median(pts)),
+#         "P25": float(np.percentile(pts, 25)),
+#         "P75": float(np.percentile(pts, 75)),
+#         "P95": float(np.percentile(pts, 95)),
+#         "Std": float(np.std(pts))
+#     }
+
+
+# def compute_overlap_breakdown(global_manholes):
+#     """
+#     Clarifies what 'average overlap' means by returning exact counts and percentages
+#     of manholes spanning across 1 tile, 2 tiles, 3 tiles, etc.
+#     """
+#     if not global_manholes:
+#         return {"tile_histogram": {}, "multi_tile_count": 0, "multi_tile_ratio": 0.0, "mean_overlap": 0.0}
+
+#     tile_counts = [len(mh['tiles']) for mh in global_manholes]
+#     counts_summary = dict(Counter(tile_counts))
+    
+#     # Sort keys for structured reporting
+#     sorted_hist = {f"{k}_tiles": int(counts_summary[k]) for k in sorted(counts_summary.keys())}
+#     multi_tile_count = sum(v for k, v in counts_summary.items() if k > 1)
+    
+#     return {
+#         "tile_histogram": sorted_hist,
+#         "multi_tile_count": multi_tile_count,
+#         "multi_tile_ratio": float(multi_tile_count / len(global_manholes)),
+#         "mean_overlap": float(np.mean(tile_counts)),
+#         "max_overlap": int(np.max(tile_counts)) if tile_counts else 0
+#     }
+
+
+# # ENHANCED AUDIT STAGE
+# def analyze_bev_stage(dataset, label_val, resolution, matching_thresh, name=""):
+#     """
+#     Evaluates 2D BEV pixel statistics, 3D Point cloud metrics, and exact patch overlap distributions.
+#     """
+#     total_patches = len(dataset)
+#     pos_patches = 0
+#     neg_patches = 0
+
+#     global_manholes = []
+#     patch_pixel_counts = []
+    
+#     # Spatial KD-Tree index tracking for global manhole matching
+#     global_centers = []  # List of [X, Y]
+#     global_mh_refs = []  # Reference to dicts
+
+#     all_file_paths = getattr(dataset, "file_paths", [f"tile_{i}.npy" for i in range(total_patches)])
+
+#     for idx in range(total_patches):
+#         batch = dataset[idx]
+#         file_name = os.path.basename(all_file_paths[idx])
+        
+#         # Extract metadata
+#         pc_id, str_x, str_y = dataset.extract_grid_identifier(file_name)
+#         x_start, y_start = float(str_x), float(str_y)
+
+#         labels = batch["labels"].detach().cpu().numpy().squeeze()
+#         binary_mask = (labels == label_val)
+#         pixel_count = int(np.sum(binary_mask))
+
+#         # Extract 3D points if available in batch
+#         points_3d = None
+#         if "points" in batch:
+#             points_3d = batch["points"].detach().cpu().numpy()
+
+#         if pixel_count == 0:
+#             neg_patches += 1
+#             continue
+
+#         pos_patches += 1
+#         patch_pixel_counts.append(pixel_count)
+
+#         # Instance segmentation via 2D connected components
+#         labeled_mask, num_features = label(binary_mask)
+#         if num_features == 0:
+#             continue
+
+#         centroids = center_of_mass(binary_mask, labeled_mask, range(1, num_features + 1))
+
+#         for feat_idx, (local_y, local_x) in enumerate(centroids, start=1):
+#             global_x = x_start + (local_x * resolution)
+#             global_y = y_start + (local_y * resolution)
+#             current_pos = np.array([global_x, global_y])
+
+#             # 2D stats
+#             inst_pixels = int(np.sum(labeled_mask == feat_idx))
+            
+#             # 3D stats (if 3D points are attached to the tile)
+#             inst_3d_points = 0
+#             if points_3d is not None:
+#                 # Mask points falling into this connected component's 2D bounding pixel grid
+#                 py = np.clip((points_3d[:, 1] - y_start) / resolution, 0, labeled_mask.shape[0] - 1).astype(int)
+#                 px = np.clip((points_3d[:, 0] - x_start) / resolution, 0, labeled_mask.shape[1] - 1).astype(int)
+#                 point_mask = (labeled_mask[py, px] == feat_idx)
+#                 inst_3d_points = int(np.sum(point_mask))
+
+#             matched = False
+            
+#             # Fast KD-Tree lookup against existing global manholes
+#             if len(global_centers) > 0:
+#                 tree = cKDTree(global_centers)
+#                 indices = tree.query_ball_point(current_pos, r=matching_thresh)
+                
+#                 for candidate_idx in indices:
+#                     candidate_mh = global_mh_refs[candidate_idx]
+#                     if candidate_mh['pc_id'] == pc_id:
+#                         candidate_mh['tiles'].add(file_name)
+#                         candidate_mh['pixel_counts'].append(inst_pixels)
+#                         if inst_3d_points > 0:
+#                             candidate_mh['point_3d_counts'].append(inst_3d_points)
+#                         matched = True
+#                         break
+
+#             if not matched:
+#                 new_mh = {
+#                     'pc_id': pc_id,
+#                     'pos': current_pos,
+#                     'tiles': {file_name},
+#                     'pixel_counts': [inst_pixels],
+#                     'point_3d_counts': [inst_3d_points] if inst_3d_points > 0 else []
+#                 }
+#                 global_manholes.append(new_mh)
+#                 global_centers.append(current_pos)
+#                 global_mh_refs.append(new_mh)
+
+#     # Grouping by Point Cloud ID
+#     pc_grouped = defaultdict(list)
+#     for mh in global_manholes:
+#         pc_grouped[mh['pc_id']].append(mh)
+
+#     return {
+#         'total_patches': total_patches,
+#         'pos_patches': pos_patches,
+#         'neg_patches': neg_patches,
+#         'global_manholes': global_manholes,
+#         'pc_grouped': pc_grouped,
+#         'patch_pixel_counts': patch_pixel_counts,
+#         'overlap_stats': compute_overlap_breakdown(global_manholes)
+#     }
+
+
+# # REPORTING & EXPORT ENGINE
+# def generate_and_save_master_report(ds_name, split, raw_count, raw_pts, raw_filtered_count, raw_filtered_pts, full_stats, filt_stats, output_dir="./output/stats"):
+#     os.makedirs(output_dir, exist_ok=True)
+    
+#     txt_filepath = os.path.join(output_dir, f"stats_report_{ds_name.lower()}_{split.lower()}.txt")
+#     json_filepath = os.path.join(output_dir, f"stats_data_{ds_name.lower()}_{split.lower()}.json")
+
+#     report_lines = []
+
+#     def log(text=""):
+#         print(text)
+#         report_lines.append(text)
+
+#     log("=" * 80)
+#     log(f"            MASTER THESIS STATS AUDIT: {ds_name.upper()} ({split.upper()})")
+#     log("=" * 80)
+
+#     # STAGE 0 & 1
+#     log("\n--- STAGE 0 & 1: RAW POINT CLOUDS ---")
+#     log(f"Raw Point Clouds Count:          {raw_count}")
+#     log(f"Filtered Raw Point Clouds Count: {raw_filtered_count}")
+    
+#     raw_dist = compute_distribution_dict(raw_pts)
+#     raw_filt_dist = compute_distribution_dict(raw_filtered_pts)
+    
+#     log("\nRaw Point Cloud Sizes (3D Points/Cloud):")
+#     log(f"  - Unfiltered: Mean={raw_dist['Mean']:,.0f} | Median={raw_dist['Median']:,.0f} | Range=[{raw_dist['Min']:,}, {raw_dist['Max']:,}]")
+#     log(f"  - Filtered:   Mean={raw_filt_dist['Mean']:,.0f} | Median={raw_filt_dist['Median']:,.0f} | Range=[{raw_filt_dist['Min']:,}, {raw_filt_dist['Max']:,}]")
+
+#     # STAGE 2
+#     log("\n--- STAGE 2: PREPROCESSED PATCHES (UNFILTERED) ---")
+#     log(f"Total Patches:           {full_stats['total_patches']}")
+#     log(f"  - Positive (Manhole):  {full_stats['pos_patches']} ({full_stats['pos_patches']/full_stats['total_patches']*100:.1f}%)")
+#     log(f"  - Negative (BG):       {full_stats['neg_patches']} ({full_stats['neg_patches']/full_stats['total_patches']*100:.1f}%)")
+#     log(f"Unique Physical Manholes:{len(full_stats['global_manholes'])}")
+
+#     # Overlap Breakdown
+#     ov = full_stats['overlap_stats']
+#     log("\nPatch Overlap Precision Analysis:")
+#     log(f"  - Average Tiles per Manhole: {ov['mean_overlap']:.2f}")
+#     log(f"  - Multi-patch Manholes:      {ov['multi_tile_count']} ({ov['multi_tile_ratio']*100:.1f}% of all manholes)")
+#     log("  - Exact Tile Coverage Histogram:")
+#     for tile_k, count in ov['tile_histogram'].items():
+#         pct = (count / len(full_stats['global_manholes'])) * 100 if full_stats['global_manholes'] else 0
+#         log(f"      * Spanning {tile_k.replace('_', ' ')}: {count} manholes ({pct:.1f}%)")
+
+#     # 2D vs 3D Comparative Size Metrics
+#     mh_2d_pixels = [max(m['pixel_counts']) for m in full_stats['global_manholes']] if full_stats['global_manholes'] else []
+#     mh_3d_points = [max(m['point_3d_counts']) for m in full_stats['global_manholes'] if len(m['point_3d_counts']) > 0]
+    
+#     dist_2d = compute_distribution_dict(mh_2d_pixels)
+#     dist_3d = compute_distribution_dict(mh_3d_points)
+
+#     log("\nManhole Instance Metrics (2D Pixels vs 3D Points):")
+#     log(f"  - 2D Pixel Count/Manhole: Mean={dist_2d['Mean']:.1f} | Med={dist_2d['Median']:.1f} | Std={dist_2d['Std']:.1f} | Range=[{dist_2d['Min']:.0f}, {dist_2d['Max']:.0f}]")
+#     if len(mh_3d_points) > 0:
+#         log(f"  - 3D Point Count/Manhole: Mean={dist_3d['Mean']:.1f} | Med={dist_3d['Median']:.1f} | Std={dist_3d['Std']:.1f} | Range=[{dist_3d['Min']:.0f}, {dist_3d['Max']:.0f}]")
+#     else:
+#         log("  - 3D Point Count/Manhole: N/A (Stage 2 operates on 2D BEV slices only)")
+
+#     # STAGE 3
+#     log("\n--- STAGE 3: FILTERED DATASET ---")
+#     pos_ret = (filt_stats['pos_patches'] / full_stats['pos_patches'] * 100) if full_stats['pos_patches'] > 0 else 0.0
+#     neg_ret = (filt_stats['neg_patches'] / full_stats['neg_patches'] * 100) if full_stats['neg_patches'] > 0 else 0.0
+#     tot_ret = (filt_stats['total_patches'] / full_stats['total_patches'] * 100) if full_stats['total_patches'] > 0 else 0.0
+
+#     log(f"Patches Retained:  {filt_stats['total_patches']} / {full_stats['total_patches']} ({tot_ret:.1f}%)")
+#     log(f"  - Pos Retained:  {filt_stats['pos_patches']} ({pos_ret:.1f}%)")
+#     log(f"  - Neg Retained:  {filt_stats['neg_patches']} ({neg_ret:.1f}%)")
+#     log(f"Surviving Manholes:{len(filt_stats['global_manholes'])} / {len(full_stats['global_manholes'])}")
+
+#     log("=" * 80 + "\n")
+
+#     # SAVE TO FILE
+#     with open(txt_filepath, "w", encoding="utf-8") as f:
+#         f.write("\n".join(report_lines))
+
+#     # SAVE JSON DUMP
+#     structured_data = {
+#         "dataset_name": ds_name,
+#         "split": split,
+#         "raw_stage0": {"total_count": raw_count, "distribution": raw_dist},
+#         "raw_filtered_stage1": {"total_count": raw_filtered_count, "distribution": raw_filt_dist},
+#         "stage2_preprocessed": {
+#             "total_patches": full_stats['total_patches'],
+#             "pos_patches": full_stats['pos_patches'],
+#             "neg_patches": full_stats['neg_patches'],
+#             "unique_manholes": len(full_stats['global_manholes']),
+#             "overlap_analysis": ov,
+#             "manhole_2d_pixels": dist_2d,
+#             "manhole_3d_points": dist_3d
+#         },
+#         "stage3_filtered": {
+#             "total_patches": filt_stats['total_patches'],
+#             "pos_patches": filt_stats['pos_patches'],
+#             "neg_patches": filt_stats['neg_patches'],
+#             "surviving_manholes": len(filt_stats['global_manholes']),
+#             "retention": {"total": tot_ret, "positive": pos_ret, "negative": neg_ret}
+#         }
+#     }
+
+#     with open(json_filepath, "w", encoding="utf-8") as f:
+#         json.dump(structured_data, f, indent=4)
+
+#     print(f"[Exported Reports] -> {txt_filepath} | {json_filepath}")
+
+
+# # MAIN ENTRY POINT
+# def run_ultimate_dataset_audit(config, split="train", output_dir="./output/stats"):
+#     print(f"\n========================================================")
+#     print(f"   STARTING MASTER AUDIT: {config.data.name.upper()} ({split.upper()})")
+#     print(f"========================================================")
+
+#     # STAGE 0
+#     raw_loader = get_data_loader(
+#         config.data.name, config.data.path, type=split, 
+#         transform=get_filtered_raw_transform(manhole_label=3 if "sud" in config.data.name.lower() else 104002, apply_filter=False),
+#         batch_size=1, shuffle=False, num_workers=1, preprocessed=False, return_train_format=True, return_dataset=True, bev_normalized=False
+#     )
+#     raw_pc_count = len(raw_loader.point_cloud_paths)
+#     raw_pts = [len(raw_loader.get_point_cloud(i)) for i in range(raw_pc_count) if hasattr(raw_loader, "get_point_cloud")]
+
+#     # STAGE 1
+#     raw_filt_loader = get_data_loader(
+#         config.data.name, config.data.path, type=split, 
+#         transform=get_filtered_raw_transform(manhole_label=3 if "sud" in config.data.name.lower() else 104002),
+#         batch_size=1, shuffle=False, num_workers=1, preprocessed=False, return_train_format=True, return_dataset=True, bev_normalized=False
+#     )
+#     raw_filt_count = len(raw_filt_loader.point_cloud_paths)
+#     raw_filt_pts = [len(raw_filt_loader.get_point_cloud(i)) for i in range(raw_filt_count) if hasattr(raw_filt_loader, "get_point_cloud")]
+
+#     # STAGE 2
+#     prep_loader = get_data_loader(
+#         config.data.name, config.data.path, type=split, transform=get_basic_transform(),
+#         batch_size=1, shuffle=False, num_workers=1, preprocessed=True, return_train_format=True, return_dataset=True, bev_normalized=False
+#     )
+#     full_bev_dataset = BEVDataset(path=prep_loader.point_cloud_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None, augment=False)
+    
+#     label_val = 1
+#     resolution = getattr(config.data, "resolution", 1.0)
+#     matching_thresh = getattr(config.data, "matching_threshold", 0.5)
+
+#     full_stats = analyze_bev_stage(full_bev_dataset, label_val, resolution, matching_thresh, name="STAGE 2")
+
+#     # STAGE 3
+#     filtered_bev_dataset = BEVDataset(path=prep_loader.point_cloud_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None, augment=False)
+#     if split == "train":
+#         filtered_bev_dataset.manhole_filter(required_manhole_points=50, amount_non_manhole_samples=10)
+#     else:
+#         filtered_bev_dataset.manhole_filter(required_manhole_points=50)
+
+#     filt_stats = analyze_bev_stage(filtered_bev_dataset, label_val, resolution, matching_thresh, name="STAGE 3")
+
+#     # REPORT GENERATION
+#     generate_and_save_master_report(
+#         config.data.name, split, raw_pc_count, raw_pts, raw_filt_count, raw_filt_pts, full_stats, filt_stats, output_dir=output_dir
+#     )
+
+
+# static helper functions
+def compute_distribution_dict(arr):
+    """Calculates granular descriptive statistics for an array."""
+    if arr is None or len(arr) == 0:
+        return {k: 0.0 for k in ["Count", "Min", "Max", "Mean", "Median", "P25", "P75", "P95", "Std"]}
+    pts = np.array(arr, dtype=np.float64)
+    return {
+        "Count": int(len(pts)),
+        "Min": float(np.min(pts)),
+        "Max": float(np.max(pts)),
+        "Mean": float(np.mean(pts)),
+        "Median": float(np.median(pts)),
+        "P25": float(np.percentile(pts, 25)),
+        "P75": float(np.percentile(pts, 75)),
+        "P95": float(np.percentile(pts, 95)),
+        "Std": float(np.std(pts))
+    }
+
+def compute_overlap_breakdown(global_manholes):
+    """Calculates distribution of manholes across multiple overlapping tiles."""
+    if not global_manholes:
+        return {"tile_histogram": {}, "multi_tile_count": 0, "multi_tile_ratio": 0.0, "mean_overlap": 0.0, "max_overlap": 0}
+
+    tile_counts = [len(mh['tiles']) for mh in global_manholes]
+    counts_summary = dict(Counter(tile_counts))
+    sorted_hist = {f"{k}_tiles": int(counts_summary[k]) for k in sorted(counts_summary.keys())}
+    multi_tile_count = sum(v for k, v in counts_summary.items() if k > 1)
+    
+    return {
+        "tile_histogram": sorted_hist,
+        "multi_tile_count": multi_tile_count,
+        "multi_tile_ratio": float(multi_tile_count / len(global_manholes)),
+        "mean_overlap": float(np.mean(tile_counts)) if tile_counts else 0.0,
+        "max_overlap": int(np.max(tile_counts)) if tile_counts else 0
+    }
+
+
+# stage 0 & 1: raw point cloud analysis
+def analyze_raw_point_cloud_stage(loader, manhole_label):
+    """
+    Analyzes raw 3D point clouds directly without console logging.
+    """
+    pc_paths = getattr(loader, "point_cloud_paths", [])
+    
+    total_points_per_cloud = []
+    manhole_counts_per_cloud = []
+    all_3d_manhole_point_counts = []
+
+    pc_count = 0
+    
+    for pc_data in loader:
+        pc_count += 1
+
+        # print(f"{type(pc_data)=}")
+        # print(f"{type(pc_data[0])=}")
+        # print(f"{pc_data=}")
+
+        if isinstance(pc_data, (tuple, list)) and len(pc_data) == 1:
+            pc_data = pc_data[0]
+        
+        pts = pc_data.point[get_coordinate_attribute(pc_data)].numpy()
+        labels = pc_data.point[get_class_attribute(pc_data)].numpy()
+
+        total_points_per_cloud.append(len(pts))
+
+        if labels is not None:
+            manhole_pts = pts[labels == manhole_label]
+            if len(manhole_pts) == 0:
+                manhole_counts_per_cloud.append(0)
+                continue
+
+            # 3D Euclidean spatial clustering
+            tree = cKDTree(manhole_pts[:, :2])
+            clusters = tree.query_ball_point(manhole_pts[:, :2], r=1.0)
+            
+            visited = set()
+            mh_instances = []
+            
+            for p_idx in range(len(manhole_pts)):
+                if p_idx in visited:
+                    continue
+                component = set(clusters[p_idx])
+                visited.update(component)
+                mh_instances.append(len(component))
+            
+            manhole_counts_per_cloud.append(len(mh_instances))
+            all_3d_manhole_point_counts.extend(mh_instances)
+        else:
+            manhole_counts_per_cloud.append(0)
+
+    return {
+        "cloud_count": pc_count,
+        "total_points_dist": compute_distribution_dict(total_points_per_cloud),
+        "total_manholes_found": sum(manhole_counts_per_cloud),
+        "manholes_per_cloud": compute_distribution_dict(manhole_counts_per_cloud),
+        "manhole_3d_points_dist": compute_distribution_dict(all_3d_manhole_point_counts)
+    }
+
+# stage 2 & 3 bev patch analysis
+def analyze_bev_stage(dataset, label_val, resolution, matching_thresh, min_pixels=5):
+    """
+    Evaluates BEV patches silently.
+    """
+    total_patches = len(dataset)
+    pos_patches = 0
+    neg_patches = 0
+
+    global_manholes = []
+    patch_pixel_counts = []
+    
+    global_centers = []
+    global_mh_refs = []
+
+    all_file_paths = getattr(dataset, "file_paths", [f"tile_{i}.npy" for i in range(total_patches)])
+
+    for idx in range(total_patches):
+        batch = dataset[idx]
+        file_name = os.path.basename(all_file_paths[idx]) if idx < len(all_file_paths) else f"tile_{idx}.npy"
+        
+        if hasattr(dataset, "extract_grid_identifier"):
+            pc_id, str_x, str_y = dataset.extract_grid_identifier(file_name)
+        else:
+            pc_id, str_x, str_y = "default_pc", "0.0", "0.0"
+
+        x_start, y_start = float(str_x), float(str_y)
+
+        labels = batch["labels"].detach().cpu().numpy().squeeze()
+        binary_mask = (labels == label_val)
+        struct = generate_binary_structure(2, 2)
+        binary_mask = binary_closing(binary_mask, structure=struct, iterations=8).astype(np.uint8)
+        pixel_count = int(np.sum(binary_mask))
+
+        points_3d = batch.get("points", None)
+        if points_3d is not None:
+            points_3d = points_3d.detach().cpu().numpy()
+
+        if pixel_count < min_pixels:
+            neg_patches += 1
+            continue
+
+        pos_patches += 1
+        patch_pixel_counts.append(pixel_count)
+
+        labeled_mask, num_features = label(binary_mask)
+        if num_features == 0:
+            continue
+
+        centroids = center_of_mass(binary_mask, labeled_mask, range(1, num_features + 1))
+
+        for feat_idx, (local_y, local_x) in enumerate(centroids, start=1):
+            inst_pixels = int(np.sum(labeled_mask == feat_idx))
+            
+            if inst_pixels < min_pixels:
+                continue
+
+            global_x = x_start + (local_x * resolution)
+            global_y = y_start + (local_y * resolution)
+            current_pos = np.array([global_x, global_y])
+
+            inst_3d_points = 0
+            if points_3d is not None and len(points_3d) > 0:
+                py = np.clip((points_3d[:, 1] - y_start) / resolution, 0, labeled_mask.shape[0] - 1).astype(int)
+                px = np.clip((points_3d[:, 0] - x_start) / resolution, 0, labeled_mask.shape[1] - 1).astype(int)
+                inst_3d_points = int(np.sum(labeled_mask[py, px] == feat_idx))
+
+            matched = False
+            
+            if len(global_centers) > 0:
+                tree = cKDTree(global_centers)
+                indices = tree.query_ball_point(current_pos, r=matching_thresh)
+                
+                for candidate_idx in indices:
+                    candidate_mh = global_mh_refs[candidate_idx]
+                    if str(candidate_mh['pc_id']) == str(pc_id):
+                        candidate_mh['tiles'].add(file_name)
+                        candidate_mh['pixel_counts'].append(inst_pixels)
+                        if inst_3d_points > 0:
+                            candidate_mh['point_3d_counts'].append(inst_3d_points)
+                        matched = True
+                        break
+
+            if not matched:
+                new_mh = {
+                    'pc_id': str(pc_id),
+                    'pos': current_pos,
+                    'tiles': {file_name},
+                    'pixel_counts': [inst_pixels],
+                    'point_3d_counts': [inst_3d_points] if inst_3d_points > 0 else []
+                }
+                global_manholes.append(new_mh)
+                global_centers.append(current_pos)
+                global_mh_refs.append(new_mh)
+
+    return {
+        'total_patches': total_patches,
+        'pos_patches': pos_patches,
+        'neg_patches': neg_patches,
+        'global_manholes': global_manholes,
+        'patch_pixel_counts': patch_pixel_counts,
+        'overlap_stats': compute_overlap_breakdown(global_manholes)
+    }
+
+# analysis core function that runs the entire audit process and saves results to disk
+def run_ultimate_dataset_audit(config, split="train", output_dir="./output/stats"):
+    """
+    Executes audit and exports results cleanly to disk without printing.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    manhole_lbl = 3 if "sud" in config.data.name.lower() else 104002
+
+    # Stage 0
+    raw_loader = get_data_loader(
+        config.data.name, config.data.path, type=split, 
+        transform=get_filtered_raw_transform(manhole_label=manhole_lbl, apply_filter=False),
+        batch_size=1, shuffle=False, num_workers=1, preprocessed=False, return_train_format=False, return_dataset=False, bev_normalized=False
+    )
+    stage_0_stats = analyze_raw_point_cloud_stage(raw_loader, manhole_label=1)
+
+    # Stage 1
+    raw_filt_loader = get_data_loader(
+        config.data.name, config.data.path, type=split, 
+        transform=get_filtered_raw_transform(manhole_label=manhole_lbl, apply_filter=True),
+        batch_size=1, shuffle=False, num_workers=1, preprocessed=False, return_train_format=False, return_dataset=False, bev_normalized=False
+    )
+    # 
+    manhole_lbl = 1
+    stage_1_stats = analyze_raw_point_cloud_stage(raw_filt_loader, manhole_label=1)
+
+    # Stage 2
+    prep_loader = get_data_loader(
+        config.data.name, config.data.path, type=split, transform=get_basic_transform(),
+        batch_size=1, shuffle=False, num_workers=1, preprocessed=True, return_train_format=True, return_dataset=True, bev_normalized=False
+    )
+    full_bev_dataset = BEVDataset(path=prep_loader.point_cloud_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None, augment=False, normalize=True, normalization_mode="global_standard")
+    
+    resolution = getattr(config.data, "resolution", 1.0)
+    matching_thresh = getattr(config.data, "matching_threshold", 0.5)
+
+    stage_2_stats = analyze_bev_stage(full_bev_dataset, label_val=1, resolution=resolution, matching_thresh=matching_thresh, min_pixels=5)
+
+    # Stage 3
+    filtered_bev_dataset = BEVDataset(path=prep_loader.point_cloud_paths, file_paths=[], has_labels=True, image_training=True, preprocessor=None, augment=False, normalize=True, normalization_mode="global_standard")
+    if split == "train":
+        filtered_bev_dataset.manhole_filter(required_manhole_points=50, amount_non_manhole_samples=10)
+    else:
+        filtered_bev_dataset.manhole_filter(required_manhole_points=50)
+
+    stage_3_stats = analyze_bev_stage(filtered_bev_dataset, label_val=1, resolution=resolution, matching_thresh=matching_thresh, min_pixels=5)
+
+    # Write Text File
+    save_text_report(config.data.name, split, stage_0_stats, stage_1_stats, stage_2_stats, stage_3_stats, output_dir)
+    
+    # Write Structured JSON Data File
+    save_json_report(config.data.name, split, stage_0_stats, stage_1_stats, stage_2_stats, stage_3_stats, output_dir)
+
+    return {
+        "stage_0_stats": stage_0_stats,
+        "stage_1_stats": stage_1_stats,
+        "stage_2_stats": stage_2_stats,
+        "stage_3_stats": stage_3_stats
+    }
+
+def save_text_report(ds_name, split, stage_0_stats, stage_1_stats, stage_2_stats, stage_3_stats, output_dir):
+    report_path = os.path.join(output_dir, f"audit_report_{ds_name.lower()}_{split.lower()}.txt")
+
+    lines = [
+        "=" * 80,
+        f"            FINAL AUDIT REPORT: {ds_name.upper()} ({split.upper()})",
+        "=" * 80,
+        "",
+        "--- STAGE 0: RAW POINT CLOUDS ---",
+        f"Point Clouds Count:           {stage_0_stats['cloud_count']}",
+        f"Total Raw Manholes Found:     {stage_0_stats['total_manholes_found']}",
+        f"Points/Cloud (Mean [Min-Max]):{stage_0_stats['total_points_dist']['Mean']:,.0f} [{stage_0_stats['total_points_dist']['Min']:,} - {stage_0_stats['total_points_dist']['Max']:,}]",
+        f"3D Points/Manhole (Mean):     {stage_0_stats['manhole_3d_points_dist']['Mean']:.1f}",
+        "",
+        "--- STAGE 1: RAW FILTERED POINT CLOUDS ---",
+        f"Point Clouds Count:           {stage_1_stats['cloud_count']}",
+        f"Total Filtered Manholes Found:{stage_1_stats['total_manholes_found']}",
+        f"Points/Cloud (Mean [Min-Max]):{stage_1_stats['total_points_dist']['Mean']:,.0f} [{stage_1_stats['total_points_dist']['Min']:,} - {stage_1_stats['total_points_dist']['Max']:,}]",
+        f"3D Points/Manhole (Mean):     {stage_1_stats['manhole_3d_points_dist']['Mean']:.1f}",
+        "",
+        "--- STAGE 2: PREPROCESSED PATCHES ---",
+        f"Total Patches Generated:      {stage_2_stats['total_patches']}",
+        f"  - Positive Patches:         {stage_2_stats['pos_patches']} ({stage_2_stats['pos_patches']/stage_2_stats['total_patches']*100:.2f}%)",
+        f"  - Negative Patches:         {stage_2_stats['neg_patches']} ({stage_2_stats['neg_patches']/stage_2_stats['total_patches']*100:.2f}%)",
+        f"Unique Physical Manholes:     {len(stage_2_stats['global_manholes'])}",
+    ]
+
+    ov = stage_2_stats['overlap_stats']
+    lines.extend([
+        f"Patch Overlap Analysis:",
+        f"  - Avg Patches/Manhole:      {ov['mean_overlap']:.2f}",
+        f"  - Multi-patch Manholes:     {ov['multi_tile_count']} ({ov['multi_tile_ratio']*100:.1f}%)"
+    ])
+
+    m_pixels = [max(m['pixel_counts']) for m in stage_2_stats['global_manholes']] if stage_2_stats['global_manholes'] else []
+    m_3d = [max(m['point_3d_counts']) for m in stage_2_stats['global_manholes'] if len(m['point_3d_counts']) > 0]
+    
+    d2 = compute_distribution_dict(m_pixels)
+    d3 = compute_distribution_dict(m_3d)
+    
+    lines.extend([
+        f"Manhole Instance Size:",
+        f"  - 2D Pixel Area/Manhole:    Mean={d2['Mean']:.1f} | Med={d2['Median']:.1f} | Std={d2['Std']:.1f}",
+        f"  - 3D Points/Manhole:        Mean={d3['Mean']:.1f} | Med={d3['Median']:.1f} | Std={d3['Std']:.1f}",
+        "",
+        "--- STAGE 3: FILTERED DATASET ---",
+        f"Retained Patches:             {stage_3_stats['total_patches']} / {stage_2_stats['total_patches']} ({stage_3_stats['total_patches']/stage_2_stats['total_patches']*100:.1f}%)",
+        f"Surviving Physical Manholes:  {len(stage_3_stats['global_manholes'])} / {len(stage_2_stats['global_manholes'])}",
+        "=" * 80
+    ])
+
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+def save_all_split_text_report(ds_name, train_val_test_stage_stats, output_dir):
+    train_stats = train_val_test_stage_stats.get("train", {})
+    val_stats = train_val_test_stage_stats.get("val", {})
+    test_stats = train_val_test_stage_stats.get("test", {})
+
+    report_path = os.path.join(output_dir, f"audit_report_{ds_name.lower()}_train_val_test.txt")
+
+    lines = [
+        "=" * 80,
+        f"            FINAL AUDIT REPORT: {ds_name.upper()} (TRAIN/VAL/TEST)",
+        "=" * 80,
+        "",
+        "--- STAGE 0: RAW POINT CLOUDS ---",
+        f"Point Clouds Count:           {train_stats.get('stage_0_stats', {}).get('cloud_count', 0)} / {val_stats.get('stage_0_stats', {}).get('cloud_count', 0)} / {test_stats.get('stage_0_stats', {}).get('cloud_count', 0)}",
+        f"Total Raw Manholes Found:     {train_stats.get('stage_0_stats', {}).get('total_manholes_found', 0)} / {val_stats.get('stage_0_stats', {}).get('total_manholes_found', 0)} / {test_stats.get('stage_0_stats', {}).get('total_manholes_found', 0)}",
+        f"Points/Cloud (Mean [Min-Max]):{train_stats.get('stage_0_stats', {}).get('total_points_dist', {}).get('Mean', 0):,.0f} [{train_stats.get('stage_0_stats', {}).get('total_points_dist', {}).get('Min', 0):,} - {train_stats.get('stage_0_stats', {}).get('total_points_dist', {}).get('Max', 0):,}] / {val_stats.get('stage_0_stats', {}).get('total_points_dist', {}).get('Mean', 0):,.0f} [{val_stats.get('stage_0_stats', {}).get('total_points_dist', {}).get('Min', 0):,} - {val_stats.get('stage_0_stats', {}).get('total_points_dist', {}).get('Max', 0):,}] / {test_stats.get('stage_0_stats', {}).get('total_points_dist', {}).get('Mean', 0):,.0f} [{test_stats.get('stage_0_stats', {}).get('total_points_dist', {}).get('Min', 0):,} - {test_stats.get('stage_0_stats', {}).get('total_points_dist', {}).get('Max', 0):,}]",
+        f"3D Points/Manhole (Mean):     {train_stats.get('stage_0_stats', {}).get('manhole_3d_points_dist', {}).get('Mean', 0):.1f} / {val_stats.get('stage_0_stats', {}).get('manhole_3d_points_dist', {}).get('Mean', 0):.1f} / {test_stats.get('stage_0_stats', {}).get('manhole_3d_points_dist', {}).get('Mean', 0):.1f}",
+        "",
+        "--- STAGE 1: RAW FILTERED POINT CLOUDS ---",
+        f"Point Clouds Count:           {train_stats.get('stage_1_stats', {}).get('cloud_count', 0)} / {val_stats.get('stage_1_stats', {}).get('cloud_count', 0)} / {test_stats.get('stage_1_stats', {}).get('cloud_count', 0)}",
+        f"Total Filtered Manholes Found:{train_stats.get('stage_1_stats', {}).get('total_manholes_found', 0)} / {val_stats.get('stage_1_stats', {}).get('total_manholes_found', 0)} / {test_stats.get('stage_1_stats', {}).get('total_manholes_found', 0)}",
+        f"Points/Cloud (Mean [Min-Max]):{train_stats.get('stage_1_stats', {}).get('total_points_dist', {}).get('Mean', 0):,.0f} [{train_stats.get('stage_1_stats', {}).get('total_points_dist', {}).get('Min', 0):,} - {train_stats.get('stage_1_stats', {}).get('total_points_dist', {}).get('Max', 0):,}] / {val_stats.get('stage_1_stats', {}).get('total_points_dist', {}).get('Mean', 0):,.0f} [{val_stats.get('stage_1_stats', {}).get('total_points_dist', {}).get('Min', 0):,} - {val_stats.get('stage_1_stats', {}).get('total_points_dist', {}).get('Max', 0):,}] / {test_stats.get('stage_1_stats', {}).get('total_points_dist', {}).get('Mean', 0):,.0f} [{test_stats.get('stage_1_stats', {}).get('total_points_dist', {}).get('Min', 0):,} - {test_stats.get('stage_1_stats', {}).get('total_points_dist', {}).get('Max', 0):,}]",
+        f"3D Points/Manhole (Mean):     {train_stats.get('stage_1_stats', {}).get('manhole_3d_points_dist', {}).get('Mean', 0):.1f} / {val_stats.get('stage_1_stats', {}).get('manhole_3d_points_dist', {}).get('Mean', 0):.1f} / {test_stats.get('stage_1_stats', {}).get('manhole_3d_points_dist', {}).get('Mean', 0):.1f}",
+        "",
+        "--- STAGE 2: PREPROCESSED PATCHES ---",
+        f"Total Patches Generated:      {train_stats.get('stage_2_stats', {}).get('total_patches', 0)} / {val_stats.get('stage_2_stats', {}).get('total_patches', 0)} / {test_stats.get('stage_2_stats', {}).get('total_patches', 0)}",
+        f"  - Positive Patches:         {train_stats.get('stage_2_stats', {}).get('pos_patches', 0)} ({train_stats.get('stage_2_stats', {}).get('pos_patches', 0)/train_stats.get('stage_2_stats', {}).get('total_patches', 1)*100:.2f}%) / {val_stats.get('stage_2_stats', {}).get('pos_patches', 0)} ({val_stats.get('stage_2_stats', {}).get('pos_patches', 0)/val_stats.get('stage_2_stats', {}).get('total_patches', 1)*100:.2f}%) / {test_stats.get('stage_2_stats', {}).get('pos_patches', 0)} ({test_stats.get('stage_2_stats', {}).get('pos_patches', 0)/test_stats.get('stage_2_stats', {}).get('total_patches', 1)*100:.2f}%)",
+        f"  - Negative Patches:         {train_stats.get('stage_2_stats', {}).get('neg_patches', 0)} ({train_stats.get('stage_2_stats', {}).get('neg_patches', 0)/train_stats.get('stage_2_stats', {}).get('total_patches', 1)*100:.2f}%) / {val_stats.get('stage_2_stats', {}).get('neg_patches', 0)} ({val_stats.get('stage_2_stats', {}).get('neg_patches', 0)/val_stats.get('stage_2_stats', {}).get('total_patches', 1)*100:.2f}%) / {test_stats.get('stage_2_stats', {}).get('neg_patches', 0)} ({test_stats.get('stage_2_stats', {}).get('neg_patches', 0)/test_stats.get('stage_2_stats', {}).get('total_patches', 1)*100:.2f}%)",
+        f"Unique Physical Manholes:     {len(train_stats.get('stage_2_stats', {}).get('global_manholes', []))} / {len(val_stats.get('stage_2_stats', {}).get('global_manholes', []))} / {len(test_stats.get('stage_2_stats', {}).get('global_manholes', []))}",
+    ]
+
+    lines.extend([
+        f"Patch Overlap Analysis:",
+        f"  - Avg Patches/Manhole:      {train_stats.get('stage_2_stats', {}).get('overlap_stats', {}).get('mean_overlap', 0):.2f} / {val_stats.get('stage_2_stats', {}).get('overlap_stats', {}).get('mean_overlap', 0):.2f} / {test_stats.get('stage_2_stats', {}).get('overlap_stats', {}).get('mean_overlap', 0):.2f}",
+        f"  - Multi-patch Manholes:     {train_stats.get('stage_2_stats', {}).get('overlap_stats', {}).get('multi_tile_count', 0)} ({train_stats.get('stage_2_stats', {}).get('overlap_stats', {}).get('multi_tile_ratio', 0)*100:.1f}%) / {val_stats.get('stage_2_stats', {}).get('overlap_stats', {}).get('multi_tile_count', 0)} ({val_stats.get('stage_2_stats', {}).get('overlap_stats', {}).get('multi_tile_ratio', 0)*100:.1f}%) / {test_stats.get('stage_2_stats', {}).get('overlap_stats', {}).get('multi_tile_count', 0)} ({test_stats.get('stage_2_stats', {}).get('overlap_stats', {}).get('multi_tile_ratio', 0)*100:.1f}%)"
+    ])
+
+    tvt_inbetween_results = []
+    for stats in [train_stats, val_stats, test_stats]:
+        m_pixels = [max(m['pixel_counts']) for m in stats.get('stage_2_stats', {}).get('global_manholes', [])] if stats.get('stage_2_stats', {}).get('global_manholes', []) else []
+        m_3d = [max(m['point_3d_counts']) for m in stats.get('stage_2_stats', {}).get('global_manholes', []) if len(m['point_3d_counts']) > 0]
+        d2 = compute_distribution_dict(m_pixels)
+        d3 = compute_distribution_dict(m_3d)
+        tvt_inbetween_results.append((d2, d3))
+    
+    lines.extend([
+        f"Manhole Instance Size:",
+        f"  - 2D Pixel Area/Manhole:",
+        f"      -> Mean = {tvt_inbetween_results[0][0]['Mean']:.1f} / {tvt_inbetween_results[1][0]['Mean']:.1f} / {tvt_inbetween_results[2][0]['Mean']:.1f}",
+        f"      -> Median = {tvt_inbetween_results[0][0]['Median']:.1f} / {tvt_inbetween_results[1][0]['Median']:.1f} / {tvt_inbetween_results[2][0]['Median']:.1f}",
+        f"      -> Std = {tvt_inbetween_results[0][0]['Std']:.1f} / {tvt_inbetween_results[1][0]['Std']:.1f} / {tvt_inbetween_results[2][0]['Std']:.1f}",
+        f"      -> min = {tvt_inbetween_results[0][0]['Min']:.1f} / {tvt_inbetween_results[1][0]['Min']:.1f} / {tvt_inbetween_results[2][0]['Min']:.1f}",
+        f"      -> max = {tvt_inbetween_results[0][0]['Max']:.1f} / {tvt_inbetween_results[1][0]['Max']:.1f} / {tvt_inbetween_results[2][0]['Max']:.1f}",
+        f"      -> P25 = {tvt_inbetween_results[0][0]['P25']:.1f} / {tvt_inbetween_results[1][0]['P25']:.1f} / {tvt_inbetween_results[2][0]['P25']:.1f}",
+        f"      -> P75 = {tvt_inbetween_results[0][0]['P75']:.1f} / {tvt_inbetween_results[1][0]['P75']:.1f} / {tvt_inbetween_results[2][0]['P75']:.1f}",
+        f"      -> P95 = {tvt_inbetween_results[0][0]['P95']:.1f} / {tvt_inbetween_results[1][0]['P95']:.1f} / {tvt_inbetween_results[2][0]['P95']:.1f}",
+        f"  - 3D Points/Manhole:",
+        f"      -> Mean = {tvt_inbetween_results[0][1]['Mean']:.1f} / {tvt_inbetween_results[1][1]['Mean']:.1f} / {tvt_inbetween_results[2][1]['Mean']:.1f}",
+        f"      -> Median = {tvt_inbetween_results[0][1]['Median']:.1f} / {tvt_inbetween_results[1][1]['Median']:.1f} / {tvt_inbetween_results[2][1]['Median']:.1f}",
+        f"      -> Std = {tvt_inbetween_results[0][1]['Std']:.1f} / {tvt_inbetween_results[1][1]['Std']:.1f} / {tvt_inbetween_results[2][1]['Std']:.1f}",
+        f"      -> min = {tvt_inbetween_results[0][1]['Min']:.1f} / {tvt_inbetween_results[1][1]['Min']:.1f} / {tvt_inbetween_results[2][1]['Min']:.1f}",
+        f"      -> max = {tvt_inbetween_results[0][1]['Max']:.1f} / {tvt_inbetween_results[1][1]['Max']:.1f} / {tvt_inbetween_results[2][1]['Max']:.1f}",
+        f"      -> P25 = {tvt_inbetween_results[0][1]['P25']:.1f} / {tvt_inbetween_results[1][1]['P25']:.1f} / {tvt_inbetween_results[2][1]['P25']:.1f}",
+        f"      -> P75 = {tvt_inbetween_results[0][1]['P75']:.1f} / {tvt_inbetween_results[1][1]['P75']:.1f} / {tvt_inbetween_results[2][1]['P75']:.1f}",
+        f"      -> P95 = {tvt_inbetween_results[0][1]['P95']:.1f} / {tvt_inbetween_results[1][1]['P95']:.1f} / {tvt_inbetween_results[2][1]['P95']:.1f}",
+        "",
+        "--- STAGE 3: FILTERED DATASET ---",
+        f"Retained Patches:             ({train_stats.get('stage_3_stats', {}).get('total_patches', 0)} / {train_stats.get('stage_2_stats', {}).get('total_patches', 0)} ({train_stats.get('stage_3_stats', {}).get('total_patches', 0)/max(train_stats.get('stage_2_stats', {}).get('total_patches', 1), 1)*100:.1f}%)) / ({val_stats.get('stage_3_stats', {}).get('total_patches', 0)} / {val_stats.get('stage_2_stats', {}).get('total_patches', 0)} ({val_stats.get('stage_3_stats', {}).get('total_patches', 0)/max(val_stats.get('stage_2_stats', {}).get('total_patches', 1), 1)*100:.1f}%)) / ({test_stats.get('stage_3_stats', {}).get('total_patches', 0)} / {test_stats.get('stage_2_stats', {}).get('total_patches', 0)} ({test_stats.get('stage_3_stats', {}).get('total_patches', 0)/max(test_stats.get('stage_2_stats', {}).get('total_patches', 1), 1)*100:.1f}%))",
+        f"Surviving Physical Manholes:  ({len(train_stats.get('stage_3_stats', {}).get('global_manholes', []))} / {len(train_stats.get('stage_2_stats', {}).get('global_manholes', []))}) / ({len(val_stats.get('stage_3_stats', {}).get('global_manholes', []))} / {len(val_stats.get('stage_2_stats', {}).get('global_manholes', []))}) / ({len(test_stats.get('stage_3_stats', {}).get('global_manholes', []))} / {len(test_stats.get('stage_2_stats', {}).get('global_manholes', []))})",
+        "=" * 80
+    ])
+
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
+def save_json_report(ds_name, split, stage_0_stats, stage_1_stats, stage_2_stats, stage_3_stats, output_dir):
+    json_path = os.path.join(output_dir, f"audit_data_{ds_name.lower()}_{split.lower()}.json")
+    
+    # Strip sets for JSON serializability
+    s2_clean = {k: v for k, v in stage_2_stats.items() if k != 'global_manholes'}
+    s3_clean = {k: v for k, v in stage_3_stats.items() if k != 'global_manholes'}
+
+    json_payload = {
+        "dataset": ds_name,
+        "split": split,
+        "stage0_raw": stage_0_stats,
+        "stage1_raw_filtered": stage_1_stats,
+        "stage2_preprocessed_patches": s2_clean,
+        "stage3_training_filtered": s3_clean
+    }
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_payload, f, indent=4)
+
+
+# Modern publication-ready styles
+plt.style.use('seaborn-v0_8-whitegrid' if 'seaborn-v0_8-whitegrid' in plt.style.available else 'default')
+plt.rcParams.update({
+    "font.family": "sans-serif",
+    "font.size": 10,
+    "axes.labelsize": 11,
+    "axes.titlesize": 12,
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+    "figure.titlesize": 13,
+    "figure.autolayout": True
+})
+
+DARK_BLUE = "#1f77b4"
+CORAL = "#ff7f0e"
+TEAL = "#2ca02c"
+RED = "#d62728"
+GRAY = "#7f7f7f"
+PURPLE = "#9467bd"
+
+def generate_thesis_plots(json_filepaths, output_dir):
+    """Generates comparative statistical plots from JSON audit files."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    valid_data = []
+    for path in json_filepaths:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                valid_data.append(json.load(f))
+
+    if not valid_data:
+        return
+
+    # ------------------------------------------------------------------
+    # 1. RETENTION & PATCH CLASS BREAKDOWN (BAR CHART)
+    # ------------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(10, 5), dpi=300)
+    
+    labels = [f"{d['dataset_name'].upper()}\n({d['split'].upper()})" for d in valid_data]
+    pos_stage2 = [d['stage2_full_preprocessed']['pos_patches'] for d in valid_data]
+    neg_stage2 = [d['stage2_full_preprocessed']['neg_patches'] for d in valid_data]
+    pos_stage3 = [d['stage3_filtered']['pos_patches'] for d in valid_data]
+    neg_stage3 = [d['stage3_filtered']['neg_patches'] for d in valid_data]
+
+    x = np.arange(len(labels))
+    width = 0.35
+
+    ax.bar(x - width/2, pos_stage2, width, label='Stage 2: Positive Patches', color=CORAL, alpha=0.85)
+    ax.bar(x - width/2, neg_stage2, width, bottom=pos_stage2, label='Stage 2: Negative Patches', color=GRAY, alpha=0.35)
+
+    ax.bar(x + width/2, pos_stage3, width, label='Stage 3: Filtered Positive', color=RED, alpha=0.9)
+    ax.bar(x + width/2, neg_stage3, width, bottom=pos_stage3, label='Stage 3: Filtered Negative', color=TEAL, alpha=0.85)
+
+    ax.set_ylabel('Number of Patches')
+    ax.set_title('Dataset Filtering Impact across Splits & Datasets', pad=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.legend(frameon=True, facecolor='white', framealpha=0.9, loc='upper right')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    for idx in range(len(labels)):
+        total_s2 = pos_stage2[idx] + neg_stage2[idx]
+        total_s3 = pos_stage3[idx] + neg_stage3[idx]
+        ret_pct = (total_s3 / total_s2 * 100) if total_s2 > 0 else 0
+        ax.annotate(f"{ret_pct:.1f}% kept",
+                    xy=(x[idx] + width/2, total_s3),
+                    xytext=(0, 4), textcoords="offset points",
+                    ha='center', va='bottom', fontweight='bold', fontsize=9)
+
+    plot_path = os.path.join(output_dir, "dataset_filtering_overview.png")
+    plt.savefig(plot_path, bbox_inches='tight')
+    plt.close()
+
+    # ------------------------------------------------------------------
+    # 2. MANHOLE SCALE & DENSITY DISTRIBUTIONS (BOXPLOT)
+    # ------------------------------------------------------------------
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), dpi=300)
+
+    area_data = [[inst['max_pixels'] for inst in d['stage2_full_preprocessed']['instances']] for d in valid_data]
+    points_data = [[inst['max_3d_points'] for inst in d['stage2_full_preprocessed']['instances'] if inst['max_3d_points'] > 0] for d in valid_data]
+
+    ax1.boxplot(area_data, labels=[d['split'].upper() for d in valid_data], patch_artist=True,
+                boxprops=dict(facecolor=DARK_BLUE, alpha=0.6),
+                medianprops=dict(color='black', linewidth=1.5))
+    ax1.set_ylabel('2D Pixel Area (px)')
+    ax1.set_title('Manhole Instance 2D Area')
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+
+    ax2.boxplot(points_data, labels=[d['split'].upper() for d in valid_data], patch_artist=True,
+                boxprops=dict(facecolor=TEAL, alpha=0.6),
+                medianprops=dict(color='black', linewidth=1.5))
+    ax2.set_ylabel('3D Point Count')
+    ax2.set_title('Manhole Instance 3D Point Density')
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+
+    plot_path = os.path.join(output_dir, "manhole_scale_distributions.png")
+    plt.savefig(plot_path, bbox_inches='tight')
+    plt.close()
+
+    # ------------------------------------------------------------------
+    # 3. SPATIAL OVERLAP ANALYSIS (MULTI-TILE HISTOGRAM)
+    # ------------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(8, 4), dpi=300)
+    
+    for idx, d in enumerate(valid_data):
+        hist = d['stage2_full_preprocessed']['overlap_stats']['tile_histogram']
+        keys = [int(k.split('_')[0]) for k in hist.keys()]
+        vals = list(hist.values())
+        ax.plot(keys, vals, marker='o', linewidth=2, label=f"{d['dataset_name']} ({d['split']})")
+
+    ax.set_xlabel('Number of Overlapping BEV Tiles per Manhole')
+    ax.set_ylabel('Frequency')
+    ax.set_title('Manhole Multi-Tile Boundary Distribution')
+    ax.legend(frameon=True, facecolor='white', framealpha=0.9)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    plot_path = os.path.join(output_dir, "tile_overlap_analysis.png")
+    plt.savefig(plot_path, bbox_inches='tight')
+    plt.close()
+
+
+def plot_sample_patches_grid(dataset, num_samples=4, save_path="./output/stats/sample_grid.png"):
+    """Renders BEV input patches alongside ground truth masks with overlay contouring."""
+    num_samples = min(num_samples, len(dataset))
+    fig, axes = plt.subplots(num_samples, 2, figsize=(6, 2.8 * num_samples), dpi=300)
+    
+    indices = np.random.choice(len(dataset), size=num_samples, replace=False)
+
+    for row_idx, data_idx in enumerate(indices):
+        batch = dataset[data_idx]
+        
+        img = batch['image'].detach().cpu().numpy()
+        lbl = batch['labels'].detach().cpu().numpy().squeeze()
+
+        img_vis = img[0] if img.ndim == 3 else img
+
+        ax_img = axes[row_idx, 0] if num_samples > 1 else axes[0]
+        ax_lbl = axes[row_idx, 1] if num_samples > 1 else axes[1]
+
+        ax_img.imshow(img_vis, cmap='gray')
+        ax_img.set_title(f"Sample #{data_idx} - BEV Intensity", fontsize=10)
+        ax_img.axis('off')
+
+        ax_lbl.imshow(img_vis, cmap='gray')
+        ax_lbl.imshow(np.ma.masked_where(lbl == 0, lbl), cmap='autumn', alpha=0.6)
+        ax_lbl.set_title(f"Sample #{data_idx} - GT Mask Overlay", fontsize=10)
+        ax_lbl.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(save_path, bbox_inches='tight')
+    plt.close()
+
+
+def make_dataset_analysis(config):
+    path = "/out/data_stats"
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
+    json_files = []
+    train_val_test_stage_stats = {}
+
+    # Dataset 1
+    for split in ["train", "val", "test"]:
+        results = run_ultimate_dataset_audit(config, split=split, output_dir=path)
+        train_val_test_stage_stats[split] = results
+        json_files.append(os.path.join(path, f"stats_data_{config.data.name.lower()}_{split}.json"))
+
+    save_all_split_text_report(config.data.name, train_val_test_stage_stats, output_dir=path)
+    train_val_test_stage_stats.clear()  # Clear for next dataset
+
+    print(f"\n[INFO] Completed dataset audit for {config.data.name}. Reports and JSON files saved to {path}.")
+
+    # Dataset 2
+    config.data.name = config.data.name_2
+    config.data.path = config.data.path_2
+
+    for split in ["train", "val", "test"]:
+        results = run_ultimate_dataset_audit(config, split=split, output_dir=path)
+        train_val_test_stage_stats[split] = results
+        json_files.append(os.path.join(path, f"stats_data_{config.data.name.lower()}_{split}.json"))
+
+    save_all_split_text_report(config.data.name, train_val_test_stage_stats, output_dir=path)
+    train_val_test_stage_stats.clear()  # Clear for next dataset
+
+    # --- GENERATE THESIS PLOTS ---
+    print("\n[PLOTTING] Generating Master Thesis Figures...")
+    generate_thesis_plots(json_files, output_dir=os.path.join(path, "plots"))
+
+
 
 # --------------
 # > Playground <
@@ -4369,6 +6469,8 @@ def tryout(config):
     # manhole_intensity_test(config)
     # manhole_density_test(config)
     # manhole_BEV_intensity_test(config)
+    manhole_BEV_test_data_check(config)  # NEW
+    # manhole_BEV_test_overlap_check(config)  # NEW
     # BEV_investigation(config)
     # BEV_Density_investigation(config)
     # bev_dataset_stat_investigation(config)
@@ -4393,10 +6495,11 @@ def tryout(config):
     # clustering_tryout(config)
     # make_split(config)
 
-    # ground_truth_2d_map_test(config)
+    # FIXME run me
+    # ground_truth_2d_map_test(config, only_channel=1)  # Heatmap Plotting
     # ground_truth_2d_and_3d_map_test(config)
 
-    # eval_center_gt(config)
+    # eval_center_gt(config)  # MONTE-CARLO TESTING
 
     # manhole_3d_and_2d_density_test(config)
     # manhole_intensity_range_test(config)
@@ -4413,11 +6516,16 @@ def tryout(config):
     # analyze_point_cloud_resolution(config, num_patches=200, patch_size_m=0.5)
     # analyze_point_cloud_resolution(config, num_patches=200, patch_size_m=1.0)
     # analyze_point_cloud_resolution_upgraded(config, raster_size=0.1, grid_size=0.01)
-    auto_point_cloud_resolution_finder(config, max_distance=0.05)
+    # auto_point_cloud_resolution_finder(config, max_distance=0.05)
 
     # ground_truth_2d_map_full_check(config)
 
     # height_2d_and_3d_test(config)
+
+    # FIXME try me out
+    # compare_2d_seg_and_heatmap_datasets(config, max_samples_to_plot=20, save_dir=None, only_channel=1, ignore_label=255, min_peak_distance=1.0,)
+
+    # make_dataset_analysis(config)
 
 
 

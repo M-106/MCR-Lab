@@ -91,14 +91,208 @@ def generate_manhole(
 
 
 
+def generate_realistic_manhole(
+    center_min=0.0,
+    center_max=0.0,
+    radius_min=0.2,
+    radius_max=1.2,
+    target_n_points=1000,
+    # Line Scan Parameters
+    n_lines=(5, 20),          # Number of scan lines crossing the manhole
+    line_spacing_jitter=0.2,          # Random variation in line-to-line spacing (0.0 to 0.5)
+    # point_density_per_meter=300,      # In-line point sampling density
+    # Waviness Parameters
+    wave_amplitude=0.0,             # Max wave distortion perpendicular to line (in meters)
+    wave_frequency=25.0,              # Frequency of waves along the line
+    # Noise & Measurement Error
+    sigma=0.005,                      # Gaussian measurement noise along scan lines
+    # Outliers
+    outlier_ratio=0.10,               # Fractional amount of total points that are outliers
+    near_edge_outlier_prob=0.8,       # Fraction of outliers spawned near the rim vs background
+    # Real-World Missingness / Occlusion Parameter
+    occlusion_severity=0.25           # Control amount of structural dropout [0.0 = none, 1.0 = heavy]
+):
+    """
+    Generates a realistic 3D point cloud of a manhole incorporating mobile LiDAR scan lines,
+    line waviness, non-uniform line spacing, and near-boundary/background outliers.
+    """
+    # 1. Base Geometry Parameters
+    center = np.random.uniform(center_min, center_max, size=3)
+    radius = np.random.uniform(radius_min, radius_max)
+    
+    # Random orientation angle of scan lines across the manhole plane (0 to pi)
+    scan_angle = np.random.uniform(0, np.pi)
+    cos_a, sin_a = np.cos(scan_angle), np.sin(scan_angle)
+
+    # 2. Determine Non-Uniform Line Positions across diameter (-radius to +radius)
+    if isinstance(n_lines, (list, tuple)):
+        n_lines = np.random.randint(n_lines[0], n_lines[1] + 1)
+    else:
+        n_lines = int(n_lines)
+
+    # Base uniform line offsets relative to center
+    base_offsets = np.linspace(-radius * 0.95, radius * 0.95, n_lines)
+    
+    # Add random jitter to line spacing
+    spacing_step = (2 * radius) / n_lines
+    offsets = base_offsets + np.random.uniform(
+        -spacing_step * line_spacing_jitter, 
+        spacing_step * line_spacing_jitter, 
+        size=n_lines
+    )
+    # Clip to keep lines within disk boundary
+    offsets = np.clip(offsets, -radius * 0.98, radius * 0.98)
+
+    # 3. Compute length of each line
+    chord_lengths = 2 * np.sqrt(radius**2 - offsets**2)
+    total_length = np.sum(chord_lengths)
+
+    # Over-sample candidate points initially to allow clean masking
+    sample_multiplier = 3.0 if occlusion_severity > 0 else 1.2
+    raw_n_inliers = int((target_n_points * (1.0 - outlier_ratio)) * sample_multiplier)
+    
+    pts_per_line = np.round((chord_lengths / np.sum(chord_lengths)) * raw_n_inliers).astype(int)
+
+    # 4. Point distribution (inlier, outlier) based on target n points
+    # n_outliers = int(target_n_points * outlier_ratio)
+    # n_inliers = target_n_points - n_outliers
+
+    # # compute points per line
+    # pts_per_line = np.round((chord_lengths / total_length) * n_inliers).astype(int)
+    
+    # # correction of rounding errors to ensure the sum equals n_inliers
+    # diff = n_inliers - np.sum(pts_per_line)
+    # if diff != 0:
+    #     pts_per_line[np.argmax(chord_lengths)] += diff  # adjust the line with the longest chord to compensate
+
+    # 5. Generate Points along each circle line
+    inlier_points_list = []
+    
+    for offset, chord_len, n_pts in zip(offsets, chord_lengths, pts_per_line):
+        if n_pts <= 0:
+            continue
+
+        # Half length of chord at this offset
+        # -> length of line in circle at this offset: 2 * sqrt(radius^2 - offset^2)
+        chord_half_len = np.sqrt(radius**2 - offset**2)
+        # coordinates along scan line
+        s = np.linspace(-chord_half_len, chord_half_len, n_pts)
+        
+        # Add sinusoidal waviness along the scan path
+        phase = np.random.uniform(0, 2 * np.pi)
+        d_perp = wave_amplitude * np.sin(wave_frequency * s + phase)
+        
+        # Coordinates in scan-line local system (u: along line, v: perpendicular)
+        u = s
+        v = offset + d_perp
+        
+        # Rotate back to world system
+        x_local = u * cos_a - v * sin_a
+        y_local = u * sin_a + v * cos_a
+        z_local = np.zeros_like(x_local)
+        
+        # Stack local points
+        line_pts = np.stack([x_local, y_local, z_local], axis=1)
+        inlier_points_list.append(line_pts)
+        
+    inliers = np.vstack(inlier_points_list)
+    n_inliers = len(inliers)
+
+    # 6. Add Realistic Asynchronous Masking / Occlusions
+    if occlusion_severity > 0.0:
+        keep_mask = np.ones(len(inliers), dtype=bool)
+        
+        # A. Sector dropout (Missing slice/side)
+        if np.random.rand() < (0.5 * occlusion_severity + 0.3):
+            start_angle = np.random.uniform(0, 2 * np.pi)
+            angle_span = np.random.uniform(np.pi / 6, np.pi / 2) * occlusion_severity
+            pts_angles = np.arctan2(inliers[:, 1], inliers[:, 0]) % (2 * np.pi)
+            
+            end_angle = (start_angle + angle_span) % (2 * np.pi)
+            if start_angle < end_angle:
+                sector_mask = (pts_angles >= start_angle) & (pts_angles <= end_angle)
+            else:
+                sector_mask = (pts_angles >= start_angle) | (pts_angles <= end_angle)
+            
+            keep_mask &= ~sector_mask
+
+        # B. Linear Dropout / Stripe (Line through manhole without points)
+        if np.random.rand() < (0.6 * occlusion_severity + 0.2):
+            stripe_angle = np.random.uniform(0, np.pi)
+            stripe_width = radius * np.random.uniform(0.05, 0.25) * occlusion_severity
+            stripe_dist = np.abs(
+                inliers[:, 0] * np.sin(stripe_angle) - inliers[:, 1] * np.cos(stripe_angle)
+            )
+            keep_mask &= (stripe_dist > stripe_width)
+
+        # C. Localized Circular Pockets (Wear / Potholes / Damage)
+        n_pockets = np.random.randint(1, max(2, int(4 * occlusion_severity)))
+        for _ in range(n_pockets):
+            pocket_r = np.random.uniform(radius * 0.1, radius * 0.35) * occlusion_severity
+            pocket_center = np.random.uniform(-radius * 0.7, radius * 0.7, size=2)
+            dist_to_pocket = np.linalg.norm(inliers[:, :2] - pocket_center, axis=1)
+            keep_mask &= (dist_to_pocket > pocket_r)
+
+        inliers = inliers[keep_mask]
+
+    # 7. Resample Inliers to Target Point Count
+    n_outliers = int(target_n_points * outlier_ratio)
+    desired_inliers = max(1, target_n_points - n_outliers)
+    
+    if len(inliers) > desired_inliers:
+        indices = np.random.choice(len(inliers), size=desired_inliers, replace=False)
+        inliers = inliers[indices]
+
+    # 8. Add Measurement Gaussian Noise (Sigma)
+    inliers += np.random.normal(0, sigma, size=inliers.shape)
+
+    # 9. Generate Outliers
+    if n_outliers > 0:
+        n_edge_outliers = int(n_outliers * near_edge_outlier_prob)
+        n_bg_outliers = n_outliers - n_edge_outliers
+        
+        outliers_list = []
+
+        # Edge Outliers: Concentrated around the manhole perimeter (r ≈ radius)
+        if n_edge_outliers > 0:
+            edge_angles = np.random.uniform(0, 2 * np.pi, n_edge_outliers)
+            # Distance centered around rim with small deviation
+            edge_r = radius + np.random.normal(0, radius * 0.15, n_edge_outliers)
+            edge_x = edge_r * np.cos(edge_angles)
+            edge_y = edge_r * np.sin(edge_angles)
+            edge_z = np.random.normal(0, sigma * 3, n_edge_outliers)  # vertical displacement
+            outliers_list.append(np.stack([edge_x, edge_y, edge_z], axis=1))
+            
+        # Background Outliers: Uniformly scattered in bounding box around manhole
+        if n_bg_outliers > 0:
+            bg_x = np.random.uniform(-radius * 1.5, radius * 1.5, n_bg_outliers)
+            bg_y = np.random.uniform(-radius * 1.5, radius * 1.5, n_bg_outliers)
+            bg_z = np.random.uniform(-0.05, 0.05, n_bg_outliers)
+            outliers_list.append(np.stack([bg_x, bg_y, bg_z], axis=1))
+            
+        outliers = np.vstack(outliers_list)
+        all_points = np.vstack([inliers, outliers])
+    else:
+        all_points = inliers
+
+    # Shuffle points so algorithms cannot exploit scan order
+    np.random.shuffle(all_points)
+    
+    # Shift to target center
+    all_points += center
+
+    return all_points, center, radius
+
+
+
 def eval_center_robustness(
     center_func,
     n_samples_per_test=10000,
     n_points_min=5000, 
     n_points_max=100000,
     n_points=None,
-    center_min=-1000.0,
-    center_max=1000.0,
+    center_min=0.0,
+    center_max=0.0,
     radius_min=0.2,
     radius_max=1.2, 
     sigma_min=0.0,
@@ -115,18 +309,12 @@ def eval_center_robustness(
 
     path = "./output/monte-carlo-gt-check"
     if reset_dir:
-        # save_dir_creation(path)
         os.makedirs(path, exist_ok=True)
         shutil.rmtree(path)
-        # save_dir_creation(path)
         os.makedirs(path, exist_ok=True)
 
     print("Starting with Center Robustness Evaluation")
 
-    # --- Run Experiments ---
-    # - With Data Generation
-    # - L2 Calculation
-    # results = dict()
     sample_inputs = {}
     sample_inputs_points = {}
     sigma_results = {}
@@ -136,34 +324,59 @@ def eval_center_robustness(
         # sigmas = np.vectorize(lambda x: round(x, 2))(np.linspace(sigma_min, sigma_max, sigma_n_values))
         sigmas = np.linspace(sigma_min, sigma_max, sigma_n_values).round(2)
 
-    print("Beginning Looping...")
+    if n_points is None:
+        n_points = [50, 100, 1000]
 
-    for cur_sigma in tqdm(sigmas, total=len(sigmas), desc="Monte-Carlo-Center-GT Testing"):
+    print("Beginning Occlusion-Robustness Loop...")
+
+    # --- Sigma Eval Loop ---
+    for cur_sigma in tqdm(sigmas, total=len(sigmas), desc=f"Testing Sigma ({method})"):
         sigma_results[cur_sigma] = []
         sample_inputs[cur_sigma] = []
 
-        for sample_idx in tqdm(range(n_samples_per_test), total=n_samples_per_test):
-            if n_points is not None:
-                n_points_min = 406  # 50 percentile
-                n_points_max = 406+1  # 50 percentile
-            points, center, radius = generate_manhole(
-                n_points_min=n_points_min, 
-                n_points_max=n_points_max,  
+        for sample_idx in range(n_samples_per_test):
+            
+            # points, center, radius = generate_manhole(
+            #     n_points_min=n_points_min, 
+            #     n_points_max=n_points_max,  
+            #     center_min=center_min,
+            #     center_max=center_max,
+            #     radius_min=radius_min,
+            #     radius_max=radius_max, 
+            #     sigma=cur_sigma
+            # )
+
+            target_n_points = 406  # 406 is the 50 percentile of the SUD dataset
+            # FIXME: from which experiment to know 406 is the mean amount?
+            #        -> manhole stats where computed?
+
+            points, center, radius = generate_realistic_manhole(
                 center_min=center_min,
                 center_max=center_max,
                 radius_min=radius_min,
-                radius_max=radius_max, 
-                sigma=cur_sigma
+                radius_max=radius_max,
+                target_n_points=target_n_points,
+                n_lines=np.random.randint(5, 20),
+                line_spacing_jitter=np.random.uniform(0.01, 0.3),  
+                wave_amplitude=0.0,             # 3mm to 10mm wave distortion
+                wave_frequency=25.0,
+                sigma=0.0, # cur_sigma,  # 0.005,
+                outlier_ratio=np.random.uniform(0.00, 0.03),  # 0-3% outliers
+                near_edge_outlier_prob=0.9,
+                occlusion_severity=cur_sigma,  # np.random.uniform(0.0, 0.5)
             )
 
             centers = center_func(points, method=method)
 
-            if len(centers) > 1 or len(centers) < 0:
+            if len(centers) > 1:
                 raise ValueError(f"Only 1 result expected but got {len(centers)}")
 
             # for cur_center in centers:
             cur_center = centers[0]
-            pred_x, pred_y, pred_z = cur_center
+            if cur_center is None:
+                pred_x, pred_y, pred_z = np.nan, np.nan, np.nan
+            else:
+                pred_x, pred_y, pred_z = cur_center
 
             # L2 Error
             pred = np.array([pred_x, pred_y, pred_z])
@@ -173,7 +386,6 @@ def eval_center_robustness(
             error_distance = np.linalg.norm(pred - center)
 
             pred_rel = pred - center
-
             points_rel = points - center
 
             if len(sample_inputs[cur_sigma]) < 6:
@@ -191,21 +403,40 @@ def eval_center_robustness(
                 "error": error_distance
             })
 
-    # points loop (collect data)
-    for cur_n_points in n_points:
+
+    print("Beginning Point-Amount Robustness Loop...")
+
+    # -- n-points eval loop ---
+    for cur_n_points in tqdm(n_points, total=len(n_points), desc=f"Testing Points ({method})"):
         point_results[cur_n_points] = []
         sample_inputs_points[cur_n_points] = []
 
         for sample_idx in range(n_samples_per_test):
 
-            points, center, radius = generate_manhole(
-                n_points_min=cur_n_points, 
-                n_points_max=cur_n_points+1,  
+            # points, center, radius = generate_manhole(
+            #     n_points_min=cur_n_points, 
+            #     n_points_max=cur_n_points+1,  
+            #     center_min=center_min,
+            #     center_max=center_max,
+            #     radius_min=radius_min,
+            #     radius_max=radius_max, 
+            #     sigma=0.0
+            # )
+
+            points, center, radius = generate_realistic_manhole(
                 center_min=center_min,
                 center_max=center_max,
                 radius_min=radius_min,
-                radius_max=radius_max, 
-                sigma=0.0
+                radius_max=radius_max,
+                target_n_points=cur_n_points,
+                n_lines=np.random.randint(5, 20),
+                line_spacing_jitter=np.random.uniform(0.01, 0.3),  
+                wave_amplitude=0.0,             # 3mm to 10mm wave distortion
+                wave_frequency=25.0,
+                sigma=0.0,  # 0.005,
+                outlier_ratio=np.random.uniform(0.00, 0.03),  # 0-3% outliers
+                near_edge_outlier_prob=0.9,
+                occlusion_severity=0.0  # np.random.uniform(0.0, 0.2)
             )
 
             centers = center_func(points, method=method)
@@ -215,7 +446,11 @@ def eval_center_robustness(
 
             # for cur_center in centers:
             cur_center = centers[0]
-            pred_x, pred_y, pred_z = cur_center
+            if cur_center is None:
+                pred_x, pred_y, pred_z = np.nan, np.nan, np.nan
+            else:
+                pred_x, pred_y, pred_z = cur_center
+
 
             # L2 Error
             pred = np.array([pred_x, pred_y, pred_z])
@@ -299,7 +534,7 @@ def eval_center_robustness(
         sums, 
         method, 
         plot_limit,
-        "Noise \u03C3",
+        "Occlusion Severity", # "Noise \u03C3",
         save_plot=False
     )
 
@@ -537,7 +772,7 @@ def plot_single_value_sample(ax, plot_results, plot_limit, value_idx, save_plot=
 
         # plt.tight_layout()
         if save_plot:
-            plt.savefig(os.path.join(path, f"{method}_center_sigma_{value_idx:.2f}.png"))
+            plt.savefig(os.path.join(path, f"{method}_center_{value_idx:.2f}.png"))
             plt.close()
 
     return ax
@@ -596,7 +831,7 @@ def plot_sample_input(sample_inputs, is_sigma, method):
         path = "./output/monte-carlo-gt-check"
 
         if is_sigma:
-            plt.suptitle(f"Example Inputs (σ={value})")
+            plt.suptitle(f"Example Inputs (Occlusion Severity={value})")  # σ
             # plt.tight_layout()
 
             plt.savefig(os.path.join(path, f"{method}_input_examples_sigma_{value:.2f}.png"))

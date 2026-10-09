@@ -164,7 +164,11 @@ def fit_circle_ransac(x, y, method="sklearn"):
         
         # refinment using all inliers:
         inlier_points = data[inliers]
-        model.from_estimate(inlier_points)
+        
+        try:
+            model.from_estimate(inlier_points)
+        except Exception as e:
+            return None, None, None, np.array([]), float('inf')
 
         # Residuals for all points
         all_residuals = model.residuals(data)
@@ -236,13 +240,17 @@ def fit_circle_ransac_3D(points, use_projection=True):
         center, axis, radius, inliers, error = fit_circle_ransac(x, y)
         axis = normal
 
+        if center is None:
+            return None, None, None, np.array([]), float('inf')
+
         # back projection
         center = centroid + (center[0] * basis_x) + (center[1] * basis_y)
     else:
         circle = pyrsc.Circle()
         center, axis, radius, inliers = circle.fit(points, thresh=10.0, maxIteration=1000)
 
-        print(center)
+        if center is None:
+            return None, None, None, np.array([]), float('inf')
 
         distances = np.linalg.norm(
             points - center,
@@ -436,6 +444,16 @@ def extract_center_point(points, method, use_2d_version, use_projection=False, a
             cur_center_mean = np.array([np.mean(points[:, 0]), np.mean(points[:, 1]), np.mean(points[:, 2])])
             center_ls, normal, r_s, mean_distance_error, loss = fit_circle_least_squares_3D(points)
             center_r, axis, r_r, inliers, error = fit_circle_ransac_3D(points, use_projection=use_projection)
+
+        if center_ls is None or center_r is None or cur_center_mean is None:
+            return {
+                "center": None,
+                "radius": None,
+                "inliers": inliers,
+                "error": error,
+                "loss": loss,
+                "input_points": points
+            }
 
         cur_center = np.mean(np.stack([center_ls, center_r, cur_center_mean], axis=0), axis=0)
         # print(f"Cur Center Pred: {cur_center}")
@@ -751,9 +769,16 @@ def find_candidates_and_extract_center_point(point_cloud, method="least_square",
 # FIXME -> make a 3D version with maybe features via Open3D
 def classic_manhole_prediction_pipeline(point_cloud, type, plot_path):
 
-    # points = point_cloud.point[get_coordinate_attribute(point_cloud)].cpu().numpy()
-    points = point_cloud.to_numpy(as_copy=True).coordinates
+    # convert to numpy if not given as numpy
+    # if isinstance(point_cloud, torch.Tensor):
+    #     points = point_cloud.detach().cpu().numpy()
+    # elif isinstance(point_cloud, o3d.t.geometry.PointCloud):
+    #     points = point_cloud.point[get_coordinate_attribute(point_cloud)].cpu().numpy()
+    
+    # points = point_cloud.to_numpy(as_copy=True).coordinates
 
+    # expect point cloud as internal own data-class 
+    
     if point_cloud.bev_data is None:
         print("Starting BEV projection...")
         tiles, metas = bev_projection(point_cloud, tile_size=35.0, resolution=0.01)  #  tile_size=100.0/50.0, resolution=0.2/0.1

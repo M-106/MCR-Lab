@@ -22,6 +22,7 @@ from mcrlab.point_cloud.shape_check import circle_shape_check
 from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDataset
 from mcrlab.projection import bev_projection, bev_pixel_to_3d
 from mcrlab.metrices import mask_to_polygon
+from mcrlab.classic.traditional_methods import predict_manhole_centers
 # from mcrlab.helper import save_dir_creation
 
 
@@ -209,7 +210,7 @@ def extract_center_circle_least_squares(pred_mask, **kwargs):
         cur_manhole_pred_x.extend(x)
         cur_manhole_pred_y.extend(y)
 
-    # filter 
+    # filter FIXME
     if len(cur_manhole_pred_x) < 20:
         return None
         
@@ -419,6 +420,102 @@ def make_prediction(
 
 
 
+def filter_ignored_manholes(
+    results,
+    dataloader,
+    box_size=0.6,
+    ignore_label=255,
+    ignore_threshold=0.20,
+    check_z_axis=False
+):
+    """
+    Filters predicted manhole centers if the region around them contains
+    >= ignore_threshold (20%) points labeled with ignore_label (255).
+
+    Args:
+        results (list): List of dicts, each formatted as:
+            {
+                "dataset": str,
+                "pointcloud-id": str/int,
+                "centers": [{"x": float, "y": float, "z": float, "confidence": float}, ...]
+            }
+        dataloader: PyTorch DataLoader for fetching full raw point clouds.
+        box_size (float): Side length of the square bounding box in meters (default: 0.6m).
+        ignore_label (int): Label value representing ignored areas (default: 255).
+        ignore_threshold (float): Ratio threshold to reject predictions (default: 0.20).
+        check_z_axis (bool): If True, also bounds Z within box_size/2. If False, checks XY bounding box only.
+
+    Returns:
+        list: Filtered results with predictions in ignored regions removed.
+    """
+    half_box = box_size / 2.0
+    filtered_results = []
+
+    for entry in results:
+        pc_id = entry["pointcloud-id"]
+        centers = entry.get("centers", [])
+
+        if not centers:
+            continue
+
+        # 1. Fetch full raw point cloud for current pc_id
+        try:
+            raw_pc_idx = dataloader.dataset.get_idx_by_pc_id(pc_id)
+            raw_point_cloud = dataloader.dataset[raw_pc_idx]
+        except Exception as e:
+            print(f"Warning: Could not load point cloud ID '{pc_id}': {e}. Skipping filtering for these centers.")
+            filtered_results.append(entry)
+            continue
+
+        # Extract coordinates and labels
+        raw_positions = raw_point_cloud.point[get_coordinate_attribute(raw_point_cloud)].numpy()
+        
+        if "labels" not in raw_point_cloud.point:
+            # If no labels present, keep all centers
+            filtered_results.append(entry)
+            continue
+
+        raw_labels = raw_point_cloud.point["labels"].numpy()
+
+        valid_centers = []
+
+        # 2. Process each center point
+        for center in centers:
+            cx, cy, cz = center["x"], center["y"], center["z"]
+
+            # Crop box in XY plane (and optionally Z)
+            in_box_mask = (
+                (np.abs(raw_positions[:, 0] - cx) <= half_box) &
+                (np.abs(raw_positions[:, 1] - cy) <= half_box)
+            )
+
+            if check_z_axis:
+                in_box_mask = in_box_mask & (np.abs(raw_positions[:, 2] - cz) <= half_box)
+
+            box_labels = raw_labels[in_box_mask]
+
+            # If no points are found in the box, keep the prediction
+            if len(box_labels) == 0:
+                valid_centers.append(center)
+                continue
+
+            # Calculate ignore label ratio
+            ignore_ratio = np.mean(box_labels == ignore_label)
+
+            # Keep only if ignore label coverage is strictly below threshold
+            if ignore_ratio < ignore_threshold:
+                valid_centers.append(center)
+
+        if valid_centers:
+            # Create a shallow copy with updated centers list
+            filtered_entry = dict(entry)
+            filtered_entry["centers"] = valid_centers
+            filtered_results.append(filtered_entry)
+
+    return filtered_results
+
+
+
 def center_eval(config):
 
     model_name = config.model.name.lower()
@@ -428,7 +525,7 @@ def center_eval(config):
     min_confidence_peak = getattr(config.center_eval, "min_confidence_peak")
     candidate_min_points = getattr(config.center_eval, "candidate_min_points")
 
-    if model_name == "traditional":
+    if model_name.startswith("traditional_"):
         min_confidences = [-999]
 
     print(f"Confidences: {min_confidences}")
@@ -452,15 +549,20 @@ def center_eval(config):
     # Load the TRAINED model checkpoint
     encoder_name = config.model.encoder
     checkpoint_path = config.model.check_point_path
-    if not checkpoint_path or checkpoint_path == "None":
-        raise ValueError("Please provide the path to your trained checkpoint in config.model.check_point_path")
+    if not model_name.startswith("traditional_"):
+        if (not checkpoint_path or checkpoint_path == "None"):
+            raise ValueError("Please provide the path to your trained checkpoint in config.model.check_point_path")
 
-    print(f"Loading trained model and processor from: {checkpoint_path}")
-    model, processor = get_model_and_processor(model_name, encoder_name, checkpoint_path, mode="test", num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt)
-    model.eval().to("cuda")
+        print(f"Loading trained model and processor from: {checkpoint_path}")
+        model, processor = get_model_and_processor(model_name, encoder_name, checkpoint_path, mode="test", num_labels=num_labels, ignore_index=ignore_index, heatmap_is_gt=using_heatmap_as_gt)
+        model.eval().to("cuda")
 
-    parts = Path(checkpoint_path).parts
-    exp_name = parts[-2]
+        parts = Path(checkpoint_path).parts
+        exp_name = parts[-2]
+    else:
+        exp_name = model_name
+        processor = None
+        model = None
 
     # Load Test Data
     heatmap_path = config.data.heatmap_path
@@ -553,14 +655,45 @@ def center_eval(config):
 
                 # -----------------
                 # Manhole Search
-                if model_name == "traditional":
-                    # print(f"Shape check, should be [C, W, H]: {pixel_values.shape}")
-                    centers = get_manhole_candidates_hough(bev_image=pixel_values, resolution=0.01)
-                    
-                    for elem in centers:
-                        center_x, center_y = elem["center_px"][0], elem["center_px"][1]
-                        center = transform_pixel_to_3d(pc, center_x, center_y, meta)
-                        raw_threshold_results = add_to_result(raw_threshold_results, cur_dataset, pc_id, {"x": center[0], "y": center[1], "z": center[2]})
+                if model_name.startswith("traditional_"):
+                    traditional_method = "_".join(model_name.split("_")[1:])
+
+                    # Call unified prediction method using direct PyTorch Tensors
+                    detected_centers = predict_manhole_centers(
+                        pts_3d=pc,
+                        bev_img=pixel_values,
+                        method=traditional_method,
+                        meta=meta
+                    )
+
+                    # Process predictions depending on 2D vs 3D method output
+                    for det in detected_centers:
+                        if traditional_method.startswith("2d"):
+                            # det is [pixel_x, pixel_y, radius] -> transform to 3D point
+                            center_3d = bev_pixel_to_3d(
+                                patch_points=pc,
+                                pixel_x=det[0],
+                                pixel_y=det[1],
+                                origin_x=meta["origin_x"],
+                                origin_y=meta["origin_y"],
+                                resolution=meta["resolution"],
+                                search_radius=None,
+                                tile_size=meta["tile_size"],
+                                invert_y=False,
+                                invert_x=False
+                            )
+                        else:
+                            # det is already 3D coordinates [x, y, z]
+                            center_3d = det
+
+                        if center_3d is not None and len(center_3d) >= 3:
+                            cur_center_point = {
+                                "x": float(center_3d[0]),
+                                "y": float(center_3d[1]),
+                                "z": float(center_3d[2]),
+                                "confidence": min_confidence
+                            }
+                            raw_threshold_results = add_to_result(raw_threshold_results, cur_dataset, pc_id, cur_center_point)
                 else:
                     preds_prob, preds_binary, valid_mask, preds, gt_labels_numpy, pixel_values = make_prediction(
                         pixel_values, 
@@ -741,7 +874,18 @@ def center_eval(config):
                 else:
                     all_dataset_results.append(res)
 
-        
+        # Check if found center in ignored manhole
+        # if prediction is in 255 label area of the 3D 
+        # -> if 0.6m box around is 20% or more ignore index, then not pass the prediction
+        # Check if found center is in ignored manhole area
+        all_dataset_results = filter_ignored_manholes(
+            results=all_dataset_results,
+            dataloader=raw_dataloader,
+            box_size=0.6,
+            ignore_label=255,
+            ignore_threshold=0.20,
+            check_z_axis=False  # Set to True if Z coordinate should also be bounded by 0.6m
+        )
 
         # -----------------
         # Saving

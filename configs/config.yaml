@@ -1,4 +1,4 @@
-mode: train_all    # custom, train, train_all, test, inference, tryout, preprocessing, eval_extraction, center_eval
+mode: tryout    # custom, train, train_all, test, inference, tryout, preprocessing, eval_extraction, center_eval
 # train
 
 custom_train:
@@ -26,7 +26,7 @@ train:
   checkpoint_best_model: True
   val_steps: 5
   lr_scheduler: None
-  exp_name: "sigma_60_comp_2"  # teb7, mb5, r101, r101_32x32d, d161, mos4
+  exp_name: "seg_final_comp_std_norm"  # teb7, mb5, r101, r101_32x32d, d161, mos4
   # tshp16s
   # tmxt512 tu-maxvit_xlarge_tf_512
   # ts2lw12t24 tu-swinv2_large_window12to24_192to384
@@ -44,31 +44,31 @@ eval_extraction:
     data_paths: ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"]
     # ["C:/Users/tippolito/Data/whu3d-dataset-wo-test-label", "C:/Users/tippolito/Data/SUD-ROAD"]  
     # ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"] # 
-    preprocessed: True
-    type: "test"
-    save_path: "/out/checkpoints/2d/output"  # "./output/"
+    type: "all"  # "all"
+    save_path: "/out/data/"  # "/out/checkpoints/2d/output"  # "/out/data/"  # "/out/checkpoints/2d/output" # "/out/data/"   # "/out/checkpoints/2d/output"  # 
     # "/data/" "./output/" # "/data/2d_gt_patches"  "./output/"
     # rm -rf ../data/2d_gt_patches && mkdir ../data/2d_gt_patches && chmod -R 777 ../data/2d_gt_patches
     # "./mcr_maps" # "./output/eval_ground_truths_mean.json"
-    center_algorithm: "mean"    # "squares", "mean", "ransac", "mesqra"
-    generate_2d_gt_maps: False
+    center_algorithm: "squares"    # "squares", "mean", "ransac", "mesqra"
+    generate_2d_gt_maps: True
     generate_also_3d_gt_maps: False
 
 center_eval:
-    center_extraction_method: "peak_maxima"
+    center_extraction_method: "circle_least_squares"
     # "polygon_centroid", "circle_least_squares", "peak_maxima"
     save_debug_plots: True
-    min_confidences: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.75, 0.8, 0.85, 0.9, 0.95]
+    min_confidences: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.75, 0.8, 0.85, 0.9, 0.95]  # [0.1, 0.5, 0.9]
     min_confidence_peak: 0.9
-    candidate_min_points: 30
+    candidate_min_points: 50
 
 inference:
   checkpoint_path: "./output/checkpoint/2026_06_22_20_31_unet/checkpoint-1196/model.safetensors"
   save_path: "./output/inference/eval_preds.json"
 
 model:
-  name: "unet"  # "unet" "unetplusplus" "fpn" "deeplabv3" "deeplabv3plus" dpt"
+  name: "traditional_3d_dbscan"  # "unet" "unetplusplus" "fpn" "deeplabv3" "deeplabv3plus" dpt"
   # not used: "pspnet"  "linknet" "manet" "pan" "upernet" "segformer"
+  # "traditional_2d_hough", "traditional_2d_contours", "traditional_3d_ransac", "traditional_3d_dbscan"
   encoder: "timm-efficientnet-b7"  # resnet34, resnet50, resnet101, efficientnet-b7, mit_b5, densenet161, vgg19
   # for others:
   #    timm-efficientnet-b7 (5/6)
@@ -84,6 +84,8 @@ model:
   #    # tu-vit_base_patch8_224.dino
   #    tu-beit_large_patch16_512.in22k_ft_in22k_in1k
   check_point_path: None
+  # "/out/checkpoints/2d/2026_09_17_15_22_unet_whu_seg_norm_check_unet_teb7_local_standard/checkpoint-1445"
+  
   # "/out/checkpoints/2d/2026_09_24_10_21_unet_whu_heatmapGT2_heatmap_unet_teb7_sigma_60_local_minmax/checkpoint-1479"
   # "/out/checkpoints/2d/2026_09_24_10_21_unet_whu_heatmapGT2_heatmap_unet_teb7_sigma_60_local_minmax/checkpoint-1479"
   # "/out/checkpoints/2d/2026_09_24_10_21_unet_whu_heatmapGT2_heatmap_unet_teb7_sigma_60_local_minmax/checkpoint-1479"
@@ -125,8 +127,8 @@ model:
 
 
 data: 
-  name: whu  # whu  # paris, whu, sud, merged_whu_sud
-  path: "/data/whu3d-dataset-wo-test-label"
+  name: whu  # paris, whu, sud, merged_whu_sud
+  path: "/data/whu3d-dataset-wo-test-label"  # "/data/whu3d-dataset-wo-test-label"
   name_2: "sud"
   path_2: "/data/SUD-ROAD"
   # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"
@@ -136,8 +138,8 @@ data:
   # "D:/data/whu3d-dataset-wo-test-label"
   preprocessed: True
   type: all   # train, test, val, all, load_unsplitted (sud special)
-  heatmap_path: "/data/2d_gt_patches"   # "/data/2d_gt_patches" -> 10, 20, 60  # "/data/2d_gt_patches_v2" -> what is that  # None
-  used_heatmap_channel: 2  # FIXME how to know how big the centers are? -> must be the ground truth data
+  heatmap_path: None # "/data/2d_gt_patches"   # "/data/2d_gt_patches" -> 10, 20, 60  # "/data/2d_gt_patches_v2" -> what is that  # None
+  used_heatmap_channel: 1  # FIXME how to know how big the centers are? -> must be the ground truth data
   normalization: True
   normalization_mode: "global_standard"  # "local_minmax", "global_minmax", "global_standard"
 

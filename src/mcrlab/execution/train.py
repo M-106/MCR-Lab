@@ -413,8 +413,8 @@ def get_model_and_processor(model_name, encoder_name,
         # config = AutoConfig.from_pretrained(checkpoint)
         config = ModelConfig.from_pretrained(checkpoint)
         config.num_labels = num_labels
-        config.ignore_index=ignore_index
-        config.heatmap_is_gt=heatmap_is_gt
+        config.ignore_index = ignore_index
+        config.heatmap_is_gt = heatmap_is_gt
         # config.model_name=model_name, 
         # config.encoder_name=encoder_name
 
