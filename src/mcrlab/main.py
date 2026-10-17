@@ -80,7 +80,7 @@ def main():
 
 
         names = [
-            # "unet",
+            "unet",
             # "fpn", 
             "deeplabv3", 
             # "deeplabv3plus", 
@@ -88,23 +88,24 @@ def main():
         ]
         encoders = [ 
             # [
-            #     "timm-efficientnet-b7",
+                # # 0. EfficientNet (Strong CNN)
+                "timm-efficientnet-b7",
 
-            #     # 1. Kanten- & Präzision: ConvNet SOTA  
-            #     "tu-convnext_large.fb_in22k_ft_in1k_384",  
+                # 1. Kanten- & Präzision: ConvNet SOTA  
+                "tu-convnext_large.fb_in22k_ft_in1k_384",  
                 
-            #     # 2. Multi-Scale Transformer: SegFormer-Encoder 
-            #     "mit_b5",                                    
+                # 2. Multi-Scale Transformer: SegFormer-Encoder 
+                "mit_b5",                                    
                 
             #     # 3. Hybrid: Swin-Attention + CNN Stem
             #     # "tu-swinv2_base_window12to16_192to256.ms_in22k_ft_in1k"  
             # ],
             [
                 # # 0. EfficientNet (Strong CNN)
-                # "timm-efficientnet-b7",
+                "timm-efficientnet-b7",
 
                 # # 1. Kanten- & Präzision: ConvNet SOTA  
-                # "tu-convnext_large.fb_in22k_ft_in1k_384",  
+                "tu-convnext_large.fb_in22k_ft_in1k_384",  
                 
                 # 2. Multi-Scale Transformer: SegFormer-Encoder 
                 "mit_b5",                                    
@@ -122,7 +123,7 @@ def main():
                 "tu-maxvit_base_tf_512.in21k_ft_in1k", 
 
                 # 2. Hierarchical Transformer (Standard für DPT, exzellente Kanten)
-                "tu-swinv2_base_window16_256.ms_in1k"  
+                # "tu-swinv2_base_window16_256.ms_in1k"  
             ]
         ]  #"tu-samvit_huge_patch16.sa1b", "tu-beit_large_patch16_512.in22k_ft_in22k_in1k"
 
@@ -130,6 +131,13 @@ def main():
 
         for name, cur_encoders in zip(names, encoders):
             for encoder in cur_encoders:
+
+                if name == "dpt":
+                    config.train.batch_size = 1
+                elif name == "deeplabv3" and encoder == "mit_b5":
+                    config.train.batch_size = 1
+                else:
+                    config.train.batch_size = 2
 
                 config.model.name = name
                 config.model.encoder = encoder
@@ -150,7 +158,7 @@ def main():
 
     elif config.mode == "custom":
         # from mcrlab.execution.train import train
-        from mcrlab.execution.eval import center_eval
+        from mcrlab.execution.center_prediction_pipeline import center_eval
 
         experiments = dict()
 
@@ -221,16 +229,16 @@ def main():
         from mcrlab.execution.tryout import tryout
         tryout(config)
     
-    elif config.mode == "eval_extraction":
-        if config.eval_extraction.generate_2d_gt_maps:
-            from mcrlab.execution.eval_extraction import ground_truth_extraction_heatmap
+    elif config.mode == "gt_extraction":
+        if config.gt_extraction.generate_2d_gt_maps:
+            from mcrlab.execution.gt_extraction import ground_truth_extraction_heatmap
             ground_truth_extraction_heatmap(config)
         else:
-            from mcrlab.execution.eval_extraction import ground_truth_extraction
+            from mcrlab.execution.gt_extraction import ground_truth_extraction
             ground_truth_extraction(config)
 
     elif config.mode == "center_eval":
-        from mcrlab.execution.eval import center_eval
+        from mcrlab.execution.center_prediction_pipeline import center_eval
         center_eval(config)
     
     else:

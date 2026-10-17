@@ -1,0 +1,22 @@
+Final Methods
+- 2026_10_07_19_05_unet_whu_unet_efficientnet_seg_final_comp_std_norm/checkpoint-7526
+- 2026_10_07_21_20_unet_whu_unet_convnext_seg_final_comp_std_norm/checkpoint-7473
+- 2026_10_08_02_01_unet_whu_unet_segformer_seg_final_comp_std_norm/checkpoint-7685
+- 2026_10_08_05_07_deeplabv3_whu_deeplabv3_efficientnet_seg_final_comp_std_norm/checkpoint-7208
+- 2026_10_08_10_40_deeplabv3_whu_deeplabv3_convnext_seg_final_comp_std_norm/checkpoint-7314
+- ? (missing deeplabv3 + segformer (mitb5))
+- 2026_10_13_10_19_dpt_whu_dpt_vit_seg_final_comp_std_norm/checkpoint-4452  (checkpoint-15582)
+- 2026_10_13_21_41_dpt_whu_dpt_vit-pretrained_seg_final_comp_std_norm/checkpoint-15264
+- 2026_10_16_11_56_unet_whu_heatmapGT2_unet_efficientnet_final_comp_std_norm/?
+- ...
+
+
+
+
+
+
+
+
+
+
+

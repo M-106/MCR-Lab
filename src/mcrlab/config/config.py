@@ -22,41 +22,17 @@ def load_config(path):
         return Config(**data)
 
 
-class CustomTrainConfig(BaseModel):
-    batch_size: int
-    epochs: int
-    learning_rate: float
-    criterion: str
-    optimizer: str
-    training_in_2d: bool
-    metrics_aggregator: str
-    experiment_name: str
-
 
 class TrainConfig(BaseModel):
     batch_size: int
     epochs: int
     learning_rate: float
-    use_amp: bool
-    scaler: Union[str, None]
-    checkpoint_dir: str
-    criterion: str
-    optimizer: str
-    checkpoint_best_model: bool
-    val_steps: int
-    lr_scheduler: Union[str, None]
     exp_name: str
 
 
 
 class TestConfig(BaseModel):
-    metrices: list
     batch_size: int
-
-
-
-# class InferenceConfig(BaseModel):
-#     pass
 
 
 
@@ -85,7 +61,7 @@ class PreprocessingConfig(BaseModel):
     file_ending: str
 
 
-class EvalExtractionConfig(BaseModel):
+class GTExtractionConfig(BaseModel):
     names: list
     data_paths: list
     type: str
@@ -101,6 +77,9 @@ class CenterEvalConfig(BaseModel):
     min_confidences: list
     min_confidence_peak: float
     candidate_min_points: int
+    run_mode: str
+    pred_save_load_mode_saving_name: str
+    pred_save_load_mode_saving_path: str
 
 
 class InferenceConfig(BaseModel):
@@ -110,16 +89,14 @@ class InferenceConfig(BaseModel):
 
 class Config(BaseModel):
     mode: str
-    custom_train: CustomTrainConfig
     train: TrainConfig
     test: TestConfig
     inference: InferenceConfig
     preprocessing: PreprocessingConfig
-    eval_extraction: EvalExtractionConfig
+    gt_extraction: GTExtractionConfig
     center_eval: CenterEvalConfig
     model: ModelConfig
     data: DataConfig
-    device: Union[str, None]
 
 
 

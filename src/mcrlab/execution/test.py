@@ -760,28 +760,7 @@ def test(config):
             evaluate_hf_pipeline(config, use_all_test_data=False, use_testset_1=False, print_out_results=False)
             # evaluate_hf_pipeline(config, use_all_test_data=True, use_testset_1=False)
 
-    # # load model
-    # model = get_model(config.model.name)
-
-    # if isinstance(model, torch.nn.Module):
-    #     model = TorchModelWrapper(model, config.device)
-
-    # data_loader = get_data_loader(config.data.name, config.data.path, 
-    #                                 testdata=True, 
-    #                                 transform=get_basic_transform(num_points=-1), # get_basic_transform(num_points=-1),
-    #                                 batch_size=config.test.batch_size, shuffle=False, num_workers=1,
-    #                                 preprocessed=True,
-    #                                 return_train_format=True)  # because we still want x and y
-    
-    # metrices = []
-    # for metric_name in config.test.metrices:
-    #     metrices.append(get_criterion(metric_name))
-
-    # tester = Tester(model=model, 
-    #                 device=config.device,
-    #                 dataloader=data_loader,
-    #                 loss_fns=metrices)
-    # tester.evaluate()
+  
 
 
 

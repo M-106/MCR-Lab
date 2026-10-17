@@ -4,8 +4,9 @@
     {
       "label": "prepare-mcrlab",
       "type": "shell",
-      "command": "C:\\Users\\tippolito\\AppData\\Local\\anaconda3\\Scripts\\conda.exe run -n mcrlab pip install -e .",
-      // "command": "C:\\Users\\tippolito\\AppData\\Local\\anaconda3\\Scripts\\conda.exe run -n mcrlab pip install -e .",
+      "command": "F:\\anaconda\\Scripts\\conda.exe run -n mcr pip install -e .",
+      // "C:\\Users\\tippolito\\AppData\\Local\\anaconda3\\Scripts\\conda.exe run -n mcrlab pip install -e .",
+      // "F:\\anaconda\\Scripts\\conda.exe run -n mcr pip install -e .",
       "options": {
         "cwd": "${workspaceFolder}"
       },

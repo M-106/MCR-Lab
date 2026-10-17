@@ -319,6 +319,7 @@ def eval_center_robustness(
     sample_inputs_points = {}
     sigma_results = {}
     point_results = {}
+    sigma_samples_grid = {}
 
     if not sigmas:
         # sigmas = np.vectorize(lambda x: round(x, 2))(np.linspace(sigma_min, sigma_max, sigma_n_values))
@@ -366,6 +367,11 @@ def eval_center_robustness(
                 occlusion_severity=cur_sigma,  # np.random.uniform(0.0, 0.5)
             )
 
+            sample_key = (cur_sigma, len([k for k in sigma_samples_grid.keys() if k[0] == cur_sigma]) + 1)
+            if sample_key[1] <= 2:  # Wir wollen max 2 Reihen (Samples)
+                sigma_samples_grid[sample_key] = {"points": points, "center": center}
+
+
             centers = center_func(points, method=method)
 
             if len(centers) > 1:
@@ -406,6 +412,8 @@ def eval_center_robustness(
 
     print("Beginning Point-Amount Robustness Loop...")
 
+    npoints_samples_grid = {}
+
     # -- n-points eval loop ---
     for cur_n_points in tqdm(n_points, total=len(n_points), desc=f"Testing Points ({method})"):
         point_results[cur_n_points] = []
@@ -438,6 +446,10 @@ def eval_center_robustness(
                 near_edge_outlier_prob=0.9,
                 occlusion_severity=0.0  # np.random.uniform(0.0, 0.2)
             )
+
+            sample_key_pts = (cur_n_points, len([k for k in npoints_samples_grid.keys() if k[0] == cur_n_points]) + 1)
+            if sample_key_pts[1] <= 2:
+                npoints_samples_grid[sample_key_pts] = {"points": points, "center": center}
 
             centers = center_func(points, method=method)
 
@@ -615,6 +627,35 @@ def eval_center_robustness(
 
     print(f"Metrics saved to '{txt_filepath}'")
 
+    # plot samples
+    all_keys_sigma = list(sigma_samples_grid.keys())
+    if all_keys_sigma:
+        unique_sigmas = sorted(list(set(k[0] for k in all_keys_sigma)))
+        sample_indices = sorted(list(set(k[1] for k in all_keys_sigma)))
+        
+        plot_combined_sample_input(
+            samples_grid=sigma_samples_grid, 
+            row_values=[1, 2],   # z.B. [1, 2] für 2 Reihen
+            col_values=unique_sigmas,    # z.B. deine Sigmas für 3 Spalten
+            method=method, 
+            row_label="Sample", 
+            col_label="Occlusion Severity"
+        )
+
+    all_keys_pts = list(npoints_samples_grid.keys())
+    if all_keys_pts:
+        unique_npoints = sorted(list(set(k[0] for k in all_keys_pts)))
+        sample_indices_pts = sorted(list(set(k[1] for k in all_keys_pts)))
+        
+        plot_combined_sample_input(
+            samples_grid=npoints_samples_grid, 
+            row_values=[1, 2], 
+            col_values=unique_npoints, 
+            method=method, 
+            row_label="Sample", 
+            col_label="N-Points"
+        )
+
 
 def summary_plot(ax, values, means, stds, mins, sums, method, plot_limit, x_label, save_plot=True):
     plt.style.use("ggplot")
@@ -750,16 +791,21 @@ def plot_single_value_sample(ax, plot_results, plot_limit, value_idx, save_plot=
             errors_in = np.linalg.norm(inside, axis=1)
             text = (
                 "Outliers : 0\n"
-                f"Sum error: {errors_in.sum():.3f}"
+                # f"Sum error: {errors_in.sum():.3f}\n"
+                # f"Mean error: {errors_in.mean():.3f}"
+                f"Total mean error: {errors_in.mean():.3f}\n"
+                f"Total std error: {errors_in.std():.3f}\n"
             )
         else:
             errors_in = np.linalg.norm(inside, axis=1)
             errors_out = np.linalg.norm(outside, axis=1)
             total_error = errors_in.sum() + errors_out.sum()
             text = (
-                f"Outliers : {len(outside)}\n"
-                f"Total sum error: {total_error:.3f}\n"
-                f"Out sum error: {errors_out.sum():.3f}"
+                # f"Total sum error: {total_error:.3f}"
+                f"Total mean error: {errors_in.mean() + errors_out.mean():.3f}\n"
+                f"Total std error: {errors_in.std() + errors_out.std():.3f}\n"
+                f"Outliers : {len(outside)}"
+                # f"Out sum error: {errors_out.sum():.3f}"
             )
 
         cur_ax.text(
@@ -876,6 +922,81 @@ def plot_sample_input(sample_inputs, is_sigma, method):
             plt.savefig(os.path.join(path, f"{method}_input_examples_npoints_{value:.2f}.png"))
 
         plt.close()
+
+
+def plot_combined_sample_input(samples_grid, row_values, col_values, method, row_label="Sigma", col_label="Points"):
+    """
+    Plots a grid of samples where rows vary by one parameter (e.g., sigma) 
+    and columns vary by another (e.g., n_points).
+    
+    Args:
+        samples_grid (dict): Keys are (row_val, col_val) tuples, values are sample dicts {"points": ..., "center": ...}
+        row_values (list): List of 2 values for the rows (e.g., [0.05, 0.5])
+        col_values (list): List of 3 values for the columns (e.g., [50, 100, 1000])
+        method (str): Name of the method for saving the file
+    """
+    fig, axes = plt.subplots(
+        nrows=len(row_values), 
+        ncols=len(col_values), 
+        figsize=(4 * len(col_values), 4 * len(row_values))
+    )
+    
+    # Ensure axes is 2D even if 1x3 or 3x1
+    if len(row_values) == 1:
+        axes = np.expand_dims(axes, axis=0)
+    elif len(col_values) == 1:
+        axes = np.expand_dims(axes, axis=1)
+
+    for i, row_val in enumerate(row_values):
+        for j, col_val in enumerate(col_values):
+            ax = axes[i, j]
+            
+            # Retrieve the specific sample for this combination
+            sample = samples_grid.get((col_val, row_val))
+            
+            if sample is not None:
+                pts = sample["points"]
+                
+                ax.scatter(
+                    pts[:, 0],
+                    pts[:, 1],
+                    s=2.0,
+                    alpha=1.0,
+                    color="red",
+                    label="Manhole Points"
+                )
+
+                ax.scatter(
+                    sample["center"][0],
+                    sample["center"][1],
+                    color="green",
+                    marker="x",
+                    s=60,
+                    label="GT"
+                )
+                
+            # Set titles for the top row
+            if i == 0:
+                ax.set_title(f"{col_label} = {col_val}", fontsize=12, pad=10)
+                
+            # Set y-labels for the first column
+            if j == 0:
+                ax.set_ylabel(f"{row_label} = {row_val}", fontsize=12, labelpad=10)
+                
+            ax.set_aspect("equal", adjustable="box")
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+    # Add a single legend for the entire figure
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2, bbox_to_anchor=(0.5, 1.05))
+
+    plt.suptitle(f"Input Examples: {col_label} ({method.upper()})", y=1.1, fontsize=16)
+    
+    path = "./output/monte-carlo-gt-check"
+    os.makedirs(path, exist_ok=True)
+    plt.savefig(os.path.join(path, f"{method}_{col_label}_input_examples.png"), bbox_inches="tight", dpi=300)
+    plt.close()
 
 
 

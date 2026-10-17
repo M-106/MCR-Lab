@@ -129,7 +129,7 @@ class PointCloudTensor(object):
                  intensities=None, normals=None, 
                  labels=None, instances=None, 
                  is_torch_tensor=False,
-                 bev_data=None):
+                 bev_data=None, patch_file_path=None):
         self.coordinates = coordinates
         self.colors = colors
         self.intensities = intensities
@@ -137,7 +137,7 @@ class PointCloudTensor(object):
         self.labels = labels
         self.instances = instances
 
-        self.set_bev(bev_data, None)
+        self.set_bev(bev_data, patch_file_path)
 
         # can only be numpy or torch.Tensor
         self.is_torch_tensor = is_torch_tensor
@@ -195,6 +195,8 @@ class PointCloudTensor(object):
                 normals=normals_,
                 labels=labels_,
                 instances=instances_,
+                bev_data=self.bev_data,
+                patch_file_path=self.patch_file_path,
                 is_torch_tensor=True
             )
         else:
@@ -222,6 +224,8 @@ class PointCloudTensor(object):
                 normals=normals_,
                 labels=labels_,
                 instances=instances_,
+                bev_data=self.bev_data,
+                patch_file_path=self.patch_file_path,
                 is_torch_tensor=False
             )
         else:
@@ -287,6 +291,8 @@ class PointCloudTensor(object):
             intensities=moved_intensities,
             colors=moved_colors,
             normals=moved_normals,
+            bev_data=self.bev_data,
+            patch_file_path=self.patch_file_path,
             is_torch_tensor=self.is_torch_tensor
         )
             

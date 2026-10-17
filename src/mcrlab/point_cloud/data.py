@@ -830,7 +830,8 @@ class ParisLille3DDataset(Dataset):
 class WHUUrban3DDataset(Dataset):
     def __init__(self, path, type="train", transform=None, 
                  preprocessed=False, return_train_format=False,
-                 bev_normalized=True, bev_normalize_mode="local_minmax"):
+                 bev_normalized=True, bev_normalize_mode="local_minmax",
+                 only_these_pc_ids=None):
         self.path = os.path.join(path, "mls", "h5")
         self.type = type  # see in https://pypi.org/project/pywhu3d/ which scenes are train/val/test split
         self.transform = transform
@@ -840,11 +841,14 @@ class WHUUrban3DDataset(Dataset):
         self.train_ids = ['8018', '4938', '0414', '2002', '0444', '1046', '5642', '4333', '4629', '0424', '2421', '0947', '0434', '2022', '2719', '2810', '8048', '2423', '2522', '8008', '0502', '6017', '3918', '2422', '2322', '3405', '2323', '8038']
         self.val_ids = ['0404', '6027', '3648']
         self.test_ids = ['0940', '2447', '6037', '2321', '8028', '5627', '2521']
+        self.only_these_pc_ids = only_these_pc_ids
 
         if preprocessed:
             self.train_ids = ['preprocessed_patch_'+x for x in self.train_ids]
             self.val_ids = ['preprocessed_patch_'+x for x in self.val_ids]
             self.test_ids = ['preprocessed_patch_'+x for x in self.test_ids]
+            if self.only_these_pc_ids is not None:
+                self.only_these_pc_ids = ['preprocessed_patch_'+x for x in self.only_these_pc_ids]
 
         self.point_cloud_paths = []
         self.bev_paths = dict()
@@ -863,6 +867,10 @@ class WHUUrban3DDataset(Dataset):
                 elif self.type == "test" and not any([cur_file.startswith(cur_id) for cur_id in self.test_ids]):
                     continue
                 elif self.type == "val" and not any([cur_file.startswith(cur_id) for cur_id in self.val_ids]):
+                    continue
+
+                # filter only passed pc ids if some are passed
+                if self.only_these_pc_ids is not None and not any([cur_file.startswith(cur_id) for cur_id in self.only_these_pc_ids]):
                     continue
 
                 self.point_cloud_paths.append(os.path.join(path, cur_file))
@@ -960,7 +968,8 @@ class WHUUrban3DDataset(Dataset):
 class SUDROADDataset(Dataset):
     def __init__(self, path, type="train", transform=None, 
                  preprocessed=False, return_train_format=False,
-                 bev_normalized=True, bev_normalize_mode="local_minmax"):
+                 bev_normalized=True, bev_normalize_mode="local_minmax",
+                 only_these_pc_ids=None):
         self.path = path
         self.type = type  # have the additional special type not_splitted
         self.transform = transform
@@ -970,11 +979,14 @@ class SUDROADDataset(Dataset):
         self.train_ids = ['8', '10', '1', '11', '3', '4', '6', '5', '7']
         self.val_ids = ['0']
         self.test_ids = ['2', '9']
+        self.only_these_pc_ids = only_these_pc_ids
 
         if preprocessed:
             self.train_ids = ['preprocessed_patch_'+x for x in self.train_ids]
             self.val_ids = ['preprocessed_patch_'+x for x in self.val_ids]
             self.test_ids = ['preprocessed_patch_'+x for x in self.test_ids]
+            if self.only_these_pc_ids is not None:
+                self.only_these_pc_ids = ['preprocessed_patch_'+x for x in self.only_these_pc_ids]
 
         self.point_cloud_paths = []
         self.bev_paths = dict()
@@ -1001,6 +1013,10 @@ class SUDROADDataset(Dataset):
                     elif self.type == "test" and not any([cur_file.startswith(cur_id) for cur_id in self.test_ids]):
                         continue
                     elif self.type == "val" and not any([cur_file.startswith(cur_id) for cur_id in self.val_ids]):
+                        continue
+
+                    # filter only passed pc ids if some are passed
+                    if self.only_these_pc_ids is not None and not any([cur_file.startswith(cur_id) for cur_id in self.only_these_pc_ids]):
                         continue
 
                     self.point_cloud_paths.append(os.path.join(path, cur_file))
@@ -1496,7 +1512,7 @@ class BEVDataset(Dataset):
                             return_tensors="pt"
                         )
                     x = processed["pixel_values"].squeeze(0)  # (C, H, W)
-                else:
+                elif not self.normalize: 
                     x[:2] = (x[:2] - x[:2].mean()) / (x[:2].std() + 1e-6)
             
             y = torch.from_numpy(y_np).long() if self.heatmap_gt_path is None else torch.from_numpy(y_np).float()
@@ -1524,21 +1540,23 @@ class BEVDataset(Dataset):
     def __len__(self):
         return len(self.file_paths)
     
-    def extract_grid_identifier(self, input_string):
+    def extract_grid_identifier(self, input_string, as_float=False):
         _, input_string = os.path.split(input_string)
         input_string = ".".join(input_string.split(".")[:-1])
         input_string = input_string.replace("preprocessed_patch_bev_", "").replace("preprocessed_patch_", "")
         pc_id, x_start, y_start = input_string.split("_")[:3]
+        if as_float:
+            return float(pc_id), float(x_start), float(y_start)
         return pc_id, x_start, y_start
 
-def bev_gen_wrapper(tiles, metas, has_labels=False):
+def bev_gen_wrapper(tiles, metas, has_labels=False, heatmap_gt_path=None):
     for idx in range(len(tiles)):
         tile = tiles[idx]
         meta = metas[idx]
 
         if has_labels:
             x = torch.from_numpy(tile[:-1]).float()
-            if self.heatmap_gt_path is None:
+            if heatmap_gt_path is None:
                 y = torch.from_numpy(tile[-1]).long()
             else:
                 y = torch.from_numpy(tile[-1]).float()
@@ -1593,7 +1611,7 @@ def get_data_loader(data_name, path, type="train", transform=None,
                     batch_size=32, shuffle=True, num_workers=4,
                     preprocessed=False, return_train_format=False,
                     return_dataset=False, bev_normalized=True, bev_normalize_mode="global_standard",
-                    invert_z=False):
+                    invert_z=False, only_these_pc_ids=None):
     if data_name == "paris":
         data_loader = get_paris_data_loader(path, type=type, transform=transform,
                                             batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
@@ -1603,13 +1621,14 @@ def get_data_loader(data_name, path, type="train", transform=None,
         data_loader = get_whu_data_loader(path, type=type, transform=transform,
                                           batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                           preprocessed=preprocessed, return_train_format=return_train_format,
-                                          return_dataset=return_dataset, bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
+                                          return_dataset=return_dataset, bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode,
+                                          only_these_pc_ids=only_these_pc_ids)
     elif data_name == "sud":
         data_loader = get_sud_data_loader(path, type=type, transform=transform,
                                           batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
                                           preprocessed=preprocessed, return_train_format=return_train_format,
                                           return_dataset=return_dataset, bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode,
-                                          invert_z=invert_z)
+                                          invert_z=invert_z, only_these_pc_ids=only_these_pc_ids)
     else:
         raise ValueError(f"No Dataset with the name '{data_name}' founded. Try 'paris'.")
 
@@ -1635,10 +1654,12 @@ def get_paris_data_loader(path, type="train", transform=None,
 def get_whu_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
                           preprocessed=False, return_train_format=False,
-                          return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax"):
+                          return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax",
+                          only_these_pc_ids=None):
     dataset = WHUUrban3DDataset(path=path, type=type, transform=transform,
                                 preprocessed=preprocessed, return_train_format=return_train_format,
-                                bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
+                                bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode,
+                                only_these_pc_ids=only_these_pc_ids)
 
     if return_dataset:
         return dataset
@@ -1652,13 +1673,17 @@ def get_sud_data_loader(path, type="train", transform=None,
                           batch_size=32, shuffle=True, num_workers=4,
                           preprocessed=False, return_train_format=False,
                           return_dataset=False, bev_normalized=True, bev_normalize_mode="local_minmax",
-                          invert_z=True):
-    # if invert_z:
-    #     transform.transforms.append(InvertHeightTransform())
+                          invert_z=True, only_these_pc_ids=None):
+    if invert_z:
+        if transform is None:
+            transform = Compose([InvertHeightTransform()])
+        else:
+            transform.transforms.append(InvertHeightTransform())
     
     dataset = SUDROADDataset(path=path, type=type, transform=transform,
                              preprocessed=preprocessed, return_train_format=return_train_format,
-                             bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode)
+                             bev_normalized=bev_normalized, bev_normalize_mode=bev_normalize_mode,
+                             only_these_pc_ids=only_these_pc_ids)
 
     if return_dataset:
         return dataset

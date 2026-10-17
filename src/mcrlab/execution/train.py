@@ -555,6 +555,7 @@ def train_hf_pipeline(config):
     model_name = config.model.name.lower()
     encoder_name = config.model.encoder
     epochs = config.train.epochs
+    learning_rate = config.train.learning_rate
 
     heatmap_path = config.data.heatmap_path
     used_heatmap_channel = config.data.used_heatmap_channel
@@ -784,12 +785,11 @@ def train_hf_pipeline(config):
             return_micro_fps_fpn=False,
         )
 
-    # FIXME -> make many of the settings adjustable via config
     training_args = HFTrainingArguments(
         output_dir=f"/out/checkpoints/2d/{save_name}",
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
-        learning_rate=1e-4,  # 6e-5,           # 6e-5     
+        learning_rate=learning_rate,  # 6e-5,           # 6e-5     
         lr_scheduler_type="cosine",   # cosine
         warmup_steps=200,             # 0.1
         fp16=False,                    # faster training

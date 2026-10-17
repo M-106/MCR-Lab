@@ -16,14 +16,14 @@ import pyransac3d as pyrsc
 import open3d as o3d
 import torch
 
-from mcrlab.classic.utils import fit_plane, plane_basis, project_to_plane, \
+from mcrlab.traditional.utils import fit_plane, plane_basis, project_to_plane, \
                                   visualize_circle_fit
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, get_class_attribute, get_instance_attribute, \
                                      barycentric_downsample_manhole
 from mcrlab.point_cloud.data import CSFGroundFilterTransform, bev_gen_wrapper
 from mcrlab.projection import bev_projection, bev_pixel_to_3d
 
-from mcrlab.classic.least_squares import fit_circle_least_squares, fit_circle_least_squares_3D
+from mcrlab.traditional.least_squares import fit_circle_least_squares, fit_circle_least_squares_3D
 from mcrlab.point_cloud.shape_check import circle_shape_check
 
 
@@ -531,7 +531,8 @@ def use_points_and_extract_center_point(clusters, method, use_projection=True, a
 
 def use_label_candidates_and_extract_center_point(points, use_2d_version, label_value, 
                                                   method="least_square", use_projection=True, cluster_if_needed=True,
-                                                  apply_downsampling=False):
+                                                  apply_downsampling=False, 
+                                                  min_points_threshold=30, max_points_threshold=10000, do_circle_check=False):
     candidates = []
     
     # 2D CASE
@@ -563,7 +564,7 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                 indices = np.where(instance_ids == cur_instance_id)[0]
                 cluster = points.select_by_index(indices)
 
-                if len(indices) < 30:
+                if len(indices) < min_points_threshold:
                     continue
 
                 # check if manhole class
@@ -599,7 +600,7 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                 loss = result["loss"]
                 input_points = result["input_points"]
 
-                if 0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30):
+                if not do_circle_check or (0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30)):
                     candidates.append((center, radius, cluster, inliers, error, loss, input_points))
         
             return candidates
@@ -626,7 +627,7 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
 
             # or use this for clustering:
             # features = np.column_stack((points, intensity))
-            db = DBSCAN(eps=0.15, min_samples=20).fit(points)
+            db = DBSCAN(eps=0.3, min_samples=5).fit(points)
             cluster_labels = db.labels_
 
             unique_labels = np.unique(cluster_labels)
@@ -638,7 +639,7 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                 indices = np.where(cluster_labels == cur_label)[0]
                 cluster = filtered_points.select_by_index(indices)
 
-                if len(indices) < 30 or len(indices) > 10000:
+                if len(indices) < min_points_threshold or len(indices) > max_points_threshold:
                     continue
 
                 cluster_points = cluster.point[get_coordinate_attribute(cluster)].numpy()
@@ -661,7 +662,7 @@ def use_label_candidates_and_extract_center_point(points, use_2d_version, label_
                 loss = result["loss"]
                 input_points = result["input_points"]
 
-                if 0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30):
+                if not do_circle_check or (0.20 < radius < 0.50 and (inliers is None or len(inliers) > 30)):
                     candidates.append((center, radius, cluster, inliers, error, loss, input_points))
         
             return candidates

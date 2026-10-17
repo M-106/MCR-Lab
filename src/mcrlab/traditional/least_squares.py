@@ -4,7 +4,7 @@
 import numpy as np
 from scipy.optimize import least_squares
 
-from mcrlab.classic.utils import fit_plane, plane_basis, project_to_plane
+from mcrlab.traditional.utils import fit_plane, plane_basis, project_to_plane
 
 
 

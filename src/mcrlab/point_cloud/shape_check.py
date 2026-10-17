@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import open3d as o3d
 from scipy.spatial import ConvexHull
 
-from mcrlab.classic.least_squares import fit_circle_least_squares_3D
+from mcrlab.traditional.least_squares import fit_circle_least_squares_3D
 from mcrlab.point_cloud.utils import get_coordinate_attribute
 
 

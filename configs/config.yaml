@@ -1,56 +1,31 @@
-mode: tryout    # custom, train, train_all, test, inference, tryout, preprocessing, eval_extraction, center_eval
-# train
-
-custom_train:
-  batch_size: 2 # 12
-  epochs: 10
-  learning_rate: 0.001
-  criterion: "bce"  # FIXME
-  optimizer: "adam"
-  training_in_2d: True
-  metrics_aggregator: "simple_loss"
-  experiment_name: "first pipeline try"
-  # add more
+mode: center_eval    # custom, train, train_all, test, inference, tryout, preprocessing, gt_extraction, center_eval
 
 
-# FIXME -> currently most of the train args are not connected yet
 train:
   batch_size: 1 # 8, 6 12
   epochs: 600  # 400, 600, 50
-  learning_rate: 0.0005
-  use_amp: False
-  scaler: None
-  checkpoint_dir: "/out/checkpoints/2d"  # "./checkpoint_dir"
-  criterion: "iou"
-  optimizer: "not sure"
-  checkpoint_best_model: True
-  val_steps: 5
-  lr_scheduler: None
+  learning_rate: 0.0001  # 1e-4
   exp_name: "seg_final_comp_std_norm"  # teb7, mb5, r101, r101_32x32d, d161, mos4
-  # tshp16s
-  # tmxt512 tu-maxvit_xlarge_tf_512
-  # ts2lw12t24 tu-swinv2_large_window12to24_192to384
-  # tblp16512 tu-beit_large_patch16_512.in22k_ft_in22k_in1k
 
 test:
-  metrices: []
   batch_size: 5
 
 preprocessing:
   file_ending: ".h5"  # ".h5", ".ply"
 
-eval_extraction:
+gt_extraction:
     names: ["whu", "sud"]
-    data_paths: ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"]
+    data_paths: ["F:/Fraunhofer_Backup/data/whu3d-dataset-wo-test-label", "F:/Fraunhofer_Backup/data/SUD-ROAD"]
     # ["C:/Users/tippolito/Data/whu3d-dataset-wo-test-label", "C:/Users/tippolito/Data/SUD-ROAD"]  
-    # ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"] # 
+    # ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"]
+    # ["F:/Fraunhofer_Backup/data/whu3d-dataset-wo-test-label", "F:/Fraunhofer_Backup/data/SUD-ROAD"]
     type: "all"  # "all"
-    save_path: "/out/data/"  # "/out/checkpoints/2d/output"  # "/out/data/"  # "/out/checkpoints/2d/output" # "/out/data/"   # "/out/checkpoints/2d/output"  # 
+    save_path: "./output"  # "F:/Fraunhofer_Backup/data/"  # "/out/checkpoints/2d/output"  # "/out/data/"  # "F:/Fraunhofer_Backup/data/"
     # "/data/" "./output/" # "/data/2d_gt_patches"  "./output/"
     # rm -rf ../data/2d_gt_patches && mkdir ../data/2d_gt_patches && chmod -R 777 ../data/2d_gt_patches
     # "./mcr_maps" # "./output/eval_ground_truths_mean.json"
     center_algorithm: "squares"    # "squares", "mean", "ransac", "mesqra"
-    generate_2d_gt_maps: True
+    generate_2d_gt_maps: False
     generate_also_3d_gt_maps: False
 
 center_eval:
@@ -60,13 +35,18 @@ center_eval:
     min_confidences: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.75, 0.8, 0.85, 0.9, 0.95]  # [0.1, 0.5, 0.9]
     min_confidence_peak: 0.9
     candidate_min_points: 50
+    # run_in_only_pred_save_mode: True
+    # pred_save_mode_saving_name: "2D_Seg_UNet_Segformer"
+    run_mode: "normal"  # save, load, normal (everything else)
+    pred_save_load_mode_saving_name: "2D_Seg_UNet_Segformer"
+    pred_save_load_mode_saving_path: "./saved_preds"
 
 inference:
   checkpoint_path: "./output/checkpoint/2026_06_22_20_31_unet/checkpoint-1196/model.safetensors"
   save_path: "./output/inference/eval_preds.json"
 
 model:
-  name: "traditional_3d_dbscan"  # "unet" "unetplusplus" "fpn" "deeplabv3" "deeplabv3plus" dpt"
+  name: "traditional_2d_hough"  # "unet" "unetplusplus" "fpn" "deeplabv3" "deeplabv3plus" dpt"
   # not used: "pspnet"  "linknet" "manet" "pan" "upernet" "segformer"
   # "traditional_2d_hough", "traditional_2d_contours", "traditional_3d_ransac", "traditional_3d_dbscan"
   encoder: "timm-efficientnet-b7"  # resnet34, resnet50, resnet101, efficientnet-b7, mit_b5, densenet161, vgg19
@@ -128,9 +108,9 @@ model:
 
 data: 
   name: whu  # paris, whu, sud, merged_whu_sud
-  path: "/data/whu3d-dataset-wo-test-label"  # "/data/whu3d-dataset-wo-test-label"
+  path: "F:/Fraunhofer_Backup/data/whu3d-dataset-wo-test-label"  # "/data/whu3d-dataset-wo-test-label"  # "F:/Fraunhofer_Backup/data/whu3d-dataset-wo-test-label"
   name_2: "sud"
-  path_2: "/data/SUD-ROAD"
+  path_2: "F:/Fraunhofer_Backup/data/SUD-ROAD"  # "/data/SUD-ROAD"  # "F:/Fraunhofer_Backup/data/SUD-ROAD"
   # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"
   # "C:/Users/tippolito/Data/SUD-ROAD"
   # "C:/Users/tippolito/Data/whu3d-dataset-wo-test-label"  
@@ -138,12 +118,12 @@ data:
   # "D:/data/whu3d-dataset-wo-test-label"
   preprocessed: True
   type: all   # train, test, val, all, load_unsplitted (sud special)
-  heatmap_path: None # "/data/2d_gt_patches"   # "/data/2d_gt_patches" -> 10, 20, 60  # "/data/2d_gt_patches_v2" -> what is that  # None
-  used_heatmap_channel: 1  # FIXME how to know how big the centers are? -> must be the ground truth data
+  heatmap_path: "F:/Fraunhofer_Backup/data/2d_gt_patches_on_raw_pc"  # "F:/Fraunhofer_Backup/data/2d_gt_patches_on_raw_pc"  #  /data/heatmap       # "/data/2d_gt_patches"   # "/data/2d_gt_patches" -> 10, 20, 60  # "/data/2d_gt_patches_v2" -> what is that  # None
+  used_heatmap_channel: 2 # FIXME how to know how big the centers are? -> must be the ground truth data
   normalization: True
   normalization_mode: "global_standard"  # "local_minmax", "global_minmax", "global_standard"
 
-device: cpu  # cpu, cuda, cuda:0
+
 
 
 
