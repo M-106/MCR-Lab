@@ -673,6 +673,8 @@ def center_eval(config):
 
     if model_name.startswith("traditional_"):
         min_confidences = [-999]
+    elif run_mode == "save":
+        min_confidences = [min_confidences[int((len(min_confidences)-1)//2)]]
 
     print(f"Confidences: {min_confidences}")
     
@@ -719,6 +721,10 @@ def center_eval(config):
     pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
     normalization = config.data.normalization
     normalization_mode = config.data.normalization_mode
+    data_split_type = config.data.type
+
+    if data_split_type != "test":
+        print("[WARNING] You currently use not 'test' as split. Make sure you really don't want to use the 'test' split.")
 
     if heatmap_path is None or heatmap_path == "None":
         using_heatmap_as_gt = False
@@ -754,7 +760,7 @@ def center_eval(config):
             test_3d_dataset = get_data_loader(
                 cur_dataset, 
                 config.data.path if cur_dataset == "whu" else config.data.path_2, 
-                type="test",
+                type=data_split_type,
                 transform=get_basic_transform(),
                 batch_size=1, 
                 shuffle=False, 
@@ -825,13 +831,13 @@ def center_eval(config):
                     )
 
                     # Process predictions depending on 2D vs 3D method output
-                    for det in detected_centers:
+                    for cur_det_center in detected_centers:
                         if traditional_method.startswith("2d"):
                             # det is [pixel_x, pixel_y, radius] -> transform to 3D point
                             center_3d = bev_pixel_to_3d(
                                 patch_points=pc,
-                                pixel_x=det[0],
-                                pixel_y=det[1],
+                                pixel_x=cur_det_center[0],
+                                pixel_y=cur_det_center[1],
                                 origin_x=meta["origin_x"],
                                 origin_y=meta["origin_y"],
                                 resolution=meta["resolution"],
@@ -842,7 +848,7 @@ def center_eval(config):
                             )
                         else:
                             # det is already 3D coordinates [x, y, z]
-                            center_3d = det
+                            center_3d = cur_det_center
 
                         if center_3d is not None and len(center_3d) >= 3:
                             elapsed_time = time.perf_counter() - start_time
@@ -870,6 +876,15 @@ def center_eval(config):
                         save_filepath=pred_file_path,
                         load_filepath=pred_file_path if run_mode.lower() == "load" else None
                     )
+
+                    # use time loading if using loaded models or save time if in saving mode
+                    # correct time if loading the model
+                    if run_mode.lower() == "load":
+                        elapsed_prediction_time = np.load(pred_time_file_path).item()
+                        start_time = time.perf_counter() - elapsed_prediction_time
+                    elif run_mode.lower() == "save":
+                        elapsed_prediction_time = time.perf_counter() - start_time
+                        np.save(pred_time_file_path, np.array([elapsed_prediction_time]))
 
                     orig_h, orig_w = int(meta["tile_size"] / meta["resolution"]), int(meta["tile_size"] / meta["resolution"])
                     pred_h, pred_w = preds_binary.shape
@@ -912,7 +927,11 @@ def center_eval(config):
                     
                     # -----------------
                     # Prediction Center Extraction
+                    
+                    total_prediction_time = time.perf_counter() - start_time
+
                     for p_idx in range(1, num_pred_objects + 1):
+                        additional_post_processing_time_start = time.perf_counter()
                         pred_mask = (labeled_preds == p_idx)
 
                         if np.sum(pred_mask) < candidate_min_points:
@@ -952,24 +971,18 @@ def center_eval(config):
                             print(f"[Warning] Skipped a center prediction -> pred: {center}")
                             continue
 
-                        elapsed_time = time.perf_counter() - start_time
-
-                        # correct time if loading the model
-                        if run_mode.lower() == "load":
-                            elapsed_time = np.load(pred_time_file_path).item()
+                        total_localization_time = time.perf_counter() - additional_post_processing_time_start
+                        final_elapsed_time = total_prediction_time + total_localization_time
                         
                         cur_center_point = {
                             "x": center[0],
                             "y": center[1],
                             "z": center[2],
-                            "time": elapsed_time,
+                            "time": final_elapsed_time,
                             "confidence": min_confidence
                         }
                         
                         raw_threshold_results = add_to_result(raw_threshold_results, cur_dataset, pc_id, cur_center_point)
-
-                        if run_mode.lower() == "save":
-                            np.save(pred_time_file_path, np.array([elapsed_time]))
 
                     # --- Execute Debug Plotting ---
                     if run_mode.lower() != "save":
@@ -1062,7 +1075,7 @@ def center_eval(config):
         test_raw_3d_dataset = get_data_loader(
             cur_dataset, 
             config.data.path if cur_dataset == "whu" else config.data.path_2, 
-            type="test",
+            type=data_split_type,
             transform=None,  # get_basic_transform(),
             batch_size=1, 
             shuffle=False, 
@@ -1085,7 +1098,7 @@ def center_eval(config):
         # -----------------
         # Saving
         # Save evaluation results per dataset (and over all thresholds)
-        output_path = Path(f"./output/{cur_dataset}_eval_{exp_name}.json")
+        output_path = Path(f"{config.center_eval.center_pred_path}/center_pred_{cur_dataset}_{data_split_type}_{exp_name}.json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w") as file_:
             json.dump(all_dataset_results, file_, indent=4)

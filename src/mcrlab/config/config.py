@@ -62,17 +62,17 @@ class PreprocessingConfig(BaseModel):
 
 
 class GTExtractionConfig(BaseModel):
+    generate_2d_gt_maps: bool
     names: list
     data_paths: list
-    type: str
     save_path: str
     center_algorithm: str
-    generate_2d_gt_maps: bool
-    generate_also_3d_gt_maps: bool
+    debugging_path: str
 
 
 class CenterEvalConfig(BaseModel):
     center_extraction_method: str
+    center_pred_path: str
     save_debug_plots: bool
     min_confidences: list
     min_confidence_peak: float

@@ -226,7 +226,7 @@ def center_gt_debugging_plot(
     print(f"  → Saved thesis debugging plot at '{fig_path}'", flush=True)
 
 
-def validate_centers_against_patches(extracted_centers, data_name, data_path, pc_id, tile_size=5.0, tolerance=0.01):
+def validate_centers_against_patches(extracted_centers, data_name, data_path, data_split, pc_id, tile_size=5.0, tolerance=0.01):
     """
     Checks, if every extracted center exists inside at least one patch.
 
@@ -239,7 +239,7 @@ def validate_centers_against_patches(extracted_centers, data_name, data_path, pc
     # 1. Load Patch Data
     data_loader = get_data_loader(data_name, 
                                   data_path, 
-                                  type="all",
+                                  type=data_split,
                                   transform=get_basic_transform(),  # get_basic_transform(num_points=-1),
                                   batch_size=1, shuffle=False, num_workers=0,
                                   preprocessed=True, 
@@ -331,15 +331,18 @@ def ground_truth_extraction(config):
             f"{cur_dataset}_{config.gt_extraction.center_algorithm}"
         )
 
-        # save_dir_creation(plot_save_dir)
         os.makedirs(plot_save_dir, exist_ok=True)
         shutil.rmtree(plot_save_dir)
-        # save_dir_creation(plot_save_dir)
         os.makedirs(plot_save_dir, exist_ok=True)
+
+        data_split_type = config.data.type
+            
+        if data_split_type != "test":
+            print("[WARNING] You currently use not 'test' as split. Make sure you really don't want to use the 'test' split.")
 
         data_loader = get_data_loader(config.gt_extraction.names[cur_idx], 
                                       config.gt_extraction.data_paths[cur_idx], 
-                                      type="test",   # config.gt_extraction.type, 
+                                      type=data_split_type,   # config.gt_extraction.type, 
                                       transform=get_filtered_raw_transform(manhole_label=3 if "sud" in cur_dataset.lower() else 104002),  # get_basic_transform(num_points=-1),
                                       batch_size=1, shuffle=False, num_workers=0,
                                       preprocessed=False, 
@@ -352,8 +355,6 @@ def ground_truth_extraction(config):
 
         for idx, batch in enumerate(data_loader):
             point_cloud = batch[0]
-            # point_cloud = point_cloud.get_as_o3d()
-            # print_pc(point_cloud)
 
             _, cur_pc_name = os.path.split(point_cloud_paths[idx])
             cur_pc_name = ".".join(cur_pc_name.split(".")[:-1])
@@ -422,6 +423,7 @@ def ground_truth_extraction(config):
                     extracted_centers=[cur_center], 
                     data_name=config.gt_extraction.names[cur_idx], 
                     data_path=config.gt_extraction.data_paths[cur_idx],
+                    data_split=data_split_type,
                     pc_id=cur_pc_id, 
                     tile_size=5.0, tolerance=0.01
                 )
@@ -518,7 +520,7 @@ def ground_truth_extraction(config):
 
                     print(f"  → Saved fig at '{fig_path}'", flush=True)
 
-        save_path = os.path.join(config.gt_extraction.save_path, "center_gt", f"{cur_dataset}_eval_ground_truths_{config.gt_extraction.center_algorithm}.json")
+        save_path = os.path.join(config.gt_extraction.save_path, "center_gt", f"center_ground_truth_{cur_dataset}_{data_split_type}_{config.gt_extraction.center_algorithm}.json")
     
         with open(save_path, "w", encoding="utf-8") as json_file:
             json.dump(json_data, json_file, indent=4, ensure_ascii=False)
@@ -601,7 +603,7 @@ def generate_gaussian_heatmap_3d(shape, center, sigma=(3, 3, 3)):
 #     point_heatmaps = volume[indices[:, 2], indices[:, 1], indices[:, 0], 0] 
 #     return point_heatmaps
 
-def debugging_center_extraction(patch_points, patch_centers, refined_centers, raw_point_cloud, label_value, search_radius, cur_pc_id, xstart, ystart, dataset_name):
+def debugging_center_extraction(patch_points, patch_centers, refined_centers, raw_point_cloud, label_value, search_radius, cur_pc_id, xstart, ystart, dataset_name, save_path):
     fig, axes = plt.subplots(1, 3, figsize=(10, 5))
 
     # Plot 1: Patch points and the fallback/cluster center
@@ -683,7 +685,8 @@ def debugging_center_extraction(patch_points, patch_centers, refined_centers, ra
     handles, labels = axes[1].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper left", ncol=2) # bbox_to_anchor=(1.02, 1.0),
 
-    plt.savefig(f"./output/heatmap_extraction_debugging/hm_creation_{dataset_name}_{cur_pc_id}_{xstart}_{ystart}.png", dpi=300)
+    save_file = os.path.join(save_path, f"hm_creation_{dataset_name}_{cur_pc_id}_{xstart}_{ystart}.png")
+    plt.savefig(save_file, dpi=300)
     plt.close(fig)
 
 
@@ -694,7 +697,8 @@ def extract_raw_center_gt_from_patch(
     label_value: int,
     method: str = "least_square",
     search_radius: float = 1.2, # Radius in meters to query around the patch cluster center
-    cur_pc_id=None, xstart=None, ystart=None, dataset_name=""
+    cur_pc_id=None, xstart=None, ystart=None, dataset_name="",
+    debugging_path=None
 ):
     # Step 1: Detect clusters on the local patch
     _, _, _, original_cluster_pcs, _, _, _ = center_estimation_3d_pipeline_debugging(
@@ -886,7 +890,8 @@ def extract_raw_center_gt_from_patch(
     # final_centers = np.concatenate(validated_final_centers, axis=0)
 
     # debugging
-    debugging_center_extraction(patch_points, patch_centers, final_centers, raw_point_cloud, label_value, search_radius, cur_pc_id, xstart, ystart, dataset_name)
+    if debugging_path:
+        debugging_center_extraction(patch_points, patch_centers, final_centers, raw_point_cloud, label_value, search_radius, cur_pc_id, xstart, ystart, dataset_name, debugging_path)
 
     if len(refined_centers_list) == 0:
         return None, None
@@ -908,11 +913,16 @@ def ground_truth_extraction_heatmap(config):
     shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    os.makedirs(f"./output/heatmap_extraction_debugging", exist_ok=True)
-    shutil.rmtree(f"./output/heatmap_extraction_debugging")
-    os.makedirs(f"./output/heatmap_extraction_debugging", exist_ok=True)
+    debugging_path = config.gt_extraction.debugging_path
+    if debugging_path.lower() == "none":
+        debugging_path = None
+    else:
+        debugging_path = os.path.join(debugging_path, "heatmaps_debugging")
+        os.makedirs(debugging_path, exist_ok=True)
+        shutil.rmtree(debugging_path)
+        os.makedirs(debugging_path, exist_ok=True)
 
-    generate_3d_heatmaps = config.gt_extraction.generate_also_3d_gt_maps
+    generate_3d_heatmaps = False  # config.gt_extraction.generate_also_3d_gt_maps
 
     label_value = 1
 
@@ -924,6 +934,11 @@ def ground_truth_extraction_heatmap(config):
     patch_height = int(tile_size / resolution)  # 5.0 / 0.01 = 500
     patch_width = int(tile_size / resolution)  # 5.0 / 0.01 = 500
 
+    data_split_type = config.data.type
+    
+    if data_split_type != "all":
+        print("[WARNING] You currently use not 'all' as split. Make sure you really don't want to use the 'all' split.")
+
     cur_raw_pc_loaded = None
 
     for cur_idx in range(len(config.gt_extraction.data_paths)):
@@ -933,7 +948,7 @@ def ground_truth_extraction_heatmap(config):
         data_loader = get_data_loader(
             dataset_name,
             config.gt_extraction.data_paths[cur_idx],
-            type="all",  # config.gt_extraction.type,
+            type=data_split_type,  # config.gt_extraction.type,
             transform=None,  # get_filtered_raw_transform(manhole_label=3 if "sud" in dataset_name.lower() else 104002),
             batch_size=1,
             shuffle=False,
@@ -984,7 +999,7 @@ def ground_truth_extraction_heatmap(config):
                 raw_dataloader = get_data_loader(
                     dataset_name,
                     config.gt_extraction.data_paths[cur_idx],
-                    type="all",  # config.gt_extraction.type,
+                    type=data_split_type,  # config.gt_extraction.type,
                     transform=get_filtered_raw_transform(manhole_label=3 if "sud" in dataset_name.lower() else 104002),
                     batch_size=1,
                     shuffle=False,
@@ -1010,7 +1025,8 @@ def ground_truth_extraction_heatmap(config):
                 cur_pc_id=cur_pc_id, 
                 xstart=xstart, 
                 ystart=ystart,
-                dataset_name=dataset_name
+                dataset_name=dataset_name,
+                debugging_path=debugging_path
             )
 
             

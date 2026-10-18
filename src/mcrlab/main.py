@@ -32,11 +32,7 @@ def main():
 
 
     # do something
-    if config.mode == "custom_train":
-        from mcrlab.execution.custom_train import train
-        train(config)
-
-    elif config.mode == "train":
+    if config.mode == "train":
         from mcrlab.execution.train import train
         train(config)
 

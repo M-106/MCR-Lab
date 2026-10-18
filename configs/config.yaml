@@ -6,6 +6,7 @@ train:
   epochs: 600  # 400, 600, 50
   learning_rate: 0.0001  # 1e-4
   exp_name: "seg_final_comp_std_norm"  # teb7, mb5, r101, r101_32x32d, d161, mos4
+  # "final_comp_std_norm"
 
 test:
   batch_size: 5
@@ -14,23 +15,23 @@ preprocessing:
   file_ending: ".h5"  # ".h5", ".ply"
 
 gt_extraction:
+    generate_2d_gt_maps: False
     names: ["whu", "sud"]
     data_paths: ["F:/Fraunhofer_Backup/data/whu3d-dataset-wo-test-label", "F:/Fraunhofer_Backup/data/SUD-ROAD"]
     # ["C:/Users/tippolito/Data/whu3d-dataset-wo-test-label", "C:/Users/tippolito/Data/SUD-ROAD"]  
     # ["/data/whu3d-dataset-wo-test-label", "/data/SUD-ROAD"]
     # ["F:/Fraunhofer_Backup/data/whu3d-dataset-wo-test-label", "F:/Fraunhofer_Backup/data/SUD-ROAD"]
-    type: "all"  # "all"
     save_path: "./output"  # "F:/Fraunhofer_Backup/data/"  # "/out/checkpoints/2d/output"  # "/out/data/"  # "F:/Fraunhofer_Backup/data/"
     # "/data/" "./output/" # "/data/2d_gt_patches"  "./output/"
     # rm -rf ../data/2d_gt_patches && mkdir ../data/2d_gt_patches && chmod -R 777 ../data/2d_gt_patches
     # "./mcr_maps" # "./output/eval_ground_truths_mean.json"
     center_algorithm: "squares"    # "squares", "mean", "ransac", "mesqra"
-    generate_2d_gt_maps: False
-    generate_also_3d_gt_maps: False
+    debugging_path: "./output"  # None or "/path"
 
 center_eval:
     center_extraction_method: "circle_least_squares"
     # "polygon_centroid", "circle_least_squares", "peak_maxima"
+    center_pred_path: "./output/center_preds"
     save_debug_plots: True
     min_confidences: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.75, 0.8, 0.85, 0.9, 0.95]  # [0.1, 0.5, 0.9]
     min_confidence_peak: 0.9
@@ -117,7 +118,7 @@ data:
   # "C:/Users/tippolito/Data/Benchmark", "D:/Studium/Master/Repos/MCR-Lab/data/paris_lille_3d",
   # "D:/data/whu3d-dataset-wo-test-label"
   preprocessed: True
-  type: all   # train, test, val, all, load_unsplitted (sud special)
+  type: test   # train, test, val, all, load_unsplitted (sud special)
   heatmap_path: "F:/Fraunhofer_Backup/data/2d_gt_patches_on_raw_pc"  # "F:/Fraunhofer_Backup/data/2d_gt_patches_on_raw_pc"  #  /data/heatmap       # "/data/2d_gt_patches"   # "/data/2d_gt_patches" -> 10, 20, 60  # "/data/2d_gt_patches_v2" -> what is that  # None
   used_heatmap_channel: 2 # FIXME how to know how big the centers are? -> must be the ground truth data
   normalization: True

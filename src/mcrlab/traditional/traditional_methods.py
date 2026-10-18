@@ -60,10 +60,10 @@ def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
     circles = cv2.HoughCircles(
         blurred, 
         cv2.HOUGH_GRADIENT, 
-        dp=1.0,  # 1.5,   # decides resolution of accumulator relative to current resolution
+        dp=1.5,  # 1.5,   # decides resolution of accumulator relative to current resolution
         minDist=min_dist_px,
-        param1=100,  # canny edge value threshold -> how strong the edge have to be
-        param2=40,  # threshold of voting for hit
+        param1=120,  # canny edge value threshold -> how strong the edge have to be, as gradient value not pixel value -> maybe 1020 max
+        param2=120,  # threshold of voting for hit
         minRadius=min_r_px, 
         maxRadius=max_r_px
     )
@@ -74,9 +74,21 @@ def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
     results = []
     for px, py, r_px in np.uint16(np.around(circles[0])):
         if 0 <= py < bev_img.shape[1] and 0 <= px < bev_img.shape[2]:
-            x_m = origin[0] + px * resolution
-            y_m = origin[1] + py * resolution
-            results.append([x_m, y_m, r_px * resolution])
+            # --- SCENARIO A: Standard Image Mapping ---
+            # Use this if World-X goes RIGHT and World-Y goes DOWN
+            # x_m = origin[0] + (px * resolution)
+            # y_m = origin[1] + (py * resolution)
+
+            # --- SCENARIO B: Typical Automotive BEV Mapping ---
+            # Use this if World-X goes FORWARD (vertical image axis) 
+            # and World-Y goes LATERAL (horizontal image axis)
+            # x_m = origin[0] + (py * resolution) 
+            # y_m = origin[1] + (px * resolution)
+
+            # results.append([x_m, y_m, r_px * resolution])
+
+            # should return pixel coordinate system not meters
+            results.append([px, py, r_px])
 
     return np.array(results) if len(results) > 0 else np.empty((0, 3))
 
@@ -115,11 +127,9 @@ def method_2d_contours(bev_img, resolution=0.01, origin=(0.0, 0.0)):
             mask = np.zeros_like(height, dtype=np.uint8)
             cv2.drawContours(mask, [cnt], -1, 255, -1)
             if np.std(height[mask == 255]) < 0.08:  # Height variance check
-                x_m = origin[0] + px * resolution
-                y_m = origin[1] + py * resolution
-                results.append([x_m, y_m, r_px * resolution])
+                results.append([px, py])
 
-    return np.array(results) if len(results) > 0 else np.empty((0, 3))
+    return np.array(results) if len(results) > 0 else np.empty((0, 2))
 
 def _fit_circle_3pts(p1, p2, p3):
     """
@@ -304,11 +314,9 @@ def method_2d_ransac(
     h, w = bev_img.shape[1], bev_img.shape[2]
     for px, py, r_px in detected_circles:
         if 0 <= py < h and 0 <= px < w:
-            x_m = origin[0] + px * resolution
-            y_m = origin[1] + py * resolution
-            results.append([x_m, y_m, r_px * resolution])
+            results.append([px, py])
 
-    return np.array(results) if len(results) > 0 else np.empty((0, 3))
+    return np.array(results) if len(results) > 0 else np.empty((0, 2))
 
 
 def _generate_ring_template(radius_px, thickness_px=3):
@@ -361,7 +369,6 @@ def _non_max_suppression_circles(candidates, min_dist_px):
 def method_2d_template_matching(
     bev_img,
     resolution=0.01,
-    origin=(0.0, 0.0),
     match_threshold=0.35,
     radius_step_m=0.04,
     ring_thickness_m=0.04,
@@ -422,7 +429,7 @@ def method_2d_template_matching(
             candidates.append((center_x, center_y, float(r_px), score))
 
     if not candidates:
-        return np.empty((0, 3))
+        return []
 
     # Suppress overlapping hits across different scales and nearby locations
     filtered_circles = _non_max_suppression_circles(candidates, min_dist_px=min_dist_px)
@@ -433,11 +440,9 @@ def method_2d_template_matching(
 
     for cx_px, cy_px, r_px, _ in filtered_circles:
         if 0 <= cy_px < h and 0 <= cx_px < w:
-            x_m = origin[0] + cx_px * resolution
-            y_m = origin[1] + cy_px * resolution
-            results.append([x_m, y_m, r_px * resolution])
+            results.append([cx_px, cy_px])
 
-    return np.array(results) if len(results) > 0 else np.empty((0, 3))
+    return np.array(results) if len(results) > 0 else []
 
 
 
@@ -549,6 +554,8 @@ def method_3d_dbscan_pca(pts_3d, intensity_percentile=80):
 METHOD_REGISTRY = {
     "2d_hough": method_2d_hough,
     "2d_contours": method_2d_contours,
+    "2d_template": method_2d_template_matching,
+    "2d_ransac": method_2d_ransac,
     "3d_ransac": method_3d_ransac_circle,
     "3d_dbscan": method_3d_dbscan_pca
 }
@@ -596,7 +603,7 @@ def predict_manhole_centers(
         origin = (meta.get("origin_x", 0.0), meta.get("origin_y", 0.0))
         res = meta.get("resolution", 0.01)
 
-        return METHOD_REGISTRY[method](bev_img_np, resolution=res, origin=origin)
+        return METHOD_REGISTRY[method](bev_img_np, origin=origin, resolution=res)
 
     # Handle 3D methods
     elif method.startswith("3d"):
