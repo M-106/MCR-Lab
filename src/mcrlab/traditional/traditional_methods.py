@@ -11,6 +11,59 @@ import torch
 # --------------
 # > 2D METHODS <
 # --------------
+def suppress_overlapping_circles(circles, intensity_img, resolution, overlap_thresh=0.4):
+    """
+    Applies Non-Maximum Suppression to a list of detected circles [x_m, y_m, r_m].
+    """
+    if len(circles) == 0:
+        return np.empty((0, 3))
+
+    circles = np.array(circles)
+    x = circles[:, 0]
+    y = circles[:, 1]
+    r = circles[:, 2]
+
+    # Score each circle by measuring the mean intensity inside its boundary
+    scores = []
+    for cx, cy, cr in circles:
+        # Convert meters back to pixels for local masking
+        px = int((cx) / resolution)
+        py = int((cy) / resolution)
+        pr = int(cr / resolution)
+        
+        # Simple score: average pixel intensity within the circle region
+        mask = np.zeros_like(intensity_img, dtype=np.uint8)
+        cv2.circle(mask, (px, py), pr, 255, -1)
+        mean_val = np.mean(intensity_img[mask == 255]) if np.any(mask == 255) else 0
+        scores.append(mean_val)
+
+    scores = np.array(scores)
+    
+    # Sort circles by score in descending order
+    idxs = np.argsort(scores)[::-1]
+    keep = []
+
+    while len(idxs) > 0:
+        current = idxs[0]
+        keep.append(current)
+
+        if len(idxs) == 1:
+            break
+
+        # Calculate distances between the current best circle and the rest
+        current_center = circles[current, :2]
+        other_centers = circles[idxs[1:], :2]
+        distances = np.linalg.norm(other_centers - current_center, axis=1)
+
+        # Suppress circles whose centers are closer than the overlap threshold (e.g., 40% of radius)
+        radius_sum = circles[current, 2] + circles[idxs[1:], 2]
+        overlap_mask = distances < (overlap_thresh * radius_sum)
+
+        # Keep only indices that are NOT heavily overlapping
+        idxs = idxs[1:][~overlap_mask]
+
+    return circles[keep]
+
 
 def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
     """
@@ -42,7 +95,7 @@ def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
     """
     intensity = bev_img[1].copy()
     if intensity.max() <= intensity.min():
-        return np.empty((0, 3))
+        return (np.empty((0, 3)), None)
 
     # Normalize to 0-255 uint8
     norm_int = cv2.normalize(intensity, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
@@ -50,8 +103,8 @@ def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
     # filtered = cv2.bilateralFilter(norm_int, d=5, sigmaColor=75, sigmaSpace=75)
 
     # Use Median Blur to remove speckle noise on asphalt
-    # blurred = cv2.medianBlur(norm_int, 5)
-    blurred = cv2.GaussianBlur(norm_int, (3, 3), 1.0)
+    blurred = cv2.medianBlur(norm_int, 5)
+    # blurred = cv2.GaussianBlur(norm_int, (3, 3), 1.0)
 
     min_r_px = int(0.25 / resolution)  # 25 px for 0.5m diameter
     max_r_px = int(0.45 / resolution)  # 45 px for 0.9m diameter
@@ -60,17 +113,39 @@ def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
     circles = cv2.HoughCircles(
         blurred, 
         cv2.HOUGH_GRADIENT, 
-        dp=1.5,  # 1.5,   # decides resolution of accumulator relative to current resolution
+        dp=1.0,  # 1.5,   # decides resolution of accumulator relative to current resolution
         minDist=min_dist_px,
-        param1=120,  # canny edge value threshold -> how strong the edge have to be, as gradient value not pixel value -> maybe 1020 max
-        param2=120,  # threshold of voting for hit
+        param1=60,  # canny edge value threshold -> how strong the edge have to be, as gradient value not pixel value -> maybe 1020 max
+        param2=20,  # threshold of voting for hit
         minRadius=min_r_px, 
         maxRadius=max_r_px
     )
 
     if circles is None:
-        return np.empty((0, 3))
+        return (np.empty((0, 3)), None)
 
+    # Collect Debug Info
+    debug_dict = None
+    # Compute canny for visualization -> hough transform use it
+    edges = cv2.Canny(blurred, 20, 20) 
+    
+    extra_info = []
+    if circles is not None:
+        for px, py, r_px in np.uint16(np.around(circles[0])):
+            extra_info.append({
+                'type': 'circle',
+                'x': px,
+                'y': py,
+                'r': r_px
+            })
+    
+    debug_dict = {
+        'prob_map': blurred,  # Panel 2 shows the graues/verschwommenes Bild
+        'binary_mask': edges, # Panel 3 shows the Canny-Edges
+        'geometries': extra_info
+    }
+
+    # Compute Final Results
     results = []
     for px, py, r_px in np.uint16(np.around(circles[0])):
         if 0 <= py < bev_img.shape[1] and 0 <= px < bev_img.shape[2]:
@@ -90,7 +165,10 @@ def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
             # should return pixel coordinate system not meters
             results.append([px, py, r_px])
 
-    return np.array(results) if len(results) > 0 else np.empty((0, 3))
+    # Apply Maximum Suppression to clean up redundant overlapping circles
+    filtered_results = suppress_overlapping_circles(results, intensity, resolution)
+
+    return (np.array(filtered_results), debug_dict) if len(filtered_results) > 0 else (np.empty((0, 3)), debug_dict)
 
 
 
@@ -123,11 +201,11 @@ def method_2d_contours(bev_img, resolution=0.01, origin=(0.0, 0.0)):
         (px, py), r_px = cv2.minEnclosingCircle(cnt)
         diameter_m = (2 * r_px) * resolution
 
-        if 0.65 < circularity <= 1.2 and 0.35 <= diameter_m <= 1.2:
-            mask = np.zeros_like(height, dtype=np.uint8)
-            cv2.drawContours(mask, [cnt], -1, 255, -1)
-            if np.std(height[mask == 255]) < 0.08:  # Height variance check
-                results.append([px, py])
+        if 0.5 < circularity <= 1.3 and 0.3 <= diameter_m <= 1.1:
+            # mask = np.zeros_like(height, dtype=np.uint8)
+            # cv2.drawContours(mask, [cnt], -1, 255, -1)
+            # if np.std(height[mask == 255]) < 0.08:  # Height variance check
+            results.append([px, py])
 
     return np.array(results) if len(results) > 0 else np.empty((0, 2))
 

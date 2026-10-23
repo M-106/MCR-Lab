@@ -74,12 +74,17 @@ class CenterEvalConfig(BaseModel):
     center_extraction_method: str
     center_pred_path: str
     save_debug_plots: bool
+    gt_json_file_paths: list
+    min_input_points: int
     min_confidences: list
     min_confidence_peak: float
     candidate_min_points: int
     run_mode: str
     pred_save_load_mode_saving_name: str
     pred_save_load_mode_saving_path: str
+    clear_pred_save_load_only_model_folder: bool
+    clear_pred_save_load_folder: bool
+    process_3d_mode: str
 
 
 class InferenceConfig(BaseModel):

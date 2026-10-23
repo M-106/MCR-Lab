@@ -3,7 +3,8 @@
 # -----------
 import shutil
 import json
-
+import glob
+from pathlib import Path
 from collections import defaultdict, Counter
 
 import numpy as np
@@ -6014,6 +6015,317 @@ def make_dataset_analysis(config):
 
 
 
+# ---------------------------
+# > Saved Predictions Check <
+# ---------------------------
+def plot_prediction_check(bev_input, gt_label, raw_pred, binary_pred, title, subtitle, save_path):
+    """
+    Erstellt ein 4-Panel-Kontrollbild (BEV, GT, Raw Heatmap, Binarisiert).
+    """
+    fig, axes = plt.subplots(1, 4, figsize=(18, 4.5), layout="constrained")
+
+    fig.get_layout_engine().set(rect=(0, 0, 1, 0.92))
+    # fig.subplots_adjust(top=0.82, wspace=0.3)
+
+    # 1. BEV Image aufbereiten
+    bev = bev_input.detach().cpu().numpy() if hasattr(bev_input, "detach") else bev_input
+    bev = np.squeeze(bev)
+    if bev.ndim == 3 and bev.shape[0] in [1, 3]:  # [C, H, W] -> [H, W, C]
+        bev = np.transpose(bev, (1, 2, 0))
+    if bev.ndim == 3 and bev.shape[-1] == 1:
+        bev = bev[..., 0]
+
+    axes[0].imshow(bev, cmap="plasma")
+    axes[0].set_title("Input (BEV)")
+
+    # 2. Ground Truth
+    gt = gt_label.detach().cpu().numpy() if hasattr(gt_label, "detach") else gt_label
+    axes[1].imshow(np.squeeze(gt), cmap="tab10", vmin=0, vmax=1)
+    axes[1].set_title("Ground Truth")
+
+    # 3. Raw Prediction (.npy)
+    raw = np.squeeze(raw_pred)
+    im3 = axes[2].imshow(raw, cmap="viridis", vmin=0.0, vmax=1.0)
+    axes[2].set_title(f"Loaded Raw Prediction (Max: {raw.max():.2f})")
+    fig.colorbar(im3, ax=axes[2], fraction=0.046, pad=0.04)
+
+    # 4. Binarisierte Maske
+    axes[3].imshow(np.squeeze(binary_pred), cmap="gray")
+    axes[3].set_title("Binarized Pred")
+
+    for ax in axes:
+        ax.axis("off")
+
+    fig.suptitle(title, fontsize=15, fontweight="bold")
+    fig.text(
+        0.5, 0.93, 
+        subtitle,
+        ha="center", fontsize=10, color="gray"
+    )
+    # plt.tight_layout()
+    plt.savefig(save_path, bbox_inches="tight", dpi=130)
+    plt.close()
+
+
+def run_prediction_verification(
+    config,
+    root_pred_dir,
+    output_vis_dir="./output/pred_verification_plots",
+    samples_to_plot_per_model=5,
+    min_confidence_plot=0.5,
+    ignore_index=255
+):
+    """
+    Durchsucht root_pred_dir nach Modellunterordnern, verifiziert numerische
+    Eigenschaften aller .npy-Dateien und erzeugt Stichproben-Plots.
+    """
+    root_path = Path(root_pred_dir)
+    if not root_path.exists():
+        raise FileNotFoundError(f"Verzeichnis existiert nicht: {root_pred_dir}")
+
+    # load data
+    base_loader = get_data_loader(
+        config.data.name,
+        config.data.path,
+        type="all",
+        transform=get_basic_transform(),
+        batch_size=1,
+        shuffle=False,
+        num_workers=1,
+        preprocessed=True,
+        return_train_format=True,
+        return_dataset=True,
+        bev_normalized=False,
+        bev_normalize_mode="local_minmax",
+    )
+    all_paths = base_loader.point_cloud_paths
+
+    dataset_whu = BEVDataset(
+        path=all_paths,
+        file_paths=[],
+        has_labels=True,
+        image_training=True,
+        preprocessor=None,
+        heatmap_gt_path=None,
+        normalize=True,
+        normalization_mode="local_minmax",
+    )
+
+    base_loader = get_data_loader(
+        config.data.name_2,
+        config.data.path_2,
+        type="all",
+        transform=get_basic_transform(),
+        batch_size=1,
+        shuffle=False,
+        num_workers=1,
+        preprocessed=True,
+        return_train_format=True,
+        return_dataset=True,
+        bev_normalized=config.data.normalization,
+        bev_normalize_mode=config.data.normalization_mode,
+    )
+    all_paths = base_loader.point_cloud_paths
+
+    dataset_sud = BEVDataset(
+        path=all_paths,
+        file_paths=[],
+        has_labels=True,
+        image_training=True,
+        preprocessor=None,
+        heatmap_gt_path=None,
+        normalize=True,
+        normalization_mode="local_minmax",
+    )
+
+    # Alle Modellordner finden
+    model_dirs = [d for d in root_path.iterdir() if d.is_dir()]
+    if not model_dirs:
+        print(f"[WARN] Keine Unterordner in {root_pred_dir} gefunden.")
+        return
+
+    print(f"Gefundene Modelle: {len(model_dirs)} -> {[d.name for d in model_dirs]}")
+
+    summary_report = {}
+    summary_report_str = "SAVED PREDICTION REPORT/CHECK\n\n"
+
+    for model_dir in model_dirs:
+        model_name = model_dir.name
+        print(f"\n==========================================")
+        print(f"Prüfe Modell: {model_name}")
+        print(f"==========================================")
+
+        # Nur Vorhersagedateien (TIME.npy ausschließen)
+        pred_files = [
+            f for f in glob.glob(os.path.join(model_dir, "*.npy")) 
+            if not f.endswith("_TIME.npy")
+        ]
+
+        if not pred_files:
+            print(f"[WARN] Keine Vorhersagedateien in {model_dir} gefunden.")
+            continue
+
+        model_plot_dir = Path(output_vis_dir) / model_name
+        model_plot_dir.mkdir(parents=True, exist_ok=True)
+
+        stats = {
+            "total_files": len(pred_files),
+            "valid_files": 0,
+            "nan_or_inf": 0,
+            "out_of_bounds": 0,
+            "missing_time_files": 0,
+            "shapes_seen": set(),
+        }
+
+        # Bevorzugt Stichproben mit echten Detektionen plotten
+        plotted_samples = 0
+
+        for file_path in tqdm(pred_files, desc=f"Validating {model_name}"):
+            file_name = Path(file_path).stem  # e.g. "{pc_id}_{x_start}_{y_start}"
+
+            # if file_name.lower().startswith("3d"):
+            #     continue
+            
+            # 1. Time file check
+            time_file = file_path.replace(".npy", "_TIME.npy")
+            if not os.path.exists(time_file):
+                stats["missing_time_files"] += 1
+
+            # 2. Parse Filename securely
+            # e.g., "whu_0414_0_0" -> prefix="whu_0414", x="0", y="0"
+            try:
+                prefix, x_start, y_start = file_name.rsplit("_", 2)
+                dataset_str, pc_id = prefix.split("_", 1) # splits "whu" and "0414"
+            except ValueError:
+                print(f"[WARN] Dateiname unerwartet formatiert: {file_name}")
+                continue
+
+            # 3. Load Data & Extract 3D dicts
+            try:
+                # allow_pickle=True is REQUIRED for the 3D dictionaries
+                raw_pred = np.load(file_path, allow_pickle=True)
+            except Exception as e:
+                print(f"[ERROR] Fehler beim Laden von {file_path}: {e}")
+                continue
+
+            is_3d = False
+            # Check if it's a 3D dictionary
+            if isinstance(raw_pred, np.ndarray) and raw_pred.dtype == object:
+                loaded_dict = raw_pred.item()
+                
+                # Apply the same scaling and slicing as center_eval
+                pts_3d_local = loaded_dict["points"]
+                centroid = loaded_dict.get("centroid", np.zeros(3))
+                scale = loaded_dict.get("scale", 1.0)
+                
+                xyz_local = pts_3d_local[:, :3]
+                pts_3d_world = (xyz_local * scale) + centroid
+                
+                probs_array = loaded_dict["probs"]
+                is_3d = True
+            else:
+                probs_array = raw_pred
+
+            # 4. Numerical Checks (Using the extracted probabilities)
+            stats["shapes_seen"].add(probs_array.shape)
+
+            if np.isnan(probs_array).any() or np.isinf(probs_array).any():
+                stats["nan_or_inf"] += 1
+                continue
+
+            # Check interval [0, 1]
+            if (probs_array < -1e-4).any() or (probs_array > 1.0001).any():
+                stats["out_of_bounds"] += 1
+
+            stats["valid_files"] += 1
+
+            # 5. Visual Check Generation
+            has_detection = (probs_array >= min_confidence_plot).any()
+            should_plot = (plotted_samples < samples_to_plot_per_model) and \
+                          (has_detection or (len(pred_files) - plotted_samples <= samples_to_plot_per_model))
+
+            if should_plot:
+                dataset = dataset_whu if dataset_str.lower() == "whu" else dataset_sud
+
+                try:
+                    patch_dict = next(dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True))
+                    bev_input = patch_dict["pixel_values"]
+                    gt_labels = patch_dict["labels"]
+                    meta = patch_dict["meta"]
+
+                    # If 3D, project the probabilities into a 2D BEV Grid for imshow
+                    if is_3d:
+                        orig_h = int(meta["tile_size"] / meta["resolution"])
+                        orig_w = orig_h
+                        grid_prob = np.zeros((orig_h, orig_w), dtype=np.float32)
+                        
+                        col_indices = np.floor((pts_3d_world[:, 0] - meta["origin_x"]) / meta["resolution"]).astype(int)
+                        row_indices = np.floor((pts_3d_world[:, 1] - meta["origin_y"]) / meta["resolution"]).astype(int)
+                        
+                        valid_idx = (col_indices >= 0) & (col_indices < orig_w) & \
+                                    (row_indices >= 0) & (row_indices < orig_h)
+                        
+                        np.maximum.at(grid_prob, (row_indices[valid_idx], col_indices[valid_idx]), probs_array[valid_idx])
+                        raw_pred_2d = grid_prob
+                    else:
+                        raw_pred_2d = probs_array
+
+                    # Binarization & valid mask handling
+                    gt_np = gt_labels.detach().cpu().numpy() if hasattr(gt_labels, "detach") else gt_labels
+                    valid_mask = (gt_np != ignore_index) if gt_np is not None else None
+
+                    binary_mask = (gt_np == 1)
+                    struct = generate_binary_structure(2, 2)
+                    binary_mask = binary_closing(binary_mask, structure=struct, iterations=8).astype(np.uint8)
+                    pixel_count = int(np.sum(binary_mask))
+
+                    if pixel_count < 100:
+                        continue
+
+                    binary_pred = (raw_pred_2d >= min_confidence_plot)
+                    if valid_mask is not None:
+                        binary_pred = binary_pred & np.squeeze(valid_mask)
+                    binary_pred = binary_pred.astype(np.uint8)
+
+                    plot_title = f"Prediction Sample: {model_name}"
+                    plot_filename = model_plot_dir / f"check_{file_name}.png"
+
+                    plot_prediction_check(
+                        bev_input=bev_input,
+                        gt_label=binary_mask,
+                        raw_pred=raw_pred_2d,
+                        binary_pred=binary_pred,
+                        title=plot_title,
+                        subtitle=f"Patch: {file_name} | Max-Conf: {probs_array.max():.3f}",
+                        save_path=str(plot_filename)
+                    )
+                    plotted_samples += 1
+                except StopIteration:
+                    print(f"[WARN] Patch {pc_id}_{x_start}_{y_start} nicht im Dataset gefunden.")
+                except Exception as e:
+                    print(f"[ERROR] Fehler beim Plotten von {file_name}: {e}")
+
+        summary_report[model_name] = stats
+        result = (
+            f"Modell-Zusammenfassung ({model_name}):"
+            f"  Geprüfte Dateien: {stats['total_files']}"
+            f"  Shapes:           {list(stats['shapes_seen'])}"
+            f"  NaN/Inf-Fehler:   {stats['nan_or_inf']}"
+            f"  Außerhalb [0, 1]: {stats['out_of_bounds']}"
+            f"  Fehlende TIME:    {stats['missing_time_files']}"
+            f"  Plots erstellt:   {plotted_samples} in {model_plot_dir}"
+        )
+
+        summary_report_str += f"\n\n{result}"
+        print(result)
+
+    with open("./output/saved_prediction_check.txt", "w") as file_:
+        file_.write(summary_report_str)
+
+    return summary_report
+
+
+
 # --------------
 # > Playground <
 # --------------
@@ -6061,7 +6373,7 @@ def tryout(config):
     # ground_truth_2d_map_test(config)  # Heatmap Plotting
     # ground_truth_2d_and_3d_map_test(config)
 
-    eval_center_gt(config)  # MONTE-CARLO TESTING
+    # eval_center_gt(config)  # MONTE-CARLO TESTING
     # eval_methods_precision_numerical(methods=None, n_samples=1000, target_n_points=712, sigma=0.0, outlier_ratio=0.02, occlusion_severity=0.10)
 
     # manhole_3d_and_2d_density_test(config)
@@ -6089,6 +6401,15 @@ def tryout(config):
     # compare_2d_seg_and_heatmap_datasets(config, max_samples_to_plot=20, save_dir=None, ignore_label=255, heatmap_threshold=None, min_peak_distance=15)
 
     # make_dataset_analysis(config)
+
+    run_prediction_verification(
+        config,
+        root_pred_dir="F:/Fraunhofer_Backup/saved_final_preds",
+        output_vis_dir="./output/pred_verification_plots",
+        samples_to_plot_per_model=20,
+        min_confidence_plot=0.5,
+        ignore_index=255
+    )
 
 
 

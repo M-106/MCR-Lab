@@ -9,11 +9,15 @@ import matplotlib.pyplot as plt
 
 # import evaluate
 import numpy as np
+
 from sklearn.metrics import f1_score, precision_score, recall_score, jaccard_score, roc_curve
 from sklearn.metrics import auc
 from scipy.ndimage import label, binary_closing, generate_binary_structure
+from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
+
 import torch
+import torch.nn.functional as F
 
 import cv2
 
@@ -23,6 +27,58 @@ from shapely.geometry import Polygon
 # from mcrlab.helper import save_dir_creation
 
 # mean_iou_metric = evaluate.load("mean_iou")
+
+# ----------
+# > Helper <
+# ----------
+def extract_peaks_nms(heatmap, threshold=0.3, kernel_size=3):
+    """
+    Finds local Maxima in a 2D Heatmap via Max-Pooling (Non-Maximum Suppression).
+    Return the x and y coordinates of the peaks.
+    """
+    hm_tensor = torch.tensor(heatmap, dtype=torch.float32).unsqueeze(0).unsqueeze(0) # [1, 1, H, W]
+    
+    # Max-Pooling to neighbor comparison
+    pad = kernel_size // 2
+    hmax = F.max_pool2d(hm_tensor, kernel_size, stride=1, padding=pad)
+    
+    # Peak is there, where a value is the local maxima andover a given threshold is
+    keep = (hmax == hm_tensor).squeeze() & (hm_tensor.squeeze() >= threshold)
+    
+    # Extract coordinates
+    y, x = torch.where(keep)
+    
+    # Return points as array:  [[x1, y1], [x2, y2], ...]
+    pts = torch.stack([x, y], dim=1).numpy()
+    return pts
+
+
+
+def match_points_by_distance(pred_pts, gt_pts, max_distance):
+    """
+    Compares Prediction-Points with Ground Truth Points via euclidean distance.
+    Returns TP, FP, FN.
+    """
+    if len(pred_pts) == 0:
+        return 0, 0, len(gt_pts) # 0 TP, 0 FP, FN = alle verpassten GTs
+    if len(gt_pts) == 0:
+        return 0, len(pred_pts), 0 # 0 TP, FP = alle falschen Preds, 0 FN
+
+    # Euclidean distance matrix between all preds and all gts
+    dists = cdist(pred_pts, gt_pts) # Shape: (Num_Preds, Num_GTs)
+    
+    # Optimum bipatite matching -> hungarian algorithm
+    row_ind, col_ind = linear_sum_assignment(dists)
+    
+    tp = 0
+    for r, c in zip(row_ind, col_ind):
+        if dists[r, c] <= max_distance:
+            tp += 1
+            
+    fp = len(pred_pts) - tp
+    fn = len(gt_pts) - tp
+    
+    return tp, fp, fn
 
 
 
@@ -99,14 +155,33 @@ def polygon_iou(poly1, poly2):
 # > Metrices <
 # ------------
 
-def evaluate_object_wise(preds, labels, confident_threshold, iou_threshold, ignore_index=255, debug_plot_path=None, using_heatmap_as_gt=False):
+def evaluate_object_wise(preds, labels, confident_threshold, iou_threshold=None, dist_threshold=None, ignore_index=255, debug_plot_path=None, using_heatmap_as_gt=False):
     valid_mask = (labels != ignore_index)
 
     # add here confidence threshold? -> at binarization?
     
     if using_heatmap_as_gt:
-        preds_binary = ((preds >= confident_threshold) & valid_mask).astype(np.uint8)
-        labels_binary = ((labels >= 0.5) & valid_mask).astype(np.uint8)
+        # preds_binary = ((preds >= confident_threshold) & valid_mask).astype(np.uint8)
+        # labels_binary = ((labels >= 0.5) & valid_mask).astype(np.uint8)
+
+        # 1. Peaks aus Ground Truth extrahieren (Threshold niedrig ansetzen, um alle echten Peaks zu erwischen)
+        gt_pts = extract_peaks_nms(labels, threshold=0.1, kernel_size=3)
+        
+        # 2. Peaks aus Prediction extrahieren (Threshold = confident_threshold)
+        pred_pts = extract_peaks_nms(preds, threshold=confident_threshold, kernel_size=3)
+        
+        # 3. Matching via Distanz (Hier ersetzen wir das iou_threshold logisch durch das dist_threshold)
+        tp, fp, fn = match_points_by_distance(pred_pts, gt_pts, max_distance=dist_threshold)
+        
+        return {
+            "tp_objects_count": tp,
+            "fp_objects_count": fp,
+            "fn_objects_count": fn,
+            "true_objects_count": len(gt_pts),
+            "pred_objects_count": len(pred_pts),
+            "summed_object_iou": 0.0 # Bei reinen Punkten gibt es keinen IoU
+        }
+
     else:
         # preds_binary = ((preds == 1) & valid_mask).astype(np.uint8)
         # labels_binary = ((labels == 1) & valid_mask).astype(np.uint8)
@@ -366,6 +441,7 @@ def get_mean_from_multiple_results(value_name, obj_results, choosen_iou_threshol
 def compute_metrics(preds, labels, 
                     confident_threshold_start=0.0, confident_threshold_end=0.95, confident_threshold_step=0.05, 
                     iou_threshold_start=0.5, iou_threshold_end=0.55, iou_threshold_step=0.05, 
+                    dist_threshold_start=5.0, dist_threshold_end=25.0, dist_threshold_step=5.0,
                     ignore_index=255, using_heatmap_as_gt=False, return_micro_fps_fpn=True):
     # logits = eval_pred.predictions
     # labels = eval_pred.label_ids
@@ -405,11 +481,20 @@ def compute_metrics(preds, labels,
         np.arange(confident_threshold_start, \
                   confident_threshold_end+confident_threshold_step, \
                   confident_threshold_step))
-    iou_thresholds = np.vectorize(lambda x: round(x, 2))(\
-        np.arange(iou_threshold_start, iou_threshold_end+iou_threshold_step, iou_threshold_step))
+    # iou_thresholds = np.vectorize(lambda x: round(x, 2))(\
+    #     np.arange(iou_threshold_start, iou_threshold_end+iou_threshold_step, iou_threshold_step))
+
+    if using_heatmap_as_gt:
+        # Iteriere über Pixel-Distanzen statt IoU
+        matching_thresholds = np.vectorize(lambda x: round(x, 2))(
+            np.arange(dist_threshold_start, dist_threshold_end+dist_threshold_step, dist_threshold_step))
+    else:
+        # Iteriere über IoU
+        matching_thresholds = np.vectorize(lambda x: round(x, 2))(
+            np.arange(iou_threshold_start, iou_threshold_end+iou_threshold_step, iou_threshold_step))
 
     for cur_confident_threshold in confident_thresholds:
-        for cur_iou_threshold in iou_thresholds:
+        for cur_match_threshold in matching_thresholds:
             total_tp = 0
             total_fp = 0
             total_fn = 0
@@ -425,7 +510,8 @@ def compute_metrics(preds, labels,
                     preds=preds[batch_idx], 
                     labels=labels[batch_idx], 
                     confident_threshold=cur_confident_threshold,
-                    iou_threshold=cur_iou_threshold,
+                    iou_threshold=cur_match_threshold if not using_heatmap_as_gt else None,
+                    dist_threshold=cur_match_threshold if using_heatmap_as_gt else None,
                     ignore_index=ignore_index,
                     debug_plot_path=plot_path,
                     using_heatmap_as_gt=using_heatmap_as_gt
@@ -440,7 +526,7 @@ def compute_metrics(preds, labels,
             
             obj_results.append({
                 "confident_threshold": cur_confident_threshold,
-                "iou_threshold": cur_iou_threshold,
+                "iou_threshold": cur_match_threshold,
                 "total_iou_sum": total_iou_sum,
                 "total_tp": total_tp,
                 "total_fp": total_fp,
@@ -453,10 +539,11 @@ def compute_metrics(preds, labels,
                 avg_pred_objects_per_img += float(total_pred / batch_size) 
 
     # get mA results
-    mAP = get_mean_from_multiple_results("avg_obj_precision", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
-    mAR = get_mean_from_multiple_results("avg_obj_recall", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
-    mAF1 = get_mean_from_multiple_results("avg_f1", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
-    mAIOU = get_mean_from_multiple_results("avg_obj_iou", obj_results, choosen_iou_threshold=0.5, confident_threshold_min=0.5)
+    target_match_threshold = 15.0 if using_heatmap_as_gt else 0.5
+    mAP = get_mean_from_multiple_results("avg_obj_precision", obj_results, choosen_iou_threshold=target_match_threshold, confident_threshold_min=0.5)
+    mAR = get_mean_from_multiple_results("avg_obj_recall", obj_results, choosen_iou_threshold=target_match_threshold, confident_threshold_min=0.5)
+    mAF1 = get_mean_from_multiple_results("avg_f1", obj_results, choosen_iou_threshold=target_match_threshold, confident_threshold_min=0.5)
+    mAIOU = get_mean_from_multiple_results("avg_obj_iou", obj_results, choosen_iou_threshold=target_match_threshold, confident_threshold_min=0.5)
 
     # # >>> compute pixel metrics <<<
     # # create mask for ignroe index
