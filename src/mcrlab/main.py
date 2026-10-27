@@ -154,10 +154,10 @@ def main():
                 print(f"      -> {str(processes_errors[key])}")
 
     elif config.mode == "custom":
-        # from mcrlab.execution.train import train
-        # from mcrlab.execution.center_prediction_pipeline import center_eval
+        from mcrlab.execution.train import train, finetune_for_precision
+        from mcrlab.execution.center_prediction_pipeline import center_eval
         # from mcrlab.execution.test import test
-        from mcrlab.custom_hf.smp_model import run_count
+        # from mcrlab.custom_hf.smp_model import run_count
 
         experiments = dict()
 
@@ -172,37 +172,37 @@ def main():
             if cur_idx == 0:
                 config.data.heatmap_path = "/data/heatmap"
                 config.data.used_heatmap_channel = 2
-                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_DPT_VIT_PRETRAINED"
+                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_DPT_VIT_PRETRAINED_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_18_08_35_dpt_whu_heatmapGT2_dpt_vit-pretrained_final_comp_std_norm/checkpoint-6254"
             elif cur_idx == 1:
                 config.data.heatmap_path = "/data/heatmap"
                 config.data.used_heatmap_channel = 2
-                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_DPT_VIT"
+                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_DPT_VIT_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_17_21_07_dpt_whu_heatmapGT2_dpt_vit_final_comp_std_norm/checkpoint-9116"
             elif cur_idx == 2:
                 config.data.heatmap_path = "/data/heatmap"
                 config.data.used_heatmap_channel = 2
-                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_DEEPLABV3_CONVNEXT"
+                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_DEEPLABV3_CONVNEXT_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_17_03_10_deeplabv3_whu_heatmapGT2_deeplabv3_convnext_final_comp_std_norm/checkpoint-2173"
             elif cur_idx == 3:
                 config.data.heatmap_path = "/data/heatmap"
                 config.data.used_heatmap_channel = 2
-                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_DEEPLABV3_EFFICIENTNET"
+                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_DEEPLABV3_EFFICIENTNET_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_16_21_42_deeplabv3_whu_heatmapGT2_deeplabv3_efficientnet_final_comp_std_norm/checkpoint-4982"
             elif cur_idx == 4:
                 config.data.heatmap_path = "/data/heatmap"
                 config.data.used_heatmap_channel = 2
-                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_UNET_SEGFORMER"
+                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_UNET_SEGFORMER_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_16_18_42_unet_whu_heatmapGT2_unet_segformer_final_comp_std_norm/checkpoint-4611"
             elif cur_idx == 5:
                 config.data.heatmap_path = "/data/heatmap"
                 config.data.used_heatmap_channel = 2
-                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_UNET_CONVNEXT"
+                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_UNET_CONVNEXT_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_16_14_07_unet_whu_heatmapGT2_unet_convnext_final_comp_std_norm/checkpoint-7738"
             elif cur_idx == 6:
                 config.data.heatmap_path = "/data/heatmap"
                 config.data.used_heatmap_channel = 2
-                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_UNET_EFFICIENTNET"
+                config.center_eval.pred_save_load_mode_saving_name = "HEATMAP_UNET_EFFICIENTNET_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_16_11_56_unet_whu_heatmapGT2_unet_efficientnet_final_comp_std_norm/checkpoint-7261"
             elif cur_idx == 7:
                 continue
@@ -212,39 +212,58 @@ def main():
                 # config.model.check_point_path = "/out/checkpoints/2d/2026_10_16_11_39_unet_whu_heatmapGT2_unet_efficientnet_seg_final_comp_std_norm/checkpoint-212"
             elif cur_idx == 8:
                 config.data.heatmap_path = None
-                config.center_eval.pred_save_load_mode_saving_name = "SEG_DPT_VIT_PRETRAINED"
+                config.center_eval.pred_save_load_mode_saving_name = "SEG_DPT_VIT_PRETRAINED_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_13_21_41_dpt_whu_dpt_vit-pretrained_seg_final_comp_std_norm/checkpoint-15264"
             elif cur_idx == 9:
                 config.data.heatmap_path = None
-                config.center_eval.pred_save_load_mode_saving_name = "SEG_DPT_VIT"
+                config.center_eval.pred_save_load_mode_saving_name = "SEG_DPT_VIT_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_13_10_19_dpt_whu_dpt_vit_seg_final_comp_std_norm/checkpoint-4452"
             elif cur_idx == 10:
                 config.data.heatmap_path = None
-                config.center_eval.pred_save_load_mode_saving_name = "SEG_DEEPLABV3_CONVNEXT"
+                config.center_eval.pred_save_load_mode_saving_name = "SEG_DEEPLABV3_CONVNEXT_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_08_10_40_deeplabv3_whu_deeplabv3_convnext_seg_final_comp_std_norm/checkpoint-7314"
             elif cur_idx == 11:
                 config.data.heatmap_path = None
-                config.center_eval.pred_save_load_mode_saving_name = "SEG_DEEPLABV3_EFFICIENTNET"
+                config.center_eval.pred_save_load_mode_saving_name = "SEG_DEEPLABV3_EFFICIENTNET_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_08_05_07_deeplabv3_whu_deeplabv3_efficientnet_seg_final_comp_std_norm/checkpoint-7208"
             elif cur_idx == 12:
                 config.data.heatmap_path = None
-                config.center_eval.pred_save_load_mode_saving_name = "SEG_UNET_SEGFORMER"
+                config.center_eval.pred_save_load_mode_saving_name = "SEG_UNET_SEGFORMER_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_08_02_01_unet_whu_unet_segformer_seg_final_comp_std_norm/checkpoint-7685"
             elif cur_idx == 13:
                 config.data.heatmap_path = None
-                config.center_eval.pred_save_load_mode_saving_name = "SEG_UNET_CONVNEXT"
+                config.center_eval.pred_save_load_mode_saving_name = "SEG_UNET_CONVNEXT_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_07_21_20_unet_whu_unet_convnext_seg_final_comp_std_norm/checkpoint-7473"
             elif cur_idx == 14:
                 config.data.heatmap_path = None
-                config.center_eval.pred_save_load_mode_saving_name = "SEG_UNET_EFFICIENTNET"
+                config.center_eval.pred_save_load_mode_saving_name = "SEG_UNET_EFFICIENTNET_FINETUNED"
                 config.model.check_point_path = "/out/checkpoints/2d/2026_10_07_19_05_unet_whu_unet_efficientnet_seg_final_comp_std_norm/checkpoint-7526"
             
+            config.center_eval.run_mode = "save"
+            config.center_eval.pred_save_load_mode_saving_path = "/out/saved_preds"
+
             try:
                 # train(config)
-                # center_eval(config)
                 # test(config)
 
-                run_count(config)
+                print("Finetuning")
+
+                best_ckpt = finetune_for_precision(
+                    config=config,
+                    checkpoint_path=config.model.check_point_path, # Dein bisheriger Checkpoint-Ordner
+                    epochs=1.0,                                    # 1 Epoche reicht völlig
+                    lr=1e-5,                                       # Kleine Lernrate (war vorher versehentlich 1e-3)
+                    non_manhole_train_samples=800,                 # Statt 10 jetzt 800 leere Patches im Training!
+                    non_manhole_val_samples=200,                   # Auch im Val-Set leere Patches prüfen!
+                    freeze_encoder=True                            # Spart 50% Zeit und schützt den Recall
+                )
+
+                config.model.check_point_path = best_ckpt
+
+                print("Save predictions")
+                center_eval(config)
+
+                # run_count(config)
                 # experiments[config.train.exp_name] = "Passed"
                 experiments[os.path.split(config.model.check_point_path)[-1]] = "Passed"
             except Exception as e:

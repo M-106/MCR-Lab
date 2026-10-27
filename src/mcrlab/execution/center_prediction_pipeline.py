@@ -12,13 +12,13 @@ import numpy as np
 import torch
 
 import matplotlib
-matplotlib.use("Agg")
+# matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-from scipy.ndimage import label, binary_closing, center_of_mass, gaussian_filter, distance_transform_edt
+from scipy.ndimage import label, binary_closing, binary_opening, center_of_mass, gaussian_filter, distance_transform_edt
 from scipy.ndimage.morphology import generate_binary_structure # or skimage.morphology?
 from scipy.optimize import least_squares
 from scipy.signal import correlate2d
@@ -34,11 +34,12 @@ from mcrlab.execution.test import predict_single_sample
 from mcrlab.traditional.least_squares import fit_circle_least_squares
 from mcrlab.point_cloud.shape_check import circle_shape_check
 from mcrlab.point_cloud.data import get_data_loader, get_basic_transform, BEVDataset
-from mcrlab.projection import bev_projection, bev_pixel_to_3d
+from mcrlab.projection import bev_projection, bev_pixel_to_3d, project_3d_to_2d_bev
 from mcrlab.metrices import mask_to_polygon
 from mcrlab.traditional.traditional_methods import predict_manhole_centers
 from mcrlab.point_cloud.utils import get_coordinate_attribute, get_intensity_attribute, \
                                      get_class_attribute
+from mcrlab.point_cloud.shape_check import circle_shape_check_2d
 
 
 
@@ -1147,24 +1148,14 @@ def make_prediction(
         preds = preds.detach().cpu().numpy()
     if isinstance(labels, torch.Tensor):
         labels = labels.detach().cpu().numpy()
-        
-    valid_mask = (labels != ignore_index) if labels is not None else None
+
+    # do not apply such an filter, because 255 have also missing points (which is about 95% of the whole data)
+    # valid_mask = (labels != ignore_index) if labels is not None else None
+    valid_mask = None
 
     preds_squeezed = np.squeeze(preds)
 
     return preds_squeezed, valid_mask, preds, labels, pixel_values
-
-    # # Apply closing + clustering / confidence thresholds
-    # if valid_mask is not None:
-    #     preds_binary = ((preds >= min_confidence) & valid_mask).astype(np.uint8)
-    # else:
-    #     preds_binary = (preds >= min_confidence).astype(np.uint8)
-        
-    # preds_binary = np.squeeze(preds_binary)
-    # preds_prob = np.squeeze(preds)
-    # preds_prob *= preds_binary
-
-    # return preds_prob, preds_binary, valid_mask, preds, labels, pixel_values
 
 
 
@@ -1524,6 +1515,9 @@ def center_eval(config):
                 traditional_method = "_".join(model_name.split("_")[1:])
                 min_confidence = min_confidences[0]
 
+                if gt_labels_numpy[gt_labels_numpy == 1].sum() > 50:
+                    print("DEBUGGING: PATCH HAVE A MANHOLE...")
+
                 detected_centers, debug_dict = predict_manhole_centers(
                     pts_3d=pc,
                     bev_img=pixel_values,
@@ -1585,6 +1579,10 @@ def center_eval(config):
             # CASE B: 3D Models
             # =================================================================
             elif is_3D_model:
+                if not os.path.exists(pred_file_path):
+                    print(f"[Warning] Prediction file not found: {pred_file_path}. Treating as 0 predictions.")
+                    continue
+                
                 # Load 3D predictions ONCE outside the confidence loop
                 loaded_preds = np.load(pred_file_path, allow_pickle=True)
                 loaded_dict = loaded_preds.item() if isinstance(loaded_preds, np.ndarray) else loaded_preds
@@ -1595,7 +1593,8 @@ def center_eval(config):
                 scale = loaded_dict["scale"]
 
                 xyz_local = pts_3d_local[:, :3]
-                pts_3d_world = (xyz_local * scale) + centroid
+                # pts_3d_world = (xyz_local * scale) + centroid
+                pts_3d_world = xyz_local + centroid
 
                 # Preload time file once if needed
                 loaded_pred_time = np.load(pred_time_file_path).item() if (
@@ -1604,26 +1603,14 @@ def center_eval(config):
 
                 # Precompute 2D projection indices ONCE if in 2D mode
                 if process_3d_mode.lower() == "2d":
-                    orig_h = int(meta["tile_size"] / meta["resolution"])
-                    orig_w = orig_h
-                    center_x_pixel = orig_w / 2.0
-                    center_y_pixel = orig_h / 2.0
+                    base_grid_prob, valid_idx, row_indices, col_indices = project_3d_to_2d_bev(
+                        pts_3d_world, probs_1d, meta
+                    )
 
-                    offset_x = pts_3d_world[:, 0] - meta["origin_x"]
-                    offset_y = pts_3d_world[:, 1] - meta["origin_y"]
-                    
-                    col_indices = np.floor((offset_x / meta["resolution"]) + center_x_pixel).astype(int)
-                    row_indices = np.floor((offset_y / meta["resolution"]) + center_y_pixel).astype(int)
-                    
-                    valid_idx = (col_indices >= 0) & (col_indices < orig_w) & \
-                                (row_indices >= 0) & (row_indices < orig_h)
-                    
+                    orig_h, orig_w = base_grid_prob.shape
                     valid_rows = row_indices[valid_idx]
                     valid_cols = col_indices[valid_idx]
                     valid_probs = probs_1d[valid_idx]
-
-                    base_grid_prob = np.zeros((orig_h, orig_w), dtype=np.float32)
-                    np.maximum.at(base_grid_prob, (valid_rows, valid_cols), valid_probs)
 
                 # Now iterate over all min_confidences in memory!
                 for min_confidence in min_confidences:
@@ -1657,7 +1644,7 @@ def center_eval(config):
                                 pred_mask=pred_mask,
                                 prediction=preds_prob,
                                 pts_3d=pts_3d_world,
-                                known_radius_px=0.6
+                                known_radius_px=0.3 / meta["resolution"]
                             )
                             if center_coords is None:
                                 continue
@@ -1693,7 +1680,9 @@ def center_eval(config):
                             os.chmod(pred_time_file_path, 0o666)
                             continue
 
-                        preds_closed = binary_closing(preds_binary, structure=closing_struct, iterations=8).astype(np.uint8)
+                        # preds_closed = binary_closing(preds_binary, structure=closing_struct, iterations=8).astype(np.uint8)
+                        preds_cleaned = binary_opening(preds_binary, structure=closing_struct, iterations=4)
+                        preds_closed = binary_closing(preds_cleaned, structure=closing_struct, iterations=4).astype(np.uint8)
                         labeled_preds, num_pred_objects = label(preds_closed)
                         extracted_pixel_centers = []
                         total_prediction_time = time.perf_counter() - start_time
@@ -1733,6 +1722,43 @@ def center_eval(config):
                             if center is None or len(center) < 3:
                                 print(f"[Warning] Skipped a center prediction -> pred: {center}")
                                 continue
+
+                            # Filter D: 3D Road-Surface Planarity Check
+                            # if pc is not None and len(pc) > 0:
+                            #     dist_sq = (pc[:, 0] - center[0])**2 + (pc[:, 1] - center[1])**2
+                            #     local_3d_pts = pc[dist_sq <= 0.4**2]  # 0.4m radius around predicted center
+                                
+                            #     # Must have enough real 3D points and be flat (manholes are on flat pavement)
+                            #     if len(local_3d_pts) < 30 or torch.std(local_3d_pts[:, 2]) > 0.05:
+                            #         continue
+                            if pc is not None and len(pc) > 0:
+                                pc_np = pc.detach().cpu().numpy()
+                                # 1. Ist der Punkt auf dem Boden? (Filtert Bäume, Schilder, Autodächer, Poller)
+                                # Das unterste 10%-Perzentil im Patch ist fast immer die echte Straßenoberfläche
+                                road_z = np.percentile(pc_np[:, 2], 10)
+                                if abs(center[2] - road_z) > 0.20:  # Mehr als 20 cm über Straßenniveau -> Kein Gulli!
+                                    continue
+    
+                                # 2. Schneide einen Ring um den Gulli aus: Innen (Gulli, r <= 0.35m) vs. Außenring (Straße, 0.4m < r <= 0.8m)
+                                dx = pc_np[:, 0] - center[0]
+                                dy = pc_np[:, 1] - center[1]
+                                r_sq = dx**2 + dy**2
+    
+                                inner_pts = pc_np[r_sq <= 0.35**2]
+                                outer_pts = pc_np[(r_sq > 0.40**2) & (r_sq <= 0.80**2)]
+    
+                                # Ein echter Gullideckel liegt MITTEN auf einer geschlossenen Fahrbahn:
+                                # -> Sowohl innen als auch im Ring außenrum MÜSSEN Punkte sein!
+                                # (Filtert Patch-Ränder, Bordsteinkanten und isolierte Punkthaufen im Nichts)
+                                if len(inner_pts) < 40 or len(outer_pts) < 80:
+                                    continue
+    
+                                # 3. Der Außenring (die Straße um den Gulli) und der Gulli selbst müssen auf EXAKT 
+                                # derselben Höhe liegen und brettflach sein (Filtert Randsteine, Büsche, Gräben)
+                                if abs(np.median(inner_pts[:, 2]) - np.median(outer_pts[:, 2])) > 0.03: # max 3 cm Höhenversatz zur Straße!
+                                    continue
+                                if np.std(inner_pts[:, 2]) > 0.025 or np.std(outer_pts[:, 2]) > 0.04:   # Muss extrem flach sein!
+                                    continue
 
                             total_localization_time = time.perf_counter() - additional_post_processing_time_start
                             final_elapsed_time = total_prediction_time + total_localization_time
@@ -1790,6 +1816,9 @@ def center_eval(config):
                     load_filepath=pred_file_path if run_mode.lower() == "load" else None
                 )
 
+                # if np.any(gt_labels_numpy == 1):
+                #     print(f"[Patch {idx} WITH GT MANHOLE] Max prob: {preds_squeezed.max():.4f}, Min prob: {preds_squeezed.min():.4e}")
+
                 if run_mode.lower() == "save":
                     elapsed_prediction_time = time.perf_counter() - raw_start_time
                     np.save(pred_time_file_path, np.array([elapsed_prediction_time]))
@@ -1807,17 +1836,60 @@ def center_eval(config):
                     thresh_start_time = time.perf_counter()
                     preds_prob, preds_binary = apply_confidence_threshold(preds_squeezed, valid_mask, min_confidence)
 
-                    preds_closed = binary_closing(preds_binary, structure=closing_struct, iterations=8).astype(np.uint8)
+                    # if preds_prob.sum() > 200.0:
+                    #     plt.imshow(preds_prob, cmap="plasma")
+                    #     plt.title("1.1 Pred Image")
+                    #     plt.axis("off")
+                    #     plt.show()
+                    #     plt.close()
+
+                    #     plt.imshow(preds_binary, cmap="plasma")
+                    #     plt.title("1.2 Pred Image Binary")
+                    #     plt.axis("off")
+                    #     plt.show()
+                    #     plt.close()
+
+                    # preds_closed = binary_closing(preds_binary, structure=closing_struct, iterations=8).astype(np.uint8)
+                    # labeled_preds, num_pred_objects = label(preds_closed)
+                    # Clean morphological filtering (Open to remove noise, light Close to fill holes)
+                    preds_cleaned = binary_opening(preds_binary, structure=closing_struct, iterations=4)
+                    preds_closed = binary_closing(preds_cleaned, structure=closing_struct, iterations=4).astype(np.uint8)
                     labeled_preds, num_pred_objects = label(preds_closed)
+
+                    # if preds_prob.sum() > 200.0:
+                    #     plt.imshow(preds_closed, cmap="plasma")
+                    #     plt.title("2.0 Pred Image Open-Closed")
+                    #     plt.axis("off")
+                    #     plt.show()
+                    #     plt.close()
 
                     extracted_pixel_centers = []
                     total_prediction_time = base_prediction_time + (time.perf_counter() - thresh_start_time)
+
+                    expected_r_px = 0.35 / meta["resolution"]
+                    expected_area = np.pi * (expected_r_px ** 2)
+                    min_area_px = max(candidate_min_points, int(0.45 * expected_area))
+                    max_area_px = int(1.75 * expected_area)
 
                     for p_idx in range(1, num_pred_objects + 1):
                         additional_post_processing_time_start = time.perf_counter()
                         pred_mask = (labeled_preds == p_idx)
 
-                        if np.sum(pred_mask) < candidate_min_points:
+                        num_pts = np.sum(pred_mask)
+
+                        # Filter A: Strict Area Bounds (Min AND Max)
+                        if not (min_area_px <= num_pts <= max_area_px):
+                            continue
+
+                        # Filter B: Confidence Peak & Mean Check (Crucial for low min_confidence thresholds!)
+                        blob_probs = preds_prob[pred_mask]
+                        if blob_probs.max() < min_confidence_peak or blob_probs.mean() < max(min_confidence + 0.1, 0.25):
+                            continue
+
+                        # Filter C: Tighten circle_shape_check_2d threshold (0.5 is usually too permissive, try 0.7+)
+                        pts_2d = np.argwhere(pred_mask)
+                        is_circle, _ = circle_shape_check_2d(pts_2d, save_path=None, should_plot=False, threshold=0.75)
+                        if not is_circle:
                             continue
                         
                         center_coords = extract_center_fn(
@@ -1850,6 +1922,43 @@ def center_eval(config):
                         if center is None or len(center) < 3:
                             print(f"[Warning] Skipped a center prediction -> pred: {center}")
                             continue
+
+                        # Filter D: 3D Road-Surface Planarity Check
+                        # if pc is not None and len(pc) > 0:
+                        #     dist_sq = (pc[:, 0] - center[0])**2 + (pc[:, 1] - center[1])**2
+                        #     local_3d_pts = pc[dist_sq <= 0.4**2]  # 0.4m radius around predicted center
+                            
+                        #     # Must have enough real 3D points and be flat (manholes are on flat pavement)
+                        #     if len(local_3d_pts) < 30 or torch.std(local_3d_pts[:, 2]) > 0.05:
+                        #         continue
+                        if pc is not None and len(pc) > 0:
+                            pc_np = pc.detach().cpu().numpy()
+                            # 1. Ist der Punkt auf dem Boden? (Filtert Bäume, Schilder, Autodächer, Poller)
+                            # Das unterste 10%-Perzentil im Patch ist fast immer die echte Straßenoberfläche
+                            road_z = np.percentile(pc_np[:, 2], 10)
+                            if abs(center[2] - road_z) > 0.20:  # Mehr als 20 cm über Straßenniveau -> Kein Gulli!
+                                continue
+
+                            # 2. Schneide einen Ring um den Gulli aus: Innen (Gulli, r <= 0.35m) vs. Außenring (Straße, 0.4m < r <= 0.8m)
+                            dx = pc_np[:, 0] - center[0]
+                            dy = pc_np[:, 1] - center[1]
+                            r_sq = dx**2 + dy**2
+
+                            inner_pts = pc_np[r_sq <= 0.35**2]
+                            outer_pts = pc_np[(r_sq > 0.40**2) & (r_sq <= 0.80**2)]
+
+                            # Ein echter Gullideckel liegt MITTEN auf einer geschlossenen Fahrbahn:
+                            # -> Sowohl innen als auch im Ring außenrum MÜSSEN Punkte sein!
+                            # (Filtert Patch-Ränder, Bordsteinkanten und isolierte Punkthaufen im Nichts)
+                            if len(inner_pts) < 40 or len(outer_pts) < 80:
+                                continue
+
+                            # 3. Der Außenring (die Straße um den Gulli) und der Gulli selbst müssen auf EXAKT 
+                            # derselben Höhe liegen und brettflach sein (Filtert Randsteine, Büsche, Gräben)
+                            if abs(np.median(inner_pts[:, 2]) - np.median(outer_pts[:, 2])) > 0.03: # max 3 cm Höhenversatz zur Straße!
+                                continue
+                            if np.std(inner_pts[:, 2]) > 0.025 or np.std(outer_pts[:, 2]) > 0.04:   # Muss extrem flach sein!
+                                continue
 
                         total_localization_time = time.perf_counter() - additional_post_processing_time_start
                         final_elapsed_time = total_prediction_time + total_localization_time
@@ -1915,7 +2024,7 @@ def center_eval(config):
 
                 merged_pixel_centers = merge_nearby_centers(
                     pc_points, 
-                    dist_threshold=0.8
+                    dist_threshold=1.2  # 0.8
                 )
 
                 for cur_new_pixel_center in merged_pixel_centers:
@@ -1929,8 +2038,10 @@ def center_eval(config):
                     threshold_merged_results = add_to_result(
                         threshold_merged_results, cur_dataset, target_pc_id, cur_center_point
                     )
-            
-            print(f"Conf {min_confidence}: Reduced results from {len(raw_threshold_results)} to {len(threshold_merged_results)} ({len(raw_threshold_results)-len(threshold_merged_results)}).")
+
+            n_preds_before = sum([len(x["centers"]) for x in raw_threshold_results])
+            n_preds_after = sum([len(x["centers"]) for x in threshold_merged_results])
+            print(f"Conf {min_confidence}: Reduced results from {n_preds_before} to {n_preds_after} ({n_preds_before-n_preds_after}).")
 
             for res in threshold_merged_results:
                 target_pc_id = res["pointcloud-id"]
@@ -1969,565 +2080,12 @@ def center_eval(config):
         )
 
         # 7. Save evaluation results per dataset
-        output_path = Path(f"{config.center_eval.center_pred_path}/center_pred_{cur_dataset}_{data_split_type}_{exp_name}.json")
+        # output_path = Path(f"{config.center_eval.center_pred_path}/center_pred_{cur_dataset}_{data_split_type}_{exp_name}.json")
+        output_path = Path(f"{config.center_eval.center_pred_path}/{cur_dataset}_{data_split_type}_{exp_name}.json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w") as file_:
             json.dump(all_dataset_results, file_, indent=4)
         print(f"Saved Eval Center Results in: '{output_path}'")
-
-        # # result list over all thresholds of one dataset
-        # all_dataset_results = []
-
-        # for min_confidence in min_confidences:
-        #     raw_threshold_results = []
-
-        #     debug_save_dir = Path(f"{config.center_eval.center_pred_path}/debug_plots/center_pred_{cur_dataset}_{data_split_type}_{exp_name}_{min_confidence}")
-        #     # save_dir_creation(str(debug_save_dir))
-        #     os.makedirs(str(debug_save_dir), exist_ok=True)
-        #     shutil.rmtree(str(debug_save_dir))
-        #     # save_dir_creation(str(debug_save_dir))
-        #     os.makedirs(str(debug_save_dir), exist_ok=True)
-
-
-        #     test_3d_dataset = get_data_loader(
-        #         cur_dataset, 
-        #         config.data.path if cur_dataset == "whu" else config.data.path_2, 
-        #         type=data_split_type,
-        #         transform=get_basic_transform(),
-        #         batch_size=1, 
-        #         shuffle=False, 
-        #         num_workers=4,
-        #         preprocessed=True, 
-        #         return_train_format=True,
-        #         return_dataset=True,
-        #         bev_normalized=config.data.normalization, 
-        #         bev_normalize_mode=config.data.normalization_mode
-        #     )
-            
-        #     all_test_paths = test_3d_dataset.point_cloud_paths
-
-        #     test_bev_dataset = BEVDataset(
-        #         path=all_test_paths, 
-        #         file_paths=[], 
-        #         has_labels=True, 
-        #         image_training=True, 
-        #         preprocessor=processor,
-        #         augment=False,
-        #         pass_label_in_preprocessor=pass_label_in_preprocessor,
-        #         heatmap_gt_path=heatmap_path,
-        #         used_heatmap_channel=used_heatmap_channel,
-        #         normalize=normalization, 
-        #         normalization_mode=normalization_mode
-        #     )
-
-        #     all_pc_ids = set()
-
-        #     for idx, cur_data_path in tqdm(enumerate(all_test_paths), total=len(all_test_paths), desc="2D Center Pipe"):
-        #         pc_id, x_start, y_start = test_bev_dataset.extract_grid_identifier(cur_data_path)
-
-        #         pred_file_path = os.path.join(pred_save_load_mode_saving_path, pred_save_load_mode_saving_name, f"{cur_dataset}_{pc_id}_{x_start}_{y_start}.npy")
-        #         pred_time_file_path = os.path.join(pred_save_load_mode_saving_path, pred_save_load_mode_saving_name, f"{cur_dataset}_{pc_id}_{x_start}_{y_start}_TIME.npy")
-
-        #         all_pc_ids.add(pc_id)
-
-        #         # get data
-        #         bev_dict = next(test_bev_dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True))
-        #         meta = bev_dict["meta"]
-        #         pixel_values = bev_dict["pixel_values"]
-        #         labels = bev_dict["labels"]
-
-        #         gt_labels_numpy = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else np.array(labels)
-                
-        #         # pc = test_3d_dataset[idx]  # -> wrong patch?
-        #         pc, pc_labels = test_3d_dataset.get_patch_via_identifier(pc_id, x_start, y_start)
-        #         # [type(x) for x in pc]=[<class 'torch.Tensor'>, <class 'torch.Tensor'>]
-        #         # [x.shape for x in pc]=[torch.Size([424, 4]), torch.Size([424, 1])]
-        #         # print(f"{type(pc)=}")
-        #         # print(f"{[type(x) for x in pc]=}")
-        #         # print(f"{[x.shape for x in pc]=}")
-
-        #         pixel_values = pixel_values.unsqueeze(0)
-
-        #         # if enable_debug:
-        #         #     gt_centers = extract_and_match_centers(
-        #         #         dataset_name=cur_dataset, 
-        #         #         pc_id=pc_id, 
-        #         #         gt_json_file_paths=gt_json_file_paths, 
-        #         #         queried_points_3d=None, 
-        #         #         gt_patch_labels=gt_labels_numpy, 
-        #         #         meta=meta, 
-        #         #         pc=pc,  # pixel_values, 
-        #         #         min_points=10
-        #         #     )
-        #         gt_centers = None
-
-        #         # Start timing the prediction/extraction for this sample
-        #         start_time = time.perf_counter()
-
-        #         # -----------------
-        #         # Manhole Search
-        #         extra_debug_info = []
-
-        #         if model_name.lower().startswith("traditional_"):
-        #             traditional_method = "_".join(model_name.split("_")[1:])
-
-        #             # Call unified prediction method using direct PyTorch Tensors
-        #             detected_centers, debug_dict = predict_manhole_centers(
-        #                 pts_3d=pc,
-        #                 bev_img=pixel_values,
-        #                 method=traditional_method,
-        #                 meta=meta
-        #             )
-
-        #             # Debuggin
-        #             if enable_debug and debug_dict is not None:
-        #                 plot_center_prediction_debug(
-        #                     pixel_values=pixel_values,
-        #                     labels=gt_labels_numpy,
-        #                     labeled_preds=None,                         # np instance masks
-        #                     preds_prob=debug_dict['prob_map'],          # e.g., Heatmap/Blur/Intensity
-        #                     preds_binary=debug_dict['binary_mask'],     # e.g., Canny Edges / Otsu
-        #                     preds_closed=None, 
-        #                     extracted_centers=detected_centers[:, :2],  # Found centers
-        #                     gt_centers=gt_centers,
-        #                     pc_points=pc,
-        #                     meta=meta,
-        #                     pc_id=pc_id,
-        #                     idx=idx,
-        #                     save_dir=debug_save_dir,
-        #                     num_preds=len(detected_centers),
-        #                     is_heatmap=False,                            # Creates crosses for centers
-        #                     extra_debug_info=debug_dict['geometries']   # Creates Circles and Polygones in Panel 5
-        #                 )
-
-        #             # Process predictions depending on 2D vs 3D method output
-        #             for cur_det_center in detected_centers:
-        #                 if traditional_method.startswith("2d"):
-        #                     # det is [pixel_x, pixel_y, radius] -> transform to 3D point
-        #                     center_3d = bev_pixel_to_3d(
-        #                         patch_points=pc,
-        #                         pixel_x=cur_det_center[0],
-        #                         pixel_y=cur_det_center[1],
-        #                         origin_x=meta["origin_x"],
-        #                         origin_y=meta["origin_y"],
-        #                         resolution=meta["resolution"],
-        #                         search_radius=None,
-        #                         tile_size=meta["tile_size"],
-        #                         invert_y=False,
-        #                         invert_x=False
-        #                     )
-        #                 else:
-        #                     # det is already 3D coordinates [x, y, z]
-        #                     center_3d = cur_det_center
-
-        #                 if center_3d is not None and len(center_3d) >= 3:
-        #                     elapsed_time = time.perf_counter() - start_time
-        #                     cur_center_point = {
-        #                         "x": float(center_3d[0]),
-        #                         "y": float(center_3d[1]),
-        #                         "z": float(center_3d[2]),
-        #                         "time": elapsed_time,
-        #                         "confidence": min_confidence
-        #                     }
-        #                     raw_threshold_results = add_to_result(raw_threshold_results, cur_dataset, pc_id, cur_center_point)
-        #         else:
-                    
-        #             # 3D Model handling
-        #             if is_3D_model:
-        #                 loaded_preds = np.load(pred_file_path, allow_pickle=True)
-        #                 loaded_dict = loaded_preds.item() if isinstance(loaded_preds, np.ndarray) else loaded_preds
-                        
-        #                 pts_3d_local = loaded_dict["points"]  # The exact points used in the model [N, 3]
-        #                 probs_1d = loaded_dict["probs"] # The probabilities [N]
-        #                 centroid = loaded_dict["centroid"]  # .get("centroid", np.zeros(3))
-        #                 scale = loaded_dict["scale"]
-
-        #                 # restore absolut world-coordinates
-        #                 # WICHTIG: Falls pts_3d_local 4 Kanäle hat (X, Y, Z, Intensity), 
-        #                 # dürfen wir NUR X, Y und Z skalieren!
-        #                 xyz_local = pts_3d_local[:, :3]
-                        
-        #                 # Restore absolut world-coordinates (DENORMALIZATION)
-        #                 # 1. Multiplikation mit scale (Rückgängig machen der Einheitskugel)
-        #                 # 2. Addition des Centroids (Rückgängig machen der Zentrierung)
-        #                 pts_3d_world_xyz = (xyz_local * scale) + centroid
-
-        #                 # Falls du Intensity oder andere Features für deine Extraction brauchst, 
-        #                 # füge sie hier wieder an. Da deine extract_3d_center-Funktionen 
-        #                 # aber nur Koordinaten brauchen, reicht xyz:
-        #                 pts_3d_world = pts_3d_world_xyz
-
-        #                 if process_3d_mode.lower() == "2d":
-        #                     # --- Projection into 2D ---
-        #                     orig_h = int(meta["tile_size"] / meta["resolution"])
-        #                     orig_w = orig_h
-                            
-        #                     grid_prob = np.zeros((orig_h, orig_w), dtype=np.float32)
-        #                     grid_binary = np.zeros((orig_h, orig_w), dtype=np.uint8)
-                            
-        #                     # Note: Since our points were normalized via mean-centering in the dataset,
-        #                     # we have to map them to the 2D grid relative to the patch center.
-        #                     # Patch center in BEV coordinates is exactly at (orig_w/2, orig_h/2).
-        #                     center_x_pixel = orig_w / 2.0
-        #                     center_y_pixel = orig_h / 2.0
-
-        #                     offset_x = pts_3d_world[:, 0] - meta["origin_x"]
-        #                     offset_y = pts_3d_world[:, 1] - meta["origin_y"]
-                            
-        #                     # Convert local centered coordinates to pixels
-        #                     col_indices = np.floor((offset_x / meta["resolution"]) + center_x_pixel).astype(int)
-        #                     row_indices = np.floor((offset_y / meta["resolution"]) + center_y_pixel).astype(int)
-                            
-        #                     valid_idx = (col_indices >= 0) & (col_indices < orig_w) & \
-        #                                 (row_indices >= 0) & (row_indices < orig_h)
-                            
-        #                     # Thresholding for binary mask
-        #                     bin_mask_1d = (probs_1d >= min_confidence).astype(np.uint8)
-                            
-        #                     # Project into 2D grids using maximum values to handle overlapping points
-        #                     np.maximum.at(grid_prob, (row_indices[valid_idx], col_indices[valid_idx]), probs_1d[valid_idx])
-        #                     np.maximum.at(grid_binary, (row_indices[valid_idx], col_indices[valid_idx]), bin_mask_1d[valid_idx])
-                            
-        #                     preds_prob = grid_prob
-        #                     preds_binary = grid_binary
-                            
-        #                     # The rest of our existing 2D pipeline (binary_closing, label, extract_center_fn)
-        #                     # will seamlessly take over from here :-)
-        #                 elif process_3d_mode.lower() == "3d":
-        #                     # --- Native 3D Processing ---
-        #                     # can't use the 2D pipeline, so have to make a own
-        #                     # start the timer
-        #                     elapsed_prediction_time = np.load(pred_time_file_path).item()
-        #                     start_time = time.perf_counter() - elapsed_prediction_time
-
-        #                     # Bypass the 2D morphology. We extract the 3D center directly.
-                            
-        #                     # 1. Filter points by confidence threshold
-        #                     mask = probs_1d >= min_confidence
-        #                     valid_pts_world = pts_3d_world[mask]
-
-        #                     # 2. Extract manhole candidates using DBSCAN
-        #                     # Initialize array with 0 (background/ignore) to match 2D morphology output
-        #                     labeled_preds = np.zeros(len(pts_3d_world), dtype=int)
-
-        #                     if len(valid_pts_world) > 0:
-        #                         dbscan = DBSCAN(eps=0.3, min_samples=candidate_min_points)  # 20
-        #                         cluster_labels = dbscan.fit_predict(valid_pts_world)
-                                
-        #                         # remove noise data
-        #                         valid_cluster_mask = cluster_labels != -1
-                                
-        #                         # Place the 1-indexed cluster IDs back into the full-size array
-        #                         # (Only for the valid points that made it past the threshold mask)
-        #                         labeled_preds[mask] = np.where(
-        #                             valid_cluster_mask, 
-        #                             cluster_labels + 1, 
-        #                             0
-        #                         )
-                                
-        #                         num_pred_objects = cluster_labels.max() + 1
-        #                     else:
-        #                         num_pred_objects = 0
-
-        #                     preds_prob = probs_1d
-        #                     total_prediction_time = time.perf_counter() - start_time
-                            
-        #                     # 3. Extract Centers
-        #                     for p_idx in range(1, num_pred_objects + 1):
-        #                         additional_post_processing_time_start = time.perf_counter()
-                                
-        #                         # bool mask for current candidate / cluster
-        #                         pred_mask = (labeled_preds == p_idx)
-        
-        #                         if np.sum(pred_mask) < candidate_min_points:
-        #                             continue
-                                
-        #                         # Extract center using the selected strategy function
-        #                         center_coords = extract_center_fn(
-        #                             pred_mask=pred_mask,
-        #                             prediction=preds_prob,
-        #                             pts_3d=pts_3d_world
-        #                         )
-        
-        #                         if center_coords is None:
-        #                             continue
-
-        #                         global_cx = center_coords[0]
-        #                         global_cy = center_coords[1]
-        #                         global_cz = center_coords[2]
-
-        #                         # # Convert local (zero-centered) coordinates back to global world coordinates
-        #                         # global_patch_center_x = meta["origin_x"] + (meta["tile_size"] / 2.0)
-        #                         # global_patch_center_y = meta["origin_y"] + (meta["tile_size"] / 2.0)
-                                
-        #                         # global_cx = global_patch_center_x + local_cx
-        #                         # global_cy = global_patch_center_y + local_cy
-        #                         # global_cz = local_cz 
-                                
-        #                         total_localization_time = time.perf_counter() - additional_post_processing_time_start
-        #                         final_elapsed_time = total_prediction_time + total_localization_time
-                                
-        #                         cur_center_point = {
-        #                             "x": float(global_cx),
-        #                             "y": float(global_cy),
-        #                             "z": float(global_cz),
-        #                             "time": final_elapsed_time,
-        #                             "confidence": min_confidence
-        #                         }
-        #                         raw_threshold_results = add_to_result(raw_threshold_results, cur_dataset, pc_id, cur_center_point)
-
-        #                     # must skip the 2D processing!
-        #                     continue
-        #                 else:
-        #                     raise ValueError(f"Unknown Processing Mode for 3D loaded predictions: '{process_3d_mode}'")
-        #             else:
-        #                 # _ -> gt_labels_numpy
-        #                 preds_prob, preds_binary, valid_mask, preds, _, pixel_values = make_prediction(
-        #                     pixel_values=pixel_values, 
-        #                     model=model, 
-        #                     model_name=model_name, 
-        #                     labels=labels, 
-        #                     min_confidence=min_confidence, 
-        #                     ignore_index=ignore_index, 
-        #                     using_heatmap_as_gt=using_heatmap_as_gt,
-        #                     as_prob=True, 
-        #                     manhole_class_idx=1,
-        #                     save_raw_pred=run_mode.lower() == "save",
-        #                     save_filepath=pred_file_path,
-        #                     load_filepath=pred_file_path if run_mode.lower() == "load" else None
-        #                 )
-
-    
-        #             # use time loading if using loaded models or save time if in saving mode
-        #             # correct time if loading the model
-        #             if run_mode.lower() == "load":
-        #                 elapsed_prediction_time = np.load(pred_time_file_path).item()
-        #                 start_time = time.perf_counter() - elapsed_prediction_time
-        #             elif run_mode.lower() == "save":
-        #                 elapsed_prediction_time = time.perf_counter() - start_time
-        #                 np.save(pred_time_file_path, np.array([elapsed_prediction_time]))
-        #                 os.chmod(pred_time_file_path, 0o666)
-        #                 continue
-
-        #             orig_h, orig_w = int(meta["tile_size"] / meta["resolution"]), int(meta["tile_size"] / meta["resolution"])
-        #             pred_h, pred_w = preds_binary.shape
-                        
-        #             struct = generate_binary_structure(2, 2)  # 8-Nachbarschaft
-        #             # bigger neighborhood against a problem, where multiple predictions are made due to little riffles
-        #             preds_closed = binary_closing(preds_binary, structure=struct, iterations=8).astype(np.uint8)
-        #             labeled_preds, num_pred_objects = label(preds_closed)
-
-        #             extracted_pixel_centers = []
-        #             # gt_pixel_centers = []
-
-        #             # ONLY FOR DEBUGGING:
-        #             # # extract GT center from labels
-        #             # # labels[labels == ignore_index] = 0
-        #             # labels_clean = np.where(gt_labels_numpy == ignore_index, 0, gt_labels_numpy)
-        #             # # close gaps
-        #             # labels_binary = (labels_clean >= min_confidence).astype(np.uint8)
-        #             # labels_binary = np.squeeze(labels_binary)
-        #             # struct = generate_binary_structure(2, 2)
-        #             # labels_closed = binary_closing(labels_binary, structure=struct, iterations=8).astype(np.uint8)
-
-        #             # if np.any(labels_closed > 0):
-        #             #     gt_labeled, num_gt = label(labels_closed)
-        #             #     for g_i in range(1, num_gt + 1):
-        #             #         gt_mask = (gt_labeled == g_i)
-                            
-        #             #         # Skip small noise components with less than 4 pixels
-        #             #         if np.count_nonzero(gt_mask) < 20:
-        #             #             continue
-                                
-        #             #         g_coords = extract_center_fn(
-        #             #             pred_mask=gt_mask,
-        #             #             prediction=labels_closed if not using_heatmap_as_gt else labels_clean.astype(np.float32),
-        #             #             mask_to_polygon_fn=mask_to_polygon,
-        #             #         )
-        #             #         if g_coords is not None:
-        #             #             gt_pixel_centers.append(g_coords)
-                    
-        #             # -----------------
-        #             # Prediction Center Extraction
-                    
-        #             total_prediction_time = time.perf_counter() - start_time
-
-        #             for p_idx in range(1, num_pred_objects + 1):
-        #                 additional_post_processing_time_start = time.perf_counter()
-        #                 pred_mask = (labeled_preds == p_idx)
-
-        #                 if np.sum(pred_mask) < candidate_min_points:
-        #                     continue
-                        
-        #                 # Extract center using the selected strategy function
-        #                 center_coords = extract_center_fn(
-        #                     pred_mask=pred_mask,
-        #                     prediction=preds_prob,
-        #                     mask_to_polygon_fn=mask_to_polygon,
-        #                     min_confidence_peak=min_confidence_peak
-        #                 )
-
-        #                 if center_coords is None:
-        #                     continue
-
-        #                 center_x, center_y = center_coords
-        #                 extracted_pixel_centers.append((center_x, center_y))
-
-        #                 # Transform 2D pixel center to 3D point
-        #                 center = bev_pixel_to_3d(
-        #                     patch_points=pc,
-        #                     pixel_x=center_x,
-        #                     pixel_y=center_y,
-        #                     origin_x=meta["origin_x"],
-        #                     origin_y=meta["origin_y"],
-        #                     resolution=meta["resolution"],
-        #                     search_radius=None,
-        #                     tile_size=meta["tile_size"],
-        #                     invert_y=False,
-        #                     invert_x=False
-        #                 )
-
-        #                 # print(f"Center shape: {center.shape}")
-        #                 if center is None or len(center) < 3:
-        #                     print(f"[Warning] Skipped a center prediction -> pred: {center}")
-        #                     continue
-
-        #                 total_localization_time = time.perf_counter() - additional_post_processing_time_start
-        #                 final_elapsed_time = total_prediction_time + total_localization_time
-                        
-        #                 cur_center_point = {
-        #                     "x": center[0],
-        #                     "y": center[1],
-        #                     "z": center[2],
-        #                     "time": final_elapsed_time,
-        #                     "confidence": min_confidence
-        #                 }
-                        
-        #                 raw_threshold_results = add_to_result(raw_threshold_results, cur_dataset, pc_id, cur_center_point)
-
-        #             # --- Execute Debug Plotting ---
-        #             if run_mode.lower() != "save":
-        #                 if enable_debug and (num_pred_objects > 0 or np.any(gt_labels_numpy > 0)):
-        #                     plot_center_prediction_debug(
-        #                         pixel_values=pixel_values,
-        #                         labels=gt_labels_numpy,
-        #                         labeled_preds=labeled_preds,
-        #                         preds_prob=preds_prob,
-        #                         preds_binary=preds_binary,
-        #                         preds_closed=preds_closed,
-        #                         extracted_centers=extracted_pixel_centers,
-        #                         gt_centers=gt_centers,
-        #                         pc_points=pc,
-        #                         meta=meta,
-        #                         pc_id=pc_id,
-        #                         idx=idx,
-        #                         save_dir=debug_save_dir,
-        #                         num_preds=num_pred_objects,
-        #                         is_heatmap=False,                            # Creates crosses for centers
-        #                         # extra_debug_info=debug_dict['geometries']   # Creates Circles and Polygones in Panel 5
-        #                     )
-
-        #     # early stop, if only making savings
-        #     if run_mode.lower() == "save":
-        #         continue
-
-        #     # -----------------
-        #     # Post Processing
-        #     # Merge nearby predictions
-        #     print(f"Post-processing center predictions for {cur_dataset} (merging duplicates from patch overlaps).")
-            
-        #     threshold_merged_results = []
-
-        #     for cur_result in raw_threshold_results:
-        #         target_pc_id = cur_result["pointcloud-id"]
-        #         target_confidence = min_confidence
-        #         centers = cur_result.get("centers", [])
-
-        #         if not centers:
-        #             continue
-
-        #         for pt in centers:
-        #             if pt.get("confidence", -999) != target_confidence:
-        #                 raise ValueError(f"Found another confidence inside of the current result.")
-
-        #         # extract points & confidence
-        #         pc_points = [
-        #             (pt["x"], pt["y"], pt["z"], pt["time"])
-        #             for pt in centers
-        #         ]
-
-        #         # merging
-        #         merged_pixel_centers = merge_nearby_centers(
-        #             pc_points, 
-        #             dist_threshold=0.8
-        #         )
-
-        #         # rebuild merged version
-        #         for cur_new_pixel_center in merged_pixel_centers:
-        #             cur_center_point = {
-        #                 "x": cur_new_pixel_center[0],
-        #                 "y": cur_new_pixel_center[1],
-        #                 "z": cur_new_pixel_center[2],
-        #                 "time": cur_new_pixel_center[3],
-        #                 "confidence": min_confidence
-        #             }
-                    
-        #             threshold_merged_results = add_to_result(threshold_merged_results, cur_dataset, target_pc_id, cur_center_point)
-            
-        #     print(f"Conf {min_confidence}: Reduced results from {len(raw_threshold_results)} to {len(threshold_merged_results)} ({len(raw_threshold_results)-len(threshold_merged_results)}).")
-
-        #     # add new found manhole centers of this threshold to the overall results
-        #     # all_dataset_results.extend(threshold_merged_results)
-        #     for res in threshold_merged_results:
-        #         target_pc_id = res["pointcloud-id"]
-        #         new_centers = res.get("centers", [])
-
-        #         # Find if an entry for this pc_id already exists in all_dataset_results
-        #         existing_entry = next((e for e in all_dataset_results if e.get("pointcloud-id") == target_pc_id), None)
-
-        #         if existing_entry is not None:
-        #             existing_entry["centers"].extend(new_centers)
-        #         else:
-        #             all_dataset_results.append(res)
-
-        # if run_mode.lower() == "save":
-        #     continue
-
-        # # Check if found center in ignored manhole
-        # # if prediction is in 255 label area of the 3D 
-        # # -> if 0.45m box around is 80% or more ignore index, then not pass the prediction
-        # # Check if found center is in ignored manhole area
-        # test_raw_3d_dataset = get_data_loader(
-        #     cur_dataset, 
-        #     config.data.path if cur_dataset == "whu" else config.data.path_2, 
-        #     type=data_split_type,
-        #     transform=None,  # get_basic_transform(),
-        #     batch_size=1, 
-        #     shuffle=False, 
-        #     num_workers=4,
-        #     preprocessed=False, 
-        #     return_train_format=False,
-        #     return_dataset=True,
-        #     bev_normalized=config.data.normalization, 
-        #     bev_normalize_mode=config.data.normalization_mode
-        # )
-        # all_dataset_results = filter_ignored_manholes(
-        #     results=all_dataset_results,
-        #     raw_dataset=test_raw_3d_dataset,
-        #     box_size=0.9,
-        #     ignore_label=255,
-        #     ignore_threshold=0.80,
-        #     check_z_axis=False  # Set to True if Z coordinate should also be bounded by 0.6m
-        # )
-
-        # # -----------------
-        # # Saving
-        # # Save evaluation results per dataset (and over all thresholds)
-        # output_path = Path(f"{config.center_eval.center_pred_path}/center_pred_{cur_dataset}_{data_split_type}_{exp_name}.json")
-        # output_path.parent.mkdir(parents=True, exist_ok=True)
-        # with open(output_path, "w") as file_:
-        #     json.dump(all_dataset_results, file_, indent=4)
-        # print(f"Saved Eval Center Results in: '{output_path}'")
 
 
 

@@ -456,6 +456,9 @@ def bev_projection(point_cloud, pc_id,
 
 
 
+# ------------------------------------
+# > Coordinate-System Transformation <
+# ------------------------------------
 def bev_pixel_to_3d(
         patch_points,
         pixel_x,
@@ -567,6 +570,72 @@ def bev_pixel_to_world_area(pixel_x, pixel_y,
 
 
 
+def project_3d_to_2d_bev(pts_3d_world, probs_1d, meta):
+    """
+    Projects 3D world points onto the 2D BEV grid where meta["origin_x"] and
+    meta["origin_y"] represent the upper-left corner of the patch in world coordinates.
+    """
+
+    def _to_scalar(val):
+        """
+        Safely converts PyTorch tensors, 0D/1D numpy arrays, or strings to Python float.
+        """
+        if hasattr(val, "detach"):
+            val = val.detach().cpu().numpy()
+        if isinstance(val, np.ndarray):
+            val = val.squeeze().item()
+        return float(val)
+
+    tile_size = _to_scalar(meta["tile_size"])
+    resolution = _to_scalar(meta["resolution"])
+    origin_x = _to_scalar(meta["origin_x"])
+    origin_y = _to_scalar(meta["origin_y"])
+
+    orig_h = int(round(tile_size / resolution))
+    orig_w = orig_h
+
+    # X-axis: origin_x is the left edge, so offset_x is in [0, tile_size]
+    offset_x = pts_3d_world[:, 0] - origin_x
+
+    # Y-axis: Check if origin_y is y_min (pts_y >= origin_y) or y_max / geographic top (pts_y <= origin_y)
+    offset_y_down = pts_3d_world[:, 1] - origin_y
+    offset_y_up = origin_y - pts_3d_world[:, 1]
+
+    # Pick the Y direction that places the points inside [0, tile_size]
+    valid_down = np.sum((offset_y_down >= 0) & (offset_y_down < tile_size))
+    valid_up = np.sum((offset_y_up >= 0) & (offset_y_up < tile_size))
+    offset_y = offset_y_down if valid_down >= valid_up else offset_y_up
+
+    # No + center_x_pixel / + center_y_pixel needed because origin is the corner!
+    col_indices = np.floor(offset_x / resolution).astype(int)
+    row_indices = np.floor(offset_y / resolution).astype(int)
+
+    valid_idx = (
+        (col_indices >= 0) & (col_indices < orig_w) &
+        (row_indices >= 0) & (row_indices < orig_h)
+    )
+
+    if np.sum(valid_idx) == 0:
+        print(
+            f"[WARN] 0 points projected into 2D grid! "
+            f"pts_x: [{pts_3d_world[:, 0].min():.2f}, {pts_3d_world[:, 0].max():.2f}] vs origin_x: {origin_x:.2f} | "
+            f"pts_y: [{pts_3d_world[:, 1].min():.2f}, {pts_3d_world[:, 1].max():.2f}] vs origin_y: {origin_y:.2f}"
+        )
+
+    valid_rows = row_indices[valid_idx]
+    valid_cols = col_indices[valid_idx]
+    valid_probs = probs_1d[valid_idx]
+
+    base_grid_prob = np.zeros((orig_h, orig_w), dtype=np.float32)
+    np.maximum.at(base_grid_prob, (valid_rows, valid_cols), valid_probs)
+
+    return base_grid_prob, valid_idx, row_indices, col_indices
+
+
+
+# -----------
+# > Testing <
+# -----------
 # @numba.njit(parallel=True)
 def bev_projection_testing(patch_gen, atol=1e-4, dataset_name=None, save_path=None):
     """

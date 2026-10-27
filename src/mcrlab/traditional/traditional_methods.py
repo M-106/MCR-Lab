@@ -6,6 +6,10 @@ import cv2
 
 import torch
 
+from scipy.ndimage import generate_binary_structure, grey_closing, iterate_structure
+
+import matplotlib.pyplot as plt
+
 
 
 # --------------
@@ -98,13 +102,58 @@ def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
         return (np.empty((0, 3)), None)
 
     # Normalize to 0-255 uint8
-    norm_int = cv2.normalize(intensity, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    # norm_int = cv2.normalize(intensity, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     # norm_int = ((intensity - intensity.min()) / (intensity.max() - intensity.min()) * 255).astype(np.uint8)
     # filtered = cv2.bilateralFilter(norm_int, d=5, sigmaColor=75, sigmaSpace=75)
+    p_low, p_high = np.percentile(intensity, (2, 98))
+    if p_high > p_low:
+        clipped = np.clip(intensity, p_low, p_high)
+        norm_int = ((clipped - p_low) / (p_high - p_low) * 255).astype(np.uint8)
+    else:
+        norm_int = np.zeros_like(intensity, dtype=np.uint8)
+
+    # plt.imshow(norm_int, cmap="plasma")
+    # plt.title("Input Image (Normalized)")
+    # plt.axis("off")
+    # plt.show()
+    # plt.close()
+
+    # 1. Footprint/Structure (connectivity)
+    struct = generate_binary_structure(2, 2)
+    large_footprint = iterate_structure(struct, 8)
+    # from skimage.morphology import closing, disk
+    # closed_image = closing(image, footprint=disk(8))
+
+    # 2. Grayscale closing (dilation followed by erosion using local max/min)
+    blurred = closed_image = grey_closing(norm_int, footprint=struct)
+
+    # plt.imshow(closed_image, cmap="plasma")
+    # plt.title("Closed Image")
+    # plt.axis("off")
+    # plt.show()
+    # plt.close()
+
+    # enhance contrast
+    # clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    # enhanced = clahe.apply(closed_image)
+
+    # plt.imshow(enhanced, cmap="plasma")
+    # plt.title("Enhanced Image")
+    # plt.axis("off")
+    # plt.show()
+    # plt.close()
 
     # Use Median Blur to remove speckle noise on asphalt
-    blurred = cv2.medianBlur(norm_int, 5)
+    # blurred = cv2.medianBlur(enhanced, 5)
     # blurred = cv2.GaussianBlur(norm_int, (3, 3), 1.0)
+    # blurred = cv2.GaussianBlur(closed_image, (3, 3), 1.2)
+    # blurred = enhanced
+
+    # plt.imshow(blurred, cmap="plasma")
+    # plt.title("Blurred Image")
+    # plt.axis("off")
+    # plt.show()
+    # plt.close()
 
     min_r_px = int(0.25 / resolution)  # 25 px for 0.5m diameter
     max_r_px = int(0.45 / resolution)  # 45 px for 0.9m diameter
@@ -115,8 +164,8 @@ def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
         cv2.HOUGH_GRADIENT, 
         dp=1.0,  # 1.5,   # decides resolution of accumulator relative to current resolution
         minDist=min_dist_px,
-        param1=60,  # canny edge value threshold -> how strong the edge have to be, as gradient value not pixel value -> maybe 1020 max
-        param2=20,  # threshold of voting for hit
+        param1=50,   # canny edge value threshold -> how strong the edge have to be, as gradient value not pixel value -> maybe 1020 max
+        param2=40,  # threshold of voting for hit
         minRadius=min_r_px, 
         maxRadius=max_r_px
     )
@@ -124,10 +173,18 @@ def method_2d_hough(bev_img, resolution=0.01, origin=(0.0, 0.0)):
     if circles is None:
         return (np.empty((0, 3)), None)
 
+    print("Circles: ", circles)
+
     # Collect Debug Info
     debug_dict = None
     # Compute canny for visualization -> hough transform use it
-    edges = cv2.Canny(blurred, 20, 20) 
+    edges = cv2.Canny(blurred, 50, 50) 
+
+    # plt.imshow(edges, cmap="plasma")
+    # plt.title("Canny Edges")
+    # plt.axis("off")
+    # plt.show()
+    # plt.close()
     
     extra_info = []
     if circles is not None:

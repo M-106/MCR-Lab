@@ -130,6 +130,148 @@ def circle_shape_check(points, save_path=None, should_plot=False, threshold=0.6)
         "score": score
     }
 
+# 2D Shape Check
+def fit_circle_least_squares_2d(points_2d):
+    """Algebraic circle fit (Kasa method)."""
+    x = points_2d[:, 0]
+    y = points_2d[:, 1]
+    
+    A = np.column_stack([x, y, np.ones_like(x)])
+    b = x**2 + y**2
+    c, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+    
+    xc = c[0] / 2.0
+    yc = c[1] / 2.0
+    val = c[2] + xc**2 + yc**2
+    if val <= 0:
+        return np.array([xc, yc]), 1.0, 999.0
+    r = np.sqrt(val)
+    
+    distances = np.abs(np.sqrt((x - xc)**2 + (y - yc)**2) - r)
+    mean_error = np.mean(distances)
+    return np.array([xc, yc]), r, mean_error
+
+def check_angular_coverage(points_2d, center):
+    """
+    Computes angular coverage (in radians) of boundary points around the center.
+    A full circle covers ~2*pi (6.28), a half circle covers ~pi (3.14).
+    """
+    angles = np.arctan2(points_2d[:, 1] - center[1], points_2d[:, 0] - center[0])
+    angles = np.sort(angles)
+    
+    # Calculate angular differences between consecutive sorted points
+    diffs = np.diff(angles)
+    # Wrap-around gap from last to first point
+    diffs = np.append(diffs, (angles[0] + 2 * np.pi) - angles[-1])
+    
+    max_gap = np.max(diffs)
+    span = 2 * np.pi - max_gap
+    return span
+
+def circle_shape_check_2d(points, save_path=None, should_plot=False, threshold=0.5):
+    if 'o3d' in globals() and isinstance(points, o3d.t.geometry.PointCloud):
+        points = points.point[get_coordinate_attribute(points)].numpy()
+
+    points = np.asarray(points)
+    points_2d = points[:, :2]
+
+    if len(points_2d) < 8:
+        return False, {"score": 0.0, "shape_type": "none", "reason": "Too few points"}
+
+    # 1. Convex Hull & Circularity
+    try:
+        hull = ConvexHull(points_2d)
+        area = hull.volume
+        perimeter = hull.area
+        circularity = (4 * np.pi * area) / (perimeter ** 2 + 1e-8)
+        hull_pts = points_2d[hull.vertices]
+    except QhullError:
+        return False, {"score": 0.0, "shape_type": "none", "reason": "Degenerate hull"}
+
+    # 2. Fit Circle to Hull Boundary
+    center_2d, r, mean_dist_error = fit_circle_least_squares_2d(hull_pts)
+    rel_fit_error = mean_dist_error / (r + 1e-8)
+    
+    # 3. Check Angular Span around the center
+    angular_span = check_angular_coverage(hull_pts, center_2d)
+
+    # 4. Separate Tests for Full Circle vs. Half Circle
+    # Full circle: high circularity, low fit error, span near 2*pi (e.g. > 5.0 rad / ~286 deg)
+    is_full = (circularity > 0.72) and (rel_fit_error < 0.18) and (angular_span > 4.8)
+
+    # Half circle:
+    # - Circularity of ideal semicircle is ~0.74, discretized on pixel grid ~0.50-0.72
+    # - Angular span around center is near pi (between 2.2 rad (~125 deg) and 4.2 rad (~240 deg))
+    # - Relative fit error on arc points: allow slightly higher tolerance (<= 0.25)
+    is_half = (0.48 <= circularity <= 0.75) and (rel_fit_error < 0.25) and (2.2 <= angular_span <= 4.2)
+
+    detected_shape = "none"
+    score = 0.0
+
+    if is_full:
+        detected_shape = "full_circle"
+        score = 1.0
+    elif is_half:
+        detected_shape = "half_circle"
+        score = 0.85
+    else:
+        # Partial soft score
+        score = max(0.0, 1.0 - rel_fit_error) * (circularity / 0.8)
+
+    is_circle_ = (is_full or is_half) and (score >= threshold)
+
+    # 5. Visualization
+    if should_plot or save_path is not None:
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.scatter(points_2d[:, 1], points_2d[:, 0], s=8, alpha=0.3, label="Mask Points")
+
+        hull_plot = np.vstack([hull_pts, hull_pts[0]])
+        ax.plot(hull_plot[:, 1], hull_plot[:, 0], 'r-', lw=2, label="Convex Hull")
+
+        theta = np.linspace(0, 2 * np.pi, 100)
+        circle_x = center_2d[0] + r * np.cos(theta)
+        circle_y = center_2d[1] + r * np.sin(theta)
+        ax.plot(circle_y, circle_x, 'b--', lw=1.5, label="Fitted Circle")
+
+        ax.set_aspect("equal")
+        ax.invert_yaxis()
+        ax.legend()
+        ax.set_title(f"Shape Check: {detected_shape.upper()} ({'PASS' if is_circle_ else 'FAIL'})")
+
+        stats_text = (
+            f"Type: {detected_shape}\n"
+            f"Circularity: {circularity:.3f}\n"
+            f"Rel Fit Err: {rel_fit_error:.3f}\n"
+            f"Angular Span: {np.degrees(angular_span):.1f}°\n"
+            f"Radius (px): {r:.1f}\n"
+            f"Score: {score:.2f}"
+        )
+        ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
+
+        if save_path:
+            plt.savefig(save_path, bbox_inches='tight')
+        if should_plot:
+            plt.show()
+        plt.close(fig)
+
+    return is_circle_, {
+        "is_circle": is_circle_,
+        "shape_type": detected_shape,
+        "circularity": circularity,
+        "angular_span_deg": np.degrees(angular_span),
+        "rel_fit_error": rel_fit_error,
+        "radius": r,
+        "score": score
+    }
+
+
+
+
+
+
+
+
 
 
 

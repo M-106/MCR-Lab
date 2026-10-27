@@ -29,39 +29,39 @@ gt_extraction:
     debugging_path: "./output"  # None or "/path"
 
 center_eval:
-    center_extraction_method: "edge_peak_maxima"
+    center_extraction_method: "polygon_centroid"
     # "polygon_centroid", "circle_least_squares", "peak_maxima"
     #    2D:
     #     # for segmentations
-    #     "polygon_centroid": extract_center_polygon_centroid,
-    #     "circle_least_squares": extract_center_circle_least_squares,
-    #     "hough_least_squares": extract_center_hough_least_squares,
-    #     "ellipse_fit": extract_center_ellipse_fit,
-    #     "distance_transform": extract_center_distance_transform,
-    #     "least_square_radius": extract_center_least_square_radius,
+    #     "polygon_centroid"
+    #     "circle_least_squares"
+    #     "hough_least_squares"
+    #     "ellipse_fit"
+    #     "distance_transform"
+    #     "least_square_radius"
 
-    #     # for heatmaps
-    #     "intensity_weighted_center": extract_center_intensity_weighted,
-    #     "peak_maxima": extract_center_peak_maxima,
-    #     "edge_peak_maxima":extract_edge_aware_maxima_peak,
-    #     "template_matching":extract_center_template_matching,
+    #     # for heatmaps -> don't forget to set heatmap in data path
+    #     "intensity_weighted_center"
+    #     "peak_maxima"
+    #     "edge_peak_maxima"
+    #     "template_matching"
     #
     #    3D:
-    #     "polygon_centroid_3d": extract_3d_center_polygon_centroid,               # Basic Mean
-    #     "bbox_median_z": extract_3d_center_bbox_median,                       # Better: ignores density bias & Z-noise
-    #     "pca_plane_circle_least_squares": extract_3d_center_pca_plane_circle 
+    #     "polygon_centroid_3d"              # Basic Mean
+    #     "bbox_median_z"                    # Better: ignores density bias & Z-noise
+    #     "pca_plane_circle_least_squares"
     center_pred_path: "./output/center_preds"
     save_debug_plots: False
     gt_json_file_paths: ["F:/src/MCR-Lab/output/center_gt/center_ground_truth_whu_test_squares.json", "F:/src/MCR-Lab/output/center_gt/center_ground_truth_sud_test_squares.json"]
-    min_input_points: 1000    # -1 to deactivate
+    min_input_points: 2000    # -1 to deactivate
     min_confidences: [0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 0.99]  # [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.75, 0.8, 0.85, 0.9, 0.95]  # [0.1, 0.5, 0.9]
     min_confidence_peak: 0.4
-    candidate_min_points: 200
+    candidate_min_points: 350  # increase me
     # run_in_only_pred_save_mode: True
     # pred_save_mode_saving_name: "2D_Seg_UNet_Segformer"
     run_mode: "load"  # save, load, normal (everything else)
-    pred_save_load_mode_saving_name: "HEATMAP_UNET_EFFICIENTNET"
-    pred_save_load_mode_saving_path: "F:/Fraunhofer_Backup/saved_final_preds"  # "./saved_preds"
+    pred_save_load_mode_saving_name: "SEG_UNET_EFFICIENTNET"
+    pred_save_load_mode_saving_path: "F:/Fraunhofer_Backup/saved_final_preds"  # "./saved_preds"  "/out/saved_preds"
     clear_pred_save_load_only_model_folder: False
     clear_pred_save_load_folder: False
     process_3d_mode: "2d"   # 2d for projection or 3d for native usage, but choose extraction method carefully
@@ -143,7 +143,7 @@ data:
   # "D:/data/whu3d-dataset-wo-test-label"
   preprocessed: True
   type: test   # train, test, val, all, load_unsplitted (sud special)
-  heatmap_path: "F:/Fraunhofer_Backup/data/2d_gt_patches_on_raw_pc"  # "F:/Fraunhofer_Backup/data/2d_gt_patches_on_raw_pc"  #  /data/heatmap       # "/data/2d_gt_patches"   # "/data/2d_gt_patches" -> 10, 20, 60  # "/data/2d_gt_patches_v2" -> what is that  # None
+  heatmap_path: None   # "F:/Fraunhofer_Backup/data/2d_gt_patches_on_raw_pc"  #  /data/heatmap       # "/data/2d_gt_patches"   # "/data/2d_gt_patches" -> 10, 20, 60  # "/data/2d_gt_patches_v2" -> what is that  # None
   used_heatmap_channel: 2 # FIXME how to know how big the centers are? -> must be the ground truth data
   normalization: True
   normalization_mode: "global_standard"  # "local_minmax", "global_minmax", "global_standard"

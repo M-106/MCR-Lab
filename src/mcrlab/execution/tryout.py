@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.ticker as ticker
 import matplotlib.patches as mpatches
+import matplotlib as mpl
 import torch
 import open3d as o3d
 
@@ -35,7 +36,7 @@ from mcrlab.point_cloud.data import ParisLille3DDataset, get_data_loader, get_ba
 from mcrlab.point_cloud.inspect import print_pc, visualize, visualize_intensity_in_2d, \
                                        analyze_point_distribution
 from mcrlab.point_cloud.tensor_wrapper import PointCloudTensor
-from mcrlab.projection import bev_projection, bev_projection_testing, bev_back_projection_testing
+from mcrlab.projection import bev_projection, bev_projection_testing, bev_back_projection_testing, project_3d_to_2d_bev
 from mcrlab.image.utils import normalize_img_per_channel
 from mcrlab.image.io import save_bev_tiles_as_images
 from mcrlab.models.segmentation import SegFormer, SAM2, SAM3, DinoMask2Former
@@ -49,7 +50,6 @@ from mcrlab.traditional.utils import visualize_circle_fit, visualize_circle_shap
                                  visualize_ransac_inliers
 from mcrlab.point_cloud.shape_check import circle_shape_check
 from mcrlab.point_cloud.monte_carlo_simulation import eval_center_robustness, generate_realistic_manhole
-# from mcrlab.helper import save_dir_creation
 
 
 
@@ -6018,53 +6018,233 @@ def make_dataset_analysis(config):
 # ---------------------------
 # > Saved Predictions Check <
 # ---------------------------
-def plot_prediction_check(bev_input, gt_label, raw_pred, binary_pred, title, subtitle, save_path):
+def plot_prediction_check(
+    bev_input,
+    gt_label_2d,
+    raw_pred_2d,
+    binary_pred_2d,
+    title,
+    subtitle,
+    save_path,
+    is_3d=False,
+    pts_3d=None,
+    probs_3d=None,
+    binary_pred_3d=None,
+    clusters_3d=None,
+    gt_pts_3d=None
+):
     """
-    Erstellt ein 4-Panel-Kontrollbild (BEV, GT, Raw Heatmap, Binarisiert).
+    Erstellt ein Kontrollbild mit stabilem constrained_layout und 
+    unsichtbaren Platzhalter-Farbbalken für ein perfektes Raster.
     """
-    fig, axes = plt.subplots(1, 4, figsize=(18, 4.5), layout="constrained")
+    nrows = 2 if is_3d else 1
+    figsize = (20, 12) if is_3d else (18, 5.2)
 
-    fig.get_layout_engine().set(rect=(0, 0, 1, 0.92))
-    # fig.subplots_adjust(top=0.82, wspace=0.3)
+    # Constrained layout beibehalten für automatisches, sauberes Alignment
+    fig = plt.figure(figsize=figsize, layout="constrained")
+    fig.get_layout_engine().set(rect=(0, 0, 1, 0.91))
+
+    # Hilfsfunktion für unsichtbare Platzhalter-Farbbalken
+    def add_invisible_colorbar(ax):
+        norm = mpl.colors.Normalize(vmin=0, vmax=1)
+        sm = mpl.cm.ScalarMappable(norm=norm, cmap="gray")
+        cbar = fig.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.046, pad=0.08, shrink=0.85)
+        cbar.ax.set_xticks([])
+        cbar.ax.xaxis.set_ticklabels([])
+        cbar.ax.patch.set_alpha(0.0)
+        cbar.outline.set_visible(False)
+        return cbar
+
+    # =========================================================
+    # ROW 1: 2D PIPELINE VIEW (BEV & 2D-Projektion)
+    # =========================================================
+    ax_2d = [fig.add_subplot(nrows, 4, i + 1) for i in range(4)]
 
     # 1. BEV Image aufbereiten
-    bev = bev_input.detach().cpu().numpy() if hasattr(bev_input, "detach") else bev_input
+    bev = bev_input.detach().cpu().numpy() if hasattr(bev_input, "detach") else np.array(bev_input)
     bev = np.squeeze(bev)
-    if bev.ndim == 3 and bev.shape[0] in [1, 3]:  # [C, H, W] -> [H, W, C]
+    if bev.ndim == 3 and bev.shape[0] in [1, 3, 4]:  # [C, H, W] -> [H, W, C]
         bev = np.transpose(bev, (1, 2, 0))
     if bev.ndim == 3 and bev.shape[-1] == 1:
         bev = bev[..., 0]
+    elif bev.ndim == 3 and bev.shape[-1] > 3:
+        bev = bev[..., :3]
 
-    axes[0].imshow(bev, cmap="plasma")
-    axes[0].set_title("Input (BEV)")
+    if bev.ndim == 3:
+        bev = bev[..., 1]
 
-    # 2. Ground Truth
-    gt = gt_label.detach().cpu().numpy() if hasattr(gt_label, "detach") else gt_label
-    axes[1].imshow(np.squeeze(gt), cmap="tab10", vmin=0, vmax=1)
-    axes[1].set_title("Ground Truth")
+    im0 = ax_2d[0].imshow(bev, cmap="plasma" if bev.ndim == 2 else None)
+    ax_2d[0].set_title("2D Input Intensity")
+    fig.colorbar(im0, ax=ax_2d[0], orientation="horizontal", fraction=0.046, pad=0.08, shrink=0.85, label="Intensity")
 
-    # 3. Raw Prediction (.npy)
-    raw = np.squeeze(raw_pred)
-    im3 = axes[2].imshow(raw, cmap="viridis", vmin=0.0, vmax=1.0)
-    axes[2].set_title(f"Loaded Raw Prediction (Max: {raw.max():.2f})")
-    fig.colorbar(im3, ax=axes[2], fraction=0.046, pad=0.04)
+    # 2. Ground Truth (2D) - Erhält unsichtbaren Farbbalken für exakten Platzhalter
+    gt_2d = gt_label_2d.detach().cpu().numpy() if hasattr(gt_label_2d, "detach") else np.array(gt_label_2d)
+    gt_2d = np.squeeze(gt_2d)
+    gt_pos_pixels = int(np.sum(gt_2d > 0))
+    ax_2d[1].imshow(gt_2d, cmap="tab10", vmin=0, vmax=1)
+    ax_2d[1].set_title(f"2D Ground Truth (Pos px: {gt_pos_pixels})")
+    add_invisible_colorbar(ax_2d[1])
 
-    # 4. Binarisierte Maske
-    axes[3].imshow(np.squeeze(binary_pred), cmap="gray")
-    axes[3].set_title("Binarized Pred")
+    # 3. Raw Prediction 2D
+    raw_2d = np.squeeze(raw_pred_2d)
+    im3 = ax_2d[2].imshow(raw_2d, cmap="viridis", vmin=0.0, vmax=1.0)
+    prefix_title = "2D Projected Raw" if is_3d else "Loaded Raw Pred"
+    ax_2d[2].set_title(f"{prefix_title} (Max: {raw_2d.max():.2f})")
+    fig.colorbar(im3, ax=ax_2d[2], orientation="horizontal", fraction=0.046, pad=0.08, shrink=0.85, label="Probability")
 
-    for ax in axes:
+    # 4. Binarisierte Maske 2D - Erhält ebenfalls unsichtbaren Farbbalken
+    bin_2d = np.squeeze(binary_pred_2d)
+    ax_2d[3].imshow(bin_2d, cmap="gray", vmin=0, vmax=1)
+    ax_2d[3].set_title(f"2D Binarized Pred (Pos px: {int(np.sum(bin_2d > 0))})")
+    add_invisible_colorbar(ax_2d[3])
+
+    for ax in ax_2d:
         ax.axis("off")
 
+    # =========================================================
+    # ROW 2: 3D PIPELINE VIEW (Point Cloud Scatter)
+    # =========================================================
+    if is_3d and pts_3d is not None and len(pts_3d) > 0:
+        pos_mask = (probs_3d >= 0.2) if probs_3d is not None else np.zeros(len(pts_3d), dtype=bool)
+        bg_idx = np.where(~pos_mask)[0]
+        fg_idx = np.where(pos_mask)[0]
+
+        max_bg = max(1000, 25000 - len(fg_idx))
+        if len(bg_idx) > max_bg:
+            bg_idx = np.random.choice(bg_idx, max_bg, replace=False)
+        keep_idx = np.concatenate([bg_idx, fg_idx])
+
+        p_sub = pts_3d[keep_idx]
+        prob_sub = probs_3d[keep_idx] if probs_3d is not None else np.zeros(len(keep_idx))
+        bin_sub = binary_pred_3d[keep_idx] if binary_pred_3d is not None else np.zeros(len(keep_idx))
+        clust_sub = clusters_3d[keep_idx] if clusters_3d is not None else bin_sub
+        gt_3d_sub = gt_pts_3d[keep_idx] if gt_pts_3d is not None and len(gt_pts_3d) == len(pts_3d) else None
+
+        ax_3d = [fig.add_subplot(nrows, 4, i + 5, projection="3d") for i in range(4)]
+
+        # 1. 3D Input (Colored by Height Z)
+        sc0 = ax_3d[0].scatter(
+            p_sub[:, 0], p_sub[:, 1], p_sub[:, 2],
+            c=p_sub[:, 2], cmap="plasma", s=1.5, alpha=0.8
+        )
+        ax_3d[0].set_title(f"3D Input Points (N={len(pts_3d)})")
+        fig.colorbar(sc0, ax=ax_3d[0], orientation="horizontal", fraction=0.046, pad=0.12, shrink=0.85, label="Z (Height)")
+
+        # 2. 3D Ground Truth - Erhält unsichtbaren Platzhalter
+        if gt_3d_sub is not None:
+            gt_colors = (gt_3d_sub > 0).astype(int)
+            ax_3d[1].scatter(
+                p_sub[:, 0], p_sub[:, 1], p_sub[:, 2],
+                c=gt_colors, cmap="coolwarm",
+                s=np.where(gt_colors > 0, 5.0, 1.0), vmin=0, vmax=1
+            )
+            ax_3d[1].set_title(f"3D Ground Truth (Pos pts: {int(np.sum(gt_pts_3d > 0))})")
+        else:
+            ax_3d[1].scatter(p_sub[:, 0], p_sub[:, 1], p_sub[:, 2], c="lightgray", s=1.0, alpha=0.5)
+            ax_3d[1].set_title("3D Space Reference")
+        add_invisible_colorbar(ax_3d[1])
+
+        # 3. 3D Raw Probabilities
+        sort_order = np.argsort(prob_sub)
+        p_sorted = p_sub[sort_order]
+        prob_sorted = prob_sub[sort_order]
+        sizes_prob = np.where(prob_sorted >= 0.5, 6.0, 1.5)
+
+        sc2 = ax_3d[2].scatter(
+            p_sorted[:, 0], p_sorted[:, 1], p_sorted[:, 2],
+            c=prob_sorted, cmap="viridis", vmin=0.0, vmax=1.0, s=sizes_prob, alpha=0.9
+        )
+        ax_3d[2].set_title(f"3D Raw Probs (Max: {probs_3d.max():.2f})")
+        fig.colorbar(sc2, ax=ax_3d[2], orientation="horizontal", fraction=0.046, pad=0.12, shrink=0.85, label="Probability")
+
+        # 4. 3D Binarized & DBSCAN Clusters - Erhält unsichtbaren Platzhalter
+        bg_mask = clust_sub == 0
+        fg_mask = clust_sub > 0
+
+        ax_3d[3].scatter(
+            p_sub[bg_mask, 0], p_sub[bg_mask, 1], p_sub[bg_mask, 2],
+            c="lightgray", s=1.0, alpha=0.3, label="Background"
+        )
+        if np.any(fg_mask):
+            ax_3d[3].scatter(
+                p_sub[fg_mask, 0], p_sub[fg_mask, 1], p_sub[fg_mask, 2],
+                c=clust_sub[fg_mask], cmap="tab10", s=8.0, alpha=1.0, label="Clusters"
+            )
+        num_clusters = int(clusters_3d.max()) if clusters_3d is not None else int(binary_pred_3d.max())
+        ax_3d[3].set_title(f"3D Binarized / DBSCAN (Clusters: {num_clusters})")
+        add_invisible_colorbar(ax_3d[3])
+
+        for ax in ax_3d:
+            ax.view_init(elev=55, azim=-60)
+            ax.set_xlabel("X", fontsize=8)
+            ax.set_ylabel("Y", fontsize=8)
+            ax.set_zlabel("Z", fontsize=8)
+            ax.tick_params(axis="both", which="major", labelsize=7)
+            ax.invert_yaxis()
+
     fig.suptitle(title, fontsize=15, fontweight="bold")
-    fig.text(
-        0.5, 0.93, 
-        subtitle,
-        ha="center", fontsize=10, color="gray"
-    )
-    # plt.tight_layout()
-    plt.savefig(save_path, bbox_inches="tight", dpi=130)
+    fig.text(0.5, 0.925, subtitle, ha="center", fontsize=10, color="gray")
+
+    plt.savefig(save_path, bbox_inches="tight", dpi=300)
     plt.close()
+
+
+def apply_confidence_threshold(preds_squeezed, valid_mask, min_confidence):
+    """
+    Applies a specific min_confidence threshold to the loaded prediction
+    without modifying the original array in-place.
+    """
+    if valid_mask is not None:
+        preds_binary = ((preds_squeezed >= min_confidence) & np.squeeze(valid_mask)).astype(np.uint8)
+    else:
+        preds_binary = (preds_squeezed >= min_confidence).astype(np.uint8)
+
+    preds_binary = np.squeeze(preds_binary)
+    preds_prob = preds_squeezed * preds_binary
+    return preds_prob, preds_binary
+
+
+def extract_dataset_patch_keys(dataset, prefix_name):
+    """
+    Extracts all expected patch keys (e.g. 'whu_0414_0_0') from a dataset
+    so we can verify if any patches were skipped (e.g., < 1000 points).
+    """
+    expected_keys = set()
+
+    for path in dataset.point_cloud_paths:
+        _, input_string = os.path.split(path)
+        input_string = ".".join(input_string.split(".")[:-1])
+        input_string = input_string.replace("preprocessed_patch_bev_", "").replace("preprocessed_patch_", "")
+        pc_id, x_start, y_start = input_string.split("_")[:3]
+        expected_keys.add(f"{prefix_name}_{pc_id}_{x_start}_{y_start}.npy")
+    return expected_keys
+
+
+def _lookup_patch(dataset, pc_id, x_start, y_start):
+    """
+    Tries looking up the patch with string arguments first, then int/float
+    in case get_patch_via_identifier expects numeric coordinates.
+    """
+    # 1. Try strings as parsed from filename
+    try:
+        gen = dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True)
+        return next(gen)
+    except StopIteration:
+        pass
+
+    # 2. Try integer coordinates
+    try:
+        gen = dataset.get_patch_via_identifier(pc_id, int(x_start), int(y_start), return_generator=True)
+        return next(gen)
+    except (ValueError, StopIteration):
+        pass
+
+    # 3. Try float coordinates
+    try:
+        gen = dataset.get_patch_via_identifier(pc_id, float(x_start), float(y_start), return_generator=True)
+        return next(gen)
+    except (ValueError, StopIteration):
+        raise StopIteration(f"Patch {pc_id}_{x_start}_{y_start} not found with str, int, or float keys.")
 
 
 def run_prediction_verification(
@@ -6073,18 +6253,29 @@ def run_prediction_verification(
     output_vis_dir="./output/pred_verification_plots",
     samples_to_plot_per_model=5,
     min_confidence_plot=0.5,
-    ignore_index=255
+    ignore_index=255,
+    expected_patch_keys=None,
+    min_points_threshold=1000
 ):
     """
-    Durchsucht root_pred_dir nach Modellunterordnern, verifiziert numerische
-    Eigenschaften aller .npy-Dateien und erzeugt Stichproben-Plots.
+    Scans root_pred_dir for model subdirectories (2D and 3D), verifies numerical
+    properties of all .npy files, checks for missing/skipped small patches,
+    and generates sample plots (in 2D & 3D for 3D models).
+
+    Args:
+        expected_patch_keys: Optional set/list of expected patch filenames (without .npy),
+                             e.g. {'whu_0414_0_0', ...}, or a callable(dataset, prefix) -> set.
+        min_points_threshold: Point count threshold to track small 3D point clouds (default: 1000).
     """
     root_path = Path(root_pred_dir)
     if not root_path.exists():
-        raise FileNotFoundError(f"Verzeichnis existiert nicht: {root_pred_dir}")
+        raise FileNotFoundError(f"Directory does not exist: {root_pred_dir}")
 
-    # load data
-    base_loader = get_data_loader(
+    candidate_min_points = getattr(config.center_eval, "candidate_min_points", 10)
+    closing_struct = generate_binary_structure(2, 2)
+
+    # 1. Load datasets (WHU & SUD)
+    base_loader_whu = get_data_loader(
         config.data.name,
         config.data.path,
         type="all",
@@ -6098,10 +6289,8 @@ def run_prediction_verification(
         bev_normalized=False,
         bev_normalize_mode="local_minmax",
     )
-    all_paths = base_loader.point_cloud_paths
-
     dataset_whu = BEVDataset(
-        path=all_paths,
+        path=base_loader_whu.point_cloud_paths,
         file_paths=[],
         has_labels=True,
         image_training=True,
@@ -6111,7 +6300,7 @@ def run_prediction_verification(
         normalization_mode="local_minmax",
     )
 
-    base_loader = get_data_loader(
+    base_loader_sud = get_data_loader(
         config.data.name_2,
         config.data.path_2,
         type="all",
@@ -6125,10 +6314,8 @@ def run_prediction_verification(
         bev_normalized=config.data.normalization,
         bev_normalize_mode=config.data.normalization_mode,
     )
-    all_paths = base_loader.point_cloud_paths
-
     dataset_sud = BEVDataset(
-        path=all_paths,
+        path=base_loader_sud.point_cloud_paths,
         file_paths=[],
         has_labels=True,
         image_training=True,
@@ -6138,191 +6325,536 @@ def run_prediction_verification(
         normalization_mode="local_minmax",
     )
 
-    # Alle Modellordner finden
-    model_dirs = [d for d in root_path.iterdir() if d.is_dir()]
+    # 2. Find all model directories
+    model_dirs = sorted([d for d in root_path.iterdir() if d.is_dir()])
     if not model_dirs:
-        print(f"[WARN] Keine Unterordner in {root_pred_dir} gefunden.")
+        print(f"[WARN] No subdirectories found in {root_pred_dir}.")
         return
 
-    print(f"Gefundene Modelle: {len(model_dirs)} -> {[d.name for d in model_dirs]}")
+    print(f"Found models: {len(model_dirs)} -> {[d.name for d in model_dirs]}")
+
+    # Build reference set of all patch keys across all models (plus any explicitly provided expected keys)
+    all_seen_patch_keys = set()
+    for d in model_dirs:
+        for f in glob.glob(os.path.join(d, "*.npy")):
+            if not f.endswith("_TIME.npy"):
+                all_seen_patch_keys.add(Path(f).stem)
+
+    if expected_patch_keys is not None:
+        ref_patch_keys = set(expected_patch_keys)
+    else:
+        ref_patch_keys = None
 
     summary_report = {}
-    summary_report_str = "SAVED PREDICTION REPORT/CHECK\n\n"
+    summary_report_str = "SAVED PREDICTION REPORT/CHECK (2D & 3D)\n\n"
+    summary_report_str += f"Total Reference Patch Keys (Union across datasets/models): {len(ref_patch_keys)}\n"
 
     for model_dir in model_dirs:
         model_name = model_dir.name
         print(f"\n==========================================")
-        print(f"Prüfe Modell: {model_name}")
+        print(f"Checking Model: {model_name}")
         print(f"==========================================")
 
-        # Nur Vorhersagedateien (TIME.npy ausschließen)
-        pred_files = [
-            f for f in glob.glob(os.path.join(model_dir, "*.npy")) 
+        pred_files = sorted([
+            f for f in glob.glob(os.path.join(model_dir, "*.npy"))
             if not f.endswith("_TIME.npy")
-        ]
+        ])
 
         if not pred_files:
-            print(f"[WARN] Keine Vorhersagedateien in {model_dir} gefunden.")
+            print(f"[WARN] No prediction files found in {model_dir}.")
             continue
 
         model_plot_dir = Path(output_vis_dir) / model_name
         model_plot_dir.mkdir(parents=True, exist_ok=True)
 
+        model_patch_keys = {Path(f).stem for f in pred_files}
+        missing_patches = sorted(list(ref_patch_keys - model_patch_keys))
+
         stats = {
+            "model_type": "Unknown",
             "total_files": len(pred_files),
+            "expected_files": len(ref_patch_keys),
+            "missing_or_skipped_files": len(missing_patches),
+            "missing_patch_examples": missing_patches[:10],
+            "small_point_clouds (<1000 pts)": 0,
             "valid_files": 0,
             "nan_or_inf": 0,
             "out_of_bounds": 0,
             "missing_time_files": 0,
+            "corrupt_3d_dicts": 0,
+            "empty_2d_projections": 0,
             "shapes_seen": set(),
         }
 
-        # Bevorzugt Stichproben mit echten Detektionen plotten
         plotted_samples = 0
 
-        for file_path in tqdm(pred_files, desc=f"Validating {model_name}"):
-            file_name = Path(file_path).stem  # e.g. "{pc_id}_{x_start}_{y_start}"
+        for idx, file_path in enumerate(tqdm(pred_files, desc=f"Validating {model_name}")):
+            file_name = Path(file_path).stem  # e.g. "whu_0414_0_0"
 
-            # if file_name.lower().startswith("3d"):
-            #     continue
-            
             # 1. Time file check
             time_file = file_path.replace(".npy", "_TIME.npy")
             if not os.path.exists(time_file):
                 stats["missing_time_files"] += 1
 
-            # 2. Parse Filename securely
-            # e.g., "whu_0414_0_0" -> prefix="whu_0414", x="0", y="0"
+            # 2. Parse filename
             try:
                 prefix, x_start, y_start = file_name.rsplit("_", 2)
-                dataset_str, pc_id = prefix.split("_", 1) # splits "whu" and "0414"
+                dataset_str, pc_id = prefix.split("_", 1)
             except ValueError:
-                print(f"[WARN] Dateiname unerwartet formatiert: {file_name}")
+                print(f"[WARN] Unexpected filename format: {file_name}")
                 continue
 
-            # 3. Load Data & Extract 3D dicts
+            # 3. Load prediction & distinguish 2D vs. 3D
             try:
-                # allow_pickle=True is REQUIRED for the 3D dictionaries
                 raw_pred = np.load(file_path, allow_pickle=True)
             except Exception as e:
-                print(f"[ERROR] Fehler beim Laden von {file_path}: {e}")
+                print(f"[ERROR] Failed to load {file_path}: {e}")
                 continue
 
             is_3d = False
-            # Check if it's a 3D dictionary
+            pts_3d_world = None
+            pts_3d_local = None
+
             if isinstance(raw_pred, np.ndarray) and raw_pred.dtype == object:
-                loaded_dict = raw_pred.item()
-                
-                # Apply the same scaling and slicing as center_eval
-                pts_3d_local = loaded_dict["points"]
-                centroid = loaded_dict.get("centroid", np.zeros(3))
-                scale = loaded_dict.get("scale", 1.0)
-                
-                xyz_local = pts_3d_local[:, :3]
-                pts_3d_world = (xyz_local * scale) + centroid
-                
-                probs_array = loaded_dict["probs"]
                 is_3d = True
+                stats["model_type"] = "3D"
+                loaded_dict = raw_pred.item()
+
+                required_keys = {"points", "probs", "centroid", "scale"}
+                if not isinstance(loaded_dict, dict) or not required_keys.issubset(loaded_dict.keys()):
+                    stats["corrupt_3d_dicts"] += 1
+                    continue
+
+                pts_3d_local = loaded_dict["points"]
+                probs_array = loaded_dict["probs"]
+                centroid = loaded_dict["centroid"]
+                scale = loaded_dict["scale"]
+
+                if len(pts_3d_local) != len(probs_array):
+                    stats["corrupt_3d_dicts"] += 1
+                    continue
+
+                if len(pts_3d_local) < min_points_threshold:
+                    stats["small_point_clouds (<1000 pts)"] += 1
+
+                xyz_local = pts_3d_local[:, :3]
+                # denormalize
+                pts_3d_world = xyz_local + centroid
+                # if scale is None or np.all(scale == -999) or np.all(scale <= 0):
+                #     pts_3d_world = xyz_local + centroid
+                # else:
+                #     pts_3d_world = (xyz_local * scale) + centroid
             else:
+                stats["model_type"] = "2D"
                 probs_array = raw_pred
 
-            # 4. Numerical Checks (Using the extracted probabilities)
-            stats["shapes_seen"].add(probs_array.shape)
+            # 4. Numerical checks
+            stats["shapes_seen"].add(probs_array.shape if not is_3d else ("N_pts", probs_array.ndim))
 
-            if np.isnan(probs_array).any() or np.isinf(probs_array).any():
+            has_nan_inf = np.isnan(probs_array).any() or np.isinf(probs_array).any()
+            if is_3d and pts_3d_world is not None:
+                has_nan_inf = has_nan_inf or np.isnan(pts_3d_world).any() or np.isinf(pts_3d_world).any()
+
+            if has_nan_inf:
                 stats["nan_or_inf"] += 1
                 continue
 
-            # Check interval [0, 1]
             if (probs_array < -1e-4).any() or (probs_array > 1.0001).any():
                 stats["out_of_bounds"] += 1
 
             stats["valid_files"] += 1
 
-            # 5. Visual Check Generation
+            # 5. Visual inspection (2D & 3D Plots)
             has_detection = (probs_array >= min_confidence_plot).any()
-            should_plot = (plotted_samples < samples_to_plot_per_model) and \
-                          (has_detection or (len(pred_files) - plotted_samples <= samples_to_plot_per_model))
+            should_try_plot = (plotted_samples < samples_to_plot_per_model) and has_detection
 
-            if should_plot:
+            if should_try_plot:
                 dataset = dataset_whu if dataset_str.lower() == "whu" else dataset_sud
 
                 try:
-                    patch_dict = next(dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True))
+                    patch_dict = _lookup_patch(dataset, pc_id, x_start, y_start)
                     bev_input = patch_dict["pixel_values"]
                     gt_labels = patch_dict["labels"]
                     meta = patch_dict["meta"]
 
-                    # If 3D, project the probabilities into a 2D BEV Grid for imshow
-                    if is_3d:
-                        orig_h = int(meta["tile_size"] / meta["resolution"])
-                        orig_w = orig_h
-                        grid_prob = np.zeros((orig_h, orig_w), dtype=np.float32)
-                        
-                        col_indices = np.floor((pts_3d_world[:, 0] - meta["origin_x"]) / meta["resolution"]).astype(int)
-                        row_indices = np.floor((pts_3d_world[:, 1] - meta["origin_y"]) / meta["resolution"]).astype(int)
-                        
-                        valid_idx = (col_indices >= 0) & (col_indices < orig_w) & \
-                                    (row_indices >= 0) & (row_indices < orig_h)
-                        
-                        np.maximum.at(grid_prob, (row_indices[valid_idx], col_indices[valid_idx]), probs_array[valid_idx])
-                        raw_pred_2d = grid_prob
-                    else:
-                        raw_pred_2d = probs_array
+                    # Prepare GT mask (robustly handling both {0, 1} and {0, 255} label encodings)
+                    gt_np = gt_labels.detach().cpu().numpy() if hasattr(gt_labels, "detach") else np.array(gt_labels)
+                    gt_np = np.squeeze(gt_np)
+                    valid_mask_2d = (gt_np != ignore_index) if gt_np is not None else None
 
-                    # Binarization & valid mask handling
-                    gt_np = gt_labels.detach().cpu().numpy() if hasattr(gt_labels, "detach") else gt_labels
-                    valid_mask = (gt_np != ignore_index) if gt_np is not None else None
+                    # Support gt == 1 or any positive label != ignore_index
+                    binary_gt_2d = (gt_np > 0) & (gt_np != ignore_index)
+                    binary_gt_2d = binary_closing(binary_gt_2d, structure=closing_struct, iterations=8).astype(np.uint8)
+                    pixel_count = int(np.sum(binary_gt_2d))
 
-                    binary_mask = (gt_np == 1)
-                    struct = generate_binary_structure(2, 2)
-                    binary_mask = binary_closing(binary_mask, structure=struct, iterations=8).astype(np.uint8)
-                    pixel_count = int(np.sum(binary_mask))
-
-                    if pixel_count < 100:
+                    # Only plot patches that actually contain Ground Truth objects
+                    if pixel_count < 10:
                         continue
 
-                    binary_pred = (raw_pred_2d >= min_confidence_plot)
-                    if valid_mask is not None:
-                        binary_pred = binary_pred & np.squeeze(valid_mask)
-                    binary_pred = binary_pred.astype(np.uint8)
+                    if is_3d:
+                        # --- A) 3D -> 2D Pipeline ---
+                        raw_pred_2d, valid_idx, row_indices, col_indices = project_3d_to_2d_bev(
+                            pts_3d_world, probs_array, meta
+                        )
 
-                    plot_title = f"Prediction Sample: {model_name}"
+                        if np.sum(valid_idx) == 0:
+                            stats["empty_2d_projections"] += 1
+
+                        orig_h, orig_w = raw_pred_2d.shape
+                        grid_binary = np.zeros((orig_h, orig_w), dtype=np.uint8)
+                        bin_mask_1d = (probs_array[valid_idx] >= min_confidence_plot).astype(np.uint8)
+                        np.maximum.at(grid_binary, (row_indices[valid_idx], col_indices[valid_idx]), bin_mask_1d)
+
+                        binary_pred_2d = binary_closing(grid_binary, structure=closing_struct, iterations=8).astype(np.uint8)
+                        if valid_mask_2d is not None:
+                            binary_pred_2d = binary_pred_2d & valid_mask_2d
+
+                        # --- B) 3D Native Pipeline ---
+                        mask_3d = probs_array >= min_confidence_plot
+                        binary_pred_3d = mask_3d.astype(np.uint8)
+                        valid_pts_world = pts_3d_world[mask_3d]
+                        clusters_3d = np.zeros(len(pts_3d_world), dtype=int)
+
+                        if len(valid_pts_world) > 0:
+                            dbscan = DBSCAN(eps=0.3, min_samples=candidate_min_points)
+                            cluster_labels = dbscan.fit_predict(valid_pts_world)
+                            valid_cluster_mask = cluster_labels != -1
+                            clusters_3d[mask_3d] = np.where(valid_cluster_mask, cluster_labels + 1, 0)
+
+                        # Back-project 2D GT onto 3D points for the 3D GT plot
+                        gt_pts_3d = np.zeros(len(pts_3d_world), dtype=np.uint8)
+                        gt_pts_3d[valid_idx] = binary_gt_2d[row_indices[valid_idx], col_indices[valid_idx]]
+
+                    else:
+                        # --- Standard 2D Model ---
+                        raw_pred_2d = np.squeeze(probs_array)
+                        _, binary_pred_2d = apply_confidence_threshold(raw_pred_2d, valid_mask_2d, min_confidence_plot)
+                        binary_pred_3d = None
+                        clusters_3d = None
+                        gt_pts_3d = None
+
+                    plot_title = f"Prediction Check ({stats['model_type']} Model): {model_name}"
+                    subtitle = (
+                        f"Patch: {file_name} | GT Pixels: {pixel_count} | Conf-Thresh: {min_confidence_plot} | "
+                        f"Max-Prob: {probs_array.max():.3f} | Min-Prob: {probs_array.min():.3f}"
+                    )
                     plot_filename = model_plot_dir / f"check_{file_name}.png"
 
                     plot_prediction_check(
                         bev_input=bev_input,
-                        gt_label=binary_mask,
-                        raw_pred=raw_pred_2d,
-                        binary_pred=binary_pred,
+                        gt_label_2d=binary_gt_2d,
+                        raw_pred_2d=raw_pred_2d,
+                        binary_pred_2d=binary_pred_2d,
                         title=plot_title,
-                        subtitle=f"Patch: {file_name} | Max-Conf: {probs_array.max():.3f}",
-                        save_path=str(plot_filename)
+                        subtitle=subtitle,
+                        save_path=str(plot_filename),
+                        is_3d=is_3d,
+                        pts_3d=pts_3d_world,
+                        probs_3d=probs_array if is_3d else None,
+                        binary_pred_3d=binary_pred_3d,
+                        clusters_3d=clusters_3d,
+                        gt_pts_3d=gt_pts_3d
                     )
                     plotted_samples += 1
+
                 except StopIteration:
-                    print(f"[WARN] Patch {pc_id}_{x_start}_{y_start} nicht im Dataset gefunden.")
+                    print(f"[WARN] Patch {pc_id}_{x_start}_{y_start} not found in dataset.")
                 except Exception as e:
-                    print(f"[ERROR] Fehler beim Plotten von {file_name}: {e}")
+                    print(f"[ERROR] Failed to plot {file_name}: {e}")
 
         summary_report[model_name] = stats
         result = (
-            f"Modell-Zusammenfassung ({model_name}):"
-            f"  Geprüfte Dateien: {stats['total_files']}"
-            f"  Shapes:           {list(stats['shapes_seen'])}"
-            f"  NaN/Inf-Fehler:   {stats['nan_or_inf']}"
-            f"  Außerhalb [0, 1]: {stats['out_of_bounds']}"
-            f"  Fehlende TIME:    {stats['missing_time_files']}"
-            f"  Plots erstellt:   {plotted_samples} in {model_plot_dir}"
+            f"Model Summary ({model_name} [{stats['model_type']}]):\n"
+            f"  Expected Files (Ref):     {stats['expected_files']}\n"
+            f"  Checked Files:            {stats['total_files']}\n"
+            f"  Missing / Skipped Files:  {stats['missing_or_skipped_files']}\n"
+            f"  Missing Examples (<=10):  {stats['missing_patch_examples']}\n"
+            f"  Small Clouds (<{min_points_threshold} pts): {stats['small_point_clouds (<1000 pts)']}\n"
+            f"  Valid Files:              {stats['valid_files']}\n"
+            f"  Shapes Seen:              {list(stats['shapes_seen'])}\n"
+            f"  NaN/Inf Errors:           {stats['nan_or_inf']}\n"
+            f"  Corrupt 3D Dicts:         {stats['corrupt_3d_dicts']}\n"
+            f"  Empty 2D Projections:     {stats['empty_2d_projections']}\n"
+            f"  Out of Bounds [0, 1]:     {stats['out_of_bounds']}\n"
+            f"  Missing TIME Files:       {stats['missing_time_files']}\n"
+            f"  Plots Created:            {plotted_samples} in {model_plot_dir}"
         )
 
         summary_report_str += f"\n\n{result}"
         print(result)
 
-    with open("./output/saved_prediction_check.txt", "w") as file_:
+    # os.makedirs("./output", exist_ok=True)
+    with open(os.path.join(model_plot_dir, "saved_prediction_check.txt"), "w", encoding="utf-8") as file_:
         file_.write(summary_report_str)
 
     return summary_report
+
+
+def get_all_expected_patch_keys(config):
+    # 1. Load datasets (WHU & SUD)
+        base_loader_whu = get_data_loader(
+            config.data.name,
+            config.data.path,
+            type="all",
+            transform=get_basic_transform(),
+            batch_size=1,
+            shuffle=False,
+            num_workers=1,
+            preprocessed=True,
+            return_train_format=True,
+            return_dataset=True,
+            bev_normalized=False,
+            bev_normalize_mode="local_minmax",
+        )
+        # dataset_whu = BEVDataset(
+        #     path=base_loader_whu.point_cloud_paths,
+        #     file_paths=[],
+        #     has_labels=True,
+        #     image_training=True,
+        #     preprocessor=None,
+        #     heatmap_gt_path=None,
+        #     normalize=True,
+        #     normalization_mode="local_minmax",
+        # )
+    
+        base_loader_sud = get_data_loader(
+            config.data.name_2,
+            config.data.path_2,
+            type="all",
+            transform=get_basic_transform(),
+            batch_size=1,
+            shuffle=False,
+            num_workers=1,
+            preprocessed=True,
+            return_train_format=True,
+            return_dataset=True,
+            bev_normalized=config.data.normalization,
+            bev_normalize_mode=config.data.normalization_mode,
+        )
+        # dataset_sud = BEVDataset(
+        #     path=base_loader_sud.point_cloud_paths,
+        #     file_paths=[],
+        #     has_labels=True,
+        #     image_training=True,
+        #     preprocessor=None,
+        #     heatmap_gt_path=None,
+        #     normalize=True,
+        #     normalization_mode="local_minmax",
+        # )
+
+        return extract_dataset_patch_keys(base_loader_whu, "whu") | extract_dataset_patch_keys(base_loader_sud, "sud")
+
+
+def main_prediction_verification(config):
+    expected_keys = get_all_expected_patch_keys(config)
+
+    report = run_prediction_verification(
+        config=config,
+        root_pred_dir="F:/Fraunhofer_Backup/saved_final_preds",
+        expected_patch_keys=expected_keys,
+        min_points_threshold=1000
+    )
+
+
+
+
+
+def debug_check_bev_labels_and_preds(config):
+    """
+    ============================================================
+    STARTE LABEL & PREDICTION DIAGNOSE (whu)
+    ============================================================
+    [Sample 0] pixel_values shape: (3, 500, 500), min: -1.1009, max: 3.0000, mean: -0.7272
+    [Sample 0] labels shape: (500, 500), dtype: int64
+
+    ERGEBNIS nach 2907 geprüften Patches:
+    - Globale Verteilung der Label-Werte: {0: 39337477, 255: 687399765, 1: 12758}
+        Label 0: 39337477 Pixel (5.41%)
+        Label 255: 687399765 Pixel (94.59%)
+        Label 1: 12758 Pixel (0.00%)
+    - Patches komplett nur 255: 0 / 2907
+    - Patches mit Manhole (Label == 1): 25 / 2907
+    - Max Prediction über alle geprüften .npy Dateien: 1.000000
+    - Beispiel-Predictions auf echten Manhole-Patches (ID | Max Gesamt | Max ohne 255 | Max auf GT==1):
+        0940_6340.5_2070.0: max_all=1.0000, max_without_255=1.0000, max_on_gt1=1.0000
+        0940_6345.0_2029.5: max_all=1.0000, max_without_255=1.0000, max_on_gt1=1.0000
+        0940_6345.0_2034.0: max_all=1.0000, max_without_255=1.0000, max_on_gt1=1.0000
+        0940_6349.5_1993.5: max_all=1.0000, max_without_255=1.0000, max_on_gt1=1.0000
+        0940_6349.5_1998.0: max_all=0.3530, max_without_255=0.0594, max_on_gt1=0.0594
+    ============================================================
+    """
+
+    pred_save_dir = "F:/Fraunhofer_Backup/saved_final_preds/SEG_UNET_EFFICIENTNET"
+    
+    cur_dataset="whu"
+    
+    test_3d_dataset = get_data_loader(
+        cur_dataset, 
+        config.data.path if cur_dataset == "whu" else config.data.path_2, 
+        type="test",
+        transform=get_basic_transform(),
+        batch_size=1, 
+        shuffle=False, 
+        num_workers=4,
+        preprocessed=True, 
+        return_train_format=True,
+        return_dataset=True,
+        bev_normalized=config.data.normalization, 
+        bev_normalize_mode=config.data.normalization_mode
+    )
+
+    all_test_paths = test_3d_dataset.point_cloud_paths
+    max_check = len(all_test_paths)
+    
+    test_bev_dataset = BEVDataset(
+        path=all_test_paths, 
+        file_paths=[], 
+        has_labels=True, 
+        image_training=True, 
+        preprocessor=None,
+        augment=False,
+        pass_label_in_preprocessor=False,
+        heatmap_gt_path=None,
+        used_heatmap_channel=2,
+        normalize=True, 
+        normalization_mode="global_standard"
+    )
+    
+    
+    print("\n" + "="*60)
+    print(f"STARTE LABEL & PREDICTION DIAGNOSE ({cur_dataset})")
+    print("="*60)
+    
+    total_checked = 0
+    patches_with_manhole_gt = 0
+    patches_only_255 = 0
+    label_value_counts = {}
+    max_preds_on_manholes = []
+    max_preds_overall = []
+
+    for idx, cur_data_path in enumerate(all_test_paths[:max_check]):
+        pc_id, x_start, y_start = test_bev_dataset.extract_grid_identifier(cur_data_path)
+        bev_dict = next(test_bev_dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True))
+        
+        y = bev_dict["labels"].numpy()
+        x = bev_dict["pixel_values"].numpy()
+        
+        if idx == 0:
+            print(f"[Sample 0] pixel_values shape: {x.shape}, min: {x.min():.4f}, max: {x.max():.4f}, mean: {x.mean():.4f}")
+            print(f"[Sample 0] labels shape: {y.shape}, dtype: {y.dtype}")
+
+        uniques, counts = np.unique(y, return_counts=True)
+        for u, c in zip(uniques, counts):
+            label_value_counts[int(u)] = label_value_counts.get(int(u), 0) + int(c)
+
+        if np.all(y == 255):
+            patches_only_255 += 1
+            
+        has_manhole = np.any(y == 1)
+        if has_manhole:
+            patches_with_manhole_gt += 1
+
+        # Falls gespeicherte Predictions existieren, direkt mitprüfen
+        if pred_save_dir is not None:
+            pred_file = os.path.join(pred_save_dir, f"{cur_dataset}_{pc_id}_{x_start}_{y_start}.npy")
+            if os.path.exists(pred_file):
+                pred = np.load(pred_file)
+                max_preds_overall.append(float(np.max(pred)))
+                if has_manhole:
+                    # Max prob überall vs. Max prob wenn man 255 ignoriert
+                    pred_sq = np.squeeze(pred)
+                    max_all = float(np.max(pred_sq))
+                    max_valid = float(np.max(pred_sq[y != 255])) if np.any(y != 255) else 0.0
+                    max_on_gt1 = float(np.max(pred_sq[y == 1]))
+                    max_preds_on_manholes.append((f"{pc_id}_{x_start}_{y_start}", max_all, max_valid, max_on_gt1))
+
+        total_checked += 1
+
+    print(f"\nERGEBNIS nach {total_checked} geprüften Patches:")
+    print(f"  - Globale Verteilung der Label-Werte: {label_value_counts}")
+    total_px = sum(label_value_counts.values())
+    for k, v in label_value_counts.items():
+        print(f"      Label {k}: {v} Pixel ({100.0 * v / total_px:.2f}%)")
+    print(f"  - Patches komplett nur 255: {patches_only_255} / {total_checked}")
+    print(f"  - Patches mit Manhole (Label == 1): {patches_with_manhole_gt} / {total_checked}")
+    
+    if max_preds_overall:
+        print(f"  - Max Prediction über alle geprüften .npy Dateien: {max(max_preds_overall):.6f}")
+    if max_preds_on_manholes:
+        print("  - Beispiel-Predictions auf echten Manhole-Patches (ID | Max Gesamt | Max ohne 255 | Max auf GT==1):")
+        for item in max_preds_on_manholes[:5]:
+            print(f"      {item[0]}: max_all={item[1]:.4f}, max_without_255={item[2]:.4f}, max_on_gt1={item[3]:.4f}")
+    print("="*60 + "\n")
+
+
+
+def manhole_patch_points_check(config):
+    """
+    Checks how much points the patches with manhole have.
+
+    Because Manholes should exist in areas with more points.
+
+    whu
+        - min     :  5104.0000
+        - max     : 1774590.0000
+        - mean    : 62066.3662
+        - std     : 164003.9711
+    sud
+        - min     :  2771.0000
+        - max     : 395101.0000
+        - mean    : 102598.2323
+        - std     : 57957.1545
+    """
+
+    result = {}
+
+    for cur_dataset in ["whu", "sud"]:
+        patch_3d_dataset = get_data_loader(
+            cur_dataset, 
+            config.data.path if cur_dataset == "whu" else config.data.path_2, 
+            type="all",
+            transform=get_basic_transform(),
+            batch_size=1, 
+            shuffle=False, 
+            num_workers=4,
+            preprocessed=True, 
+            return_train_format=True,
+            return_dataset=False,
+            bev_normalized=config.data.normalization, 
+            bev_normalize_mode=config.data.normalization_mode
+        )
+
+        all_test_paths = patch_3d_dataset.dataset.point_cloud_paths
+        max_check = len(all_test_paths)
+
+        points = []
+
+        for patch in patch_3d_dataset:
+            x, y = patch[0]
+            x = torch.squeeze(x)
+            y = torch.squeeze(y)
+
+            if y[y == 1].sum() > 50:
+                points.append(x.shape[0])
+        
+
+        # extract stats (min, max, mean, std) + save it in results
+        points = np.array(points)
+        result[cur_dataset] = {
+            "min": points.min(),
+            "max": points.max(),
+            "mean": points.mean(),
+            "std": points.std()
+        }
+        
+
+    for cur_dataset in result.keys():
+        print(f"{cur_dataset}")
+        for (key, value) in result[cur_dataset].items():
+            print(f"    - {key:<8}: {value:>10.4f}")
+
+    return result
+            
 
 
 
@@ -6402,16 +6934,20 @@ def tryout(config):
 
     # make_dataset_analysis(config)
 
-    run_prediction_verification(
-        config,
-        root_pred_dir="F:/Fraunhofer_Backup/saved_final_preds",
-        output_vis_dir="./output/pred_verification_plots",
-        samples_to_plot_per_model=20,
-        min_confidence_plot=0.5,
-        ignore_index=255
-    )
-
-
-
+    # main_prediction_verification(config)
 
     
+
+    # debug_check_bev_labels_and_preds(config)
+
+
+    manhole_patch_points_check(config)
+
+    
+
+
+
+
+
+
+

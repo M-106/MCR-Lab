@@ -1355,38 +1355,79 @@ class BEVDataset(Dataset):
 
         return self._process_item_by_path(cur_file_path)
 
-
-    def manhole_filter(self, required_manhole_points=200, amount_non_manhole_samples=10):
+    def manhole_filter(
+        self, 
+        required_manhole_points=200, 
+        amount_non_manhole_samples=10, 
+        min_valid_background_pixels=15000,  # ~6% of a 500x500 BEV grid must have real points
+        ignore_index=255
+    ):
         new_file_paths = []
-
         all_non_manhole_paths = []
-        plot_amount = 0
 
         for idx in range(len(self.file_paths)):
             cur_file_path = self.file_paths[idx]
-
             tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
-
             labels = tile[-1]
 
             manhole_points = np.sum(labels == 1)
 
             if manhole_points >= required_manhole_points:
-                new_file_paths.append(self.file_paths[idx])
-            
-            if manhole_points == 0:
-                all_non_manhole_paths.append(self.file_paths[idx])
+                new_file_paths.append(cur_file_path)
+            elif manhole_points == 0:
+                # Only keep non-manhole patches that actually contain enough road/background structure
+                # (Pixels that are NOT ignore_index=255)
+                valid_bg_pixels = np.sum(labels == 0) if ignore_index is not None else np.sum(labels > -900)
+                if valid_bg_pixels >= min_valid_background_pixels:
+                    all_non_manhole_paths.append(cur_file_path)
 
-
-        # add non manhole samples
+        # Add dense non-manhole samples
         samples_to_take = min(len(all_non_manhole_paths), amount_non_manhole_samples)
         if samples_to_take > 0:
             non_manhole_paths_to_add = random.sample(all_non_manhole_paths, samples_to_take)
             new_file_paths.extend(non_manhole_paths_to_add)
 
-        # info and update
-        print(f"Reduced from {len(self.file_paths)} to {len(new_file_paths)} (filtered by manhole points -> min manhole points: {required_manhole_points}).")
+        # Shuffle so all non-manhole patches aren't grouped at the very end of the dataset!
+        random.shuffle(new_file_paths)
+
+        print(
+            f"Reduced from {len(self.file_paths)} to {len(new_file_paths)} "
+            f"(Positives: {len(new_file_paths) - samples_to_take}, "
+            f"Dense Negatives: {samples_to_take} / {len(all_non_manhole_paths)} available)."
+        )
         self.file_paths = new_file_paths
+
+    # def manhole_filter(self, required_manhole_points=200, amount_non_manhole_samples=10):
+    #     new_file_paths = []
+
+    #     all_non_manhole_paths = []
+    #     plot_amount = 0
+
+    #     for idx in range(len(self.file_paths)):
+    #         cur_file_path = self.file_paths[idx]
+
+    #         tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
+
+    #         labels = tile[-1]
+
+    #         manhole_points = np.sum(labels == 1)
+
+    #         if manhole_points >= required_manhole_points:
+    #             new_file_paths.append(self.file_paths[idx])
+            
+    #         if manhole_points == 0:
+    #             all_non_manhole_paths.append(self.file_paths[idx])
+
+
+    #     # add non manhole samples
+    #     samples_to_take = min(len(all_non_manhole_paths), amount_non_manhole_samples)
+    #     if samples_to_take > 0:
+    #         non_manhole_paths_to_add = random.sample(all_non_manhole_paths, samples_to_take)
+    #         new_file_paths.extend(non_manhole_paths_to_add)
+
+    #     # info and update
+    #     print(f"Reduced from {len(self.file_paths)} to {len(new_file_paths)} (filtered by manhole points -> min manhole points: {required_manhole_points}).")
+    #     self.file_paths = new_file_paths
         
     def get_patch_via_identifier(self, pc_id, x_start, y_start, return_generator=False):
         file_path = self.file_paths_dict[f"{pc_id}_{x_start}_{y_start}"]
@@ -1405,31 +1446,6 @@ class BEVDataset(Dataset):
 
         for cur_file_path in file_paths:
             yield self._process_item_by_path(cur_file_path)
-
-        # for cur_file_path in file_paths:
-        #     tile, meta = load_single_bev_tile_as_pickle(cur_file_path)
-
-        #     if self.has_labels:
-        #         x = torch.from_numpy(tile[:-1]).float()
-        #         if self.heatmap_gt_path is None:
-        #             y = torch.from_numpy(tile[-1]).long()
-        #         else:
-        #             y = torch.from_numpy(tile[-1]).float()
-                
-        #         assert x.ndim == 3
-        #         assert y.ndim == 2
-        #         yield {
-        #             "pixel_values": x,   # (C, H, W)
-        #             "labels": y,  # .reshape((bev.shape[1], bev.shape[2]))          # (H, W)
-        #             "meta": meta
-        #         }
-        #     else:
-        #         x = torch.from_numpy(tile).float()
-        #         yield {
-        #             "pixel_values": x,   # (C, H, W)
-        #             "labels": None,
-        #             "meta": meta
-        #         }
         
 
     def _process_item_by_path(self, cur_file_path):

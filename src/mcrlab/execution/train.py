@@ -880,6 +880,325 @@ def train(config):
 
 
 
+# ----------------------------------------
+# > Hard-Negative-Calibration-Finetuning <
+# ----------------------------------------
+class PrecisionFinetuneTrainer(HFTrainer):
+    """
+    Custom Trainer that heavily penalizes False Positives on empty background patches
+    using a combination of CrossEntropy/BCE, Focal Loss, and Dice Loss.
+    """
+    def __init__(self, *args, ignore_index=255, using_heatmap_as_gt=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ignore_index = ignore_index
+        self.using_heatmap_as_gt = using_heatmap_as_gt
+
+        if not self.using_heatmap_as_gt:
+            self.dice_loss = smp.losses.DiceLoss(mode="multiclass", ignore_index=ignore_index)
+            self.focal_loss = smp.losses.FocalLoss(mode="multiclass", ignore_index=ignore_index)
+            # Class weight [1.5, 1.0] slightly boosts background penalty to suppress false positives
+            self.ce_loss = nn.CrossEntropyLoss(
+                weight=torch.tensor([1.5, 1.0], device="cuda"),
+                ignore_index=ignore_index
+            )
+        else:
+            self.mse_loss = nn.MSELoss()
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        outputs = model(**inputs)
+        logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+        labels = inputs.get("labels")
+
+        # Upsample logits to match label size (e.g., 500x500) if necessary
+        if logits.shape[-2:] != labels.shape[-2:]:
+            logits = F.interpolate(
+                logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
+            )
+
+        if self.using_heatmap_as_gt:
+            valid_mask = labels != self.ignore_index
+            preds = torch.sigmoid(logits.squeeze(1))
+            loss = self.mse_loss(preds[valid_mask], labels.float()[valid_mask])
+        else:
+            labels_long = labels.long()
+            # Combine CE + Focal (strong gradients on empty patches!) with a smaller Dice weight
+            loss_ce = self.ce_loss(logits, labels_long)
+            loss_focal = self.focal_loss(logits, labels_long)
+            loss_dice = self.dice_loss(logits, labels_long)
+            loss = 0.45 * loss_ce + 0.35 * loss_focal + 0.20 * loss_dice
+
+        return (loss, outputs) if return_outputs else loss
+
+
+def finetune_for_precision(
+    config,
+    checkpoint_path: str = None,
+    epochs: float = 1.0,
+    lr: float = 1e-5,
+    non_manhole_train_samples: int = 800,
+    non_manhole_val_samples: int = 200,
+    freeze_encoder: bool = True
+) -> str:
+    """
+    Loads a pretrained model checkpoint and fine-tunes it specifically with empty 
+    (non-manhole) patches to eliminate background hallucinations and boost precision.
+
+    Args:
+        config: The configuration object.
+        checkpoint_path: Path to the trained checkpoint. Falls back to config.model.check_point_path.
+        epochs: Number of fine-tuning epochs (1.0 is usually enough).
+        lr: Low learning rate for calibration without destroying recall (default: 1e-5).
+        non_manhole_train_samples: Number of empty background patches to include in training.
+        non_manhole_val_samples: Number of empty background patches to include in validation.
+        freeze_encoder: Freezes the encoder/backbone to speed up training and preserve features.
+
+    Returns:
+        str: Path to the best saved model checkpoint directory.
+    """
+    if not torch.cuda.is_available():
+        raise RuntimeError("GPU accelerator not found!")
+
+    # 1. Resolve checkpoint path
+    ckpt_to_load = checkpoint_path or config.model.check_point_path
+    if not ckpt_to_load or ckpt_to_load == "None":
+        raise ValueError("You must provide a valid checkpoint_path to fine-tune!")
+
+    batch_size = config.train.batch_size
+    model_name = config.model.name.lower()
+    encoder_name = config.model.encoder
+
+    heatmap_path = config.data.heatmap_path
+    used_heatmap_channel = config.data.used_heatmap_channel
+    using_heatmap_as_gt = not (heatmap_path is None or heatmap_path == "None")
+    if not using_heatmap_as_gt:
+        heatmap_path = None
+
+    ignore_index = -999 if using_heatmap_as_gt else 255
+    num_labels = 1 if using_heatmap_as_gt else 2
+    metric_for_best_model = "eval_mae_score" if using_heatmap_as_gt else "eval_manhole_iou"
+    greater_is_better = not using_heatmap_as_gt
+
+    now = datetime.now()
+    heatmap_gt_str = f"heatmapGT{used_heatmap_channel}_" if heatmap_path else ""
+    save_name = (
+        f"{now.year}_{now.month:02}_{now.day:02}_{now.hour:02}_{now.minute:02}_"
+        f"{model_name}_{config.data.name}_{heatmap_gt_str}{config.train.exp_name}_precision_ft"
+    )
+    output_dir = f"/out/checkpoints/2d/{save_name}"
+
+    # 2. Load pretrained model and processor from checkpoint
+    print(f"[Fine-Tuning] Loading checkpoint from: {ckpt_to_load}")
+    model, processor = get_model_and_processor(
+        model_name=model_name,
+        encoder_name=encoder_name,
+        check_point_path=ckpt_to_load,
+        num_labels=num_labels,
+        mode="train",
+        ignore_index=ignore_index,
+        heatmap_is_gt=using_heatmap_as_gt
+    )
+
+    # 3. Freeze encoder/backbone so the model retains its positive manhole features
+    if freeze_encoder:
+        frozen_params = 0
+        for name, param in model.named_parameters():
+            if any(k in name.lower() for k in ["encoder", "backbone", "pretrained"]):
+                param.requires_grad = False
+                frozen_params += 1
+        print(f"[Fine-Tuning] Froze {frozen_params} encoder parameter tensors.")
+
+        # Set BatchNorm layers in frozen encoder to eval mode so running stats don't drift
+        for name, module in model.named_modules():
+            if any(k in name.lower() for k in ["encoder", "backbone"]) and isinstance(
+                module, (nn.BatchNorm2d, nn.SyncBatchNorm, nn.LayerNorm)
+            ):
+                module.eval()
+
+    # 4. Load Training & Validation Datasets with significantly more non-manhole patches!
+    pass_label_in_preprocessor = model_name in ["mask2former", "oneformer"]
+    normalization = config.data.normalization
+    normalization_mode = config.data.normalization_mode
+
+    def _collect_paths(split_type: str, shuffle: bool):
+        if config.data.name == "merged_whu_sud":
+            ds_whu = get_data_loader(
+                "whu", config.data.path, type=split_type, transform=get_basic_transform(),
+                batch_size=batch_size, shuffle=shuffle, num_workers=4,
+                preprocessed=True, return_train_format=True, return_dataset=True
+            )
+            ds_sud = get_data_loader(
+                "sud", config.data.path_2, type=split_type, transform=get_basic_transform(),
+                batch_size=batch_size, shuffle=shuffle, num_workers=4,
+                preprocessed=True, return_train_format=True, return_dataset=True
+            )
+            return ds_whu.point_cloud_paths + ds_sud.point_cloud_paths
+        else:
+            ds = get_data_loader(
+                config.data.name, config.data.path, type=split_type, transform=get_basic_transform(),
+                batch_size=batch_size, shuffle=shuffle, num_workers=4,
+                preprocessed=True, return_train_format=True, return_dataset=True
+            )
+            return ds.point_cloud_paths
+
+    all_train_paths = _collect_paths("train", shuffle=True)
+    train_dataset = BEVDataset(
+        path=all_train_paths, file_paths=[], has_labels=True, image_training=True,
+        preprocessor=processor, augment=True, pass_label_in_preprocessor=pass_label_in_preprocessor,
+        heatmap_gt_path=heatmap_path, used_heatmap_channel=used_heatmap_channel,
+        normalize=normalization, normalization_mode=normalization_mode
+    )
+    # CRITICAL FIX: Include enough empty background patches (was only 10 before!)
+    train_dataset.manhole_filter(
+        required_manhole_points=50,
+        amount_non_manhole_samples=non_manhole_train_samples,
+        min_valid_background_pixels=10000,  # ~6% of a 500x500 BEV grid must have real points
+        ignore_index=255
+    )
+
+    all_val_paths = _collect_paths("val", shuffle=False)
+    val_dataset = BEVDataset(
+        path=all_val_paths, file_paths=[], has_labels=True, image_training=True,
+        preprocessor=processor, augment=False, pass_label_in_preprocessor=pass_label_in_preprocessor,
+        heatmap_gt_path=heatmap_path, used_heatmap_channel=used_heatmap_channel,
+        normalize=normalization, normalization_mode=normalization_mode
+    )
+    # CRITICAL FIX: Also include empty patches in validation so IoU penalizes False Positives!
+    val_dataset.manhole_filter(
+        required_manhole_points=50,
+        amount_non_manhole_samples=non_manhole_val_samples,
+        min_valid_background_pixels=10000,  # ~5% of a 500x500 BEV grid must have real points
+        ignore_index=255
+    )
+
+    print(f"[Fine-Tuning] Train samples: {len(train_dataset)} | Val samples: {len(val_dataset)}")
+
+    # 5. Setup Collator and Metrics
+    def collate_fn(batch):
+        pixel_values = torch.stack([x["pixel_values"] for x in batch])
+        if model_name in ["mask2former", "oneformer"]:
+            return {
+                "pixel_values": pixel_values,
+                "mask_labels": [x["mask_labels"] for x in batch],
+                "class_labels": [x["class_labels"] for x in batch]
+            }
+        labels = torch.stack([x["labels"] for x in batch])
+        return {"pixel_values": pixel_values, "labels": labels}
+
+    def compute_metrics_fn(eval_pred):
+        if hasattr(eval_pred, "predictions") and hasattr(eval_pred, "label_ids"):
+            outputs, labels = eval_pred.predictions, eval_pred.label_ids
+        else:
+            outputs, labels = eval_pred
+
+        target_sizes = [(500, 500)] * labels.shape[0]
+        preds = get_segmentation_prediction(
+            outputs, model_name=model_name, processor=processor,
+            target_sizes=target_sizes, using_heatmap_as_gt=using_heatmap_as_gt, as_prob=True
+        )
+        if isinstance(preds, torch.Tensor):
+            preds = preds.detach().cpu().numpy()
+        if isinstance(labels, torch.Tensor):
+            labels = labels.detach().cpu().numpy()
+
+        return compute_metrics(
+            preds=preds, labels=labels, ignore_index=ignore_index,
+            using_heatmap_as_gt=using_heatmap_as_gt,
+            confident_threshold_start=0.5, confident_threshold_end=0.55, confident_threshold_step=0.05,
+            iou_threshold_start=0.5, iou_threshold_end=0.55, iou_threshold_step=0.05,
+            return_micro_fps_fpn=False,
+        )
+
+    # 6. Configure Training Arguments & Optimizer (Using the actual low learning rate!)
+    grad_accum = 2
+    steps_per_epoch = max(1, int(len(train_dataset) / (batch_size * grad_accum)))
+    eval_steps = max(1, steps_per_epoch // 2)  # Evaluate twice per epoch
+    total_train_steps = max(1, int(steps_per_epoch * epochs))
+    warmup_steps = max(5, int(0.1 * total_train_steps))
+
+    training_args = HFTrainingArguments(
+        output_dir=output_dir,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        learning_rate=lr,
+        lr_scheduler_type="cosine",
+        warmup_steps=warmup_steps,
+        fp16=False,
+        gradient_accumulation_steps=grad_accum,
+        num_train_epochs=epochs,
+        dataloader_num_workers=4,
+        eval_strategy="steps",
+        eval_steps=eval_steps,
+        save_strategy="steps",
+        save_steps=eval_steps,
+        save_total_limit=2,
+        load_best_model_at_end=True,
+        metric_for_best_model=metric_for_best_model,
+        greater_is_better=greater_is_better,
+        logging_steps=10,
+        remove_unused_columns=False,
+        push_to_hub=False,
+        report_to=["tensorboard"],
+        use_cpu=False
+    )
+
+    # Only optimize trainable parameters with the specified low learning rate (NOT 1e-3!)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = AdamW(
+        trainable_params,
+        lr=lr,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.01
+    )
+
+    lr_scheduler = get_cosine_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_train_steps
+    )
+
+    plotting_callback = ImagePlottingCallback(
+        val_dataset=val_dataset, save_name=save_name, processor=processor,
+        model_name=model_name, config=config, num_samples=5, pre_name="precision_ft",
+        batch_size=batch_size, ignore_index=ignore_index, using_heatmap_as_gt=using_heatmap_as_gt
+    )
+
+    # Use CustomSegmentationTrainer if Mask2Former/OneFormer, else our PrecisionFinetuneTrainer
+    trainer_cls = HFTrainer if model_name in ["mask2former", "oneformer"] else partial(
+        PrecisionFinetuneTrainer, ignore_index=ignore_index, using_heatmap_as_gt=using_heatmap_as_gt
+    )
+
+    trainer = trainer_cls(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+        data_collator=collate_fn,
+        optimizers=(optimizer, lr_scheduler),
+        compute_metrics=compute_metrics_fn,
+        callbacks=[plotting_callback],
+        preprocess_logits_for_metrics=lambda logits, labels: logits[:2] if model_name in ["mask2former", "oneformer"] else logits,
+    )
+
+    os.makedirs(output_dir, exist_ok=True)
+    with open(f"{output_dir}/config.txt", "w") as file_:
+        yaml.dump(config.dict(), file_)
+
+    # 7. Run Fine-Tuning and Save Final Best Checkpoint
+    trainer.train()
+
+    # Determine the exact path to the best checkpoint
+    best_ckpt_path = trainer.state.best_model_checkpoint
+    if best_ckpt_path is None:
+        # for file_name in os.listdir(output_dir):
+        #     if file_name.startswith("checkpoint-"):
+        # Fallback: explicitly save the best loaded model into a dedicated subfolder
+        best_ckpt_path = os.path.join(output_dir, "best_checkpoint")
+        trainer.save_model(best_ckpt_path)
+
+    print(f"[Fine-Tuning] Finished! Best checkpoint saved at: {best_ckpt_path}")
+    return best_ckpt_path
+
 
 
 
