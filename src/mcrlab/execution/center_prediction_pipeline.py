@@ -1515,8 +1515,8 @@ def center_eval(config):
                 traditional_method = "_".join(model_name.split("_")[1:])
                 min_confidence = min_confidences[0]
 
-                if gt_labels_numpy[gt_labels_numpy == 1].sum() > 50:
-                    print("DEBUGGING: PATCH HAVE A MANHOLE...")
+                # if gt_labels_numpy[gt_labels_numpy == 1].sum() > 50:
+                #     print("DEBUGGING: PATCH HAVE A MANHOLE...")
 
                 detected_centers, debug_dict = predict_manhole_centers(
                     pts_3d=pc,
@@ -1617,11 +1617,20 @@ def center_eval(config):
                     if process_3d_mode.lower() == "3d":
                         start_time = time.perf_counter() - loaded_pred_time
 
-                        mask = probs_1d >= min_confidence
+                        # Filter out NaNs/Infs to prevent Cython KDTree crashes
+                        valid_coords_mask = np.isfinite(pts_3d_world).all(axis=1)
+                        mask = (probs_1d >= min_confidence) & valid_coords_mask
                         valid_pts_world = pts_3d_world[mask]
+                        # Force C-contiguous float32 array
+                        valid_pts_world = np.ascontiguousarray(valid_pts_world, dtype=np.float32)
                         labeled_preds = np.zeros(len(pts_3d_world), dtype=int)
 
                         if len(valid_pts_world) > 0:
+                            if len(valid_pts_world) > 50000:
+                                print(f"[Warning] Extremely dense patch ({len(valid_pts_world)} points). DBSCAN may run out of memory.")
+                                num_pred_objects = 0
+                                continue
+
                             dbscan = DBSCAN(eps=0.3, min_samples=candidate_min_points)
                             cluster_labels = dbscan.fit_predict(valid_pts_world)
                             valid_cluster_mask = cluster_labels != -1
@@ -1681,8 +1690,12 @@ def center_eval(config):
                             continue
 
                         # preds_closed = binary_closing(preds_binary, structure=closing_struct, iterations=8).astype(np.uint8)
-                        preds_cleaned = binary_opening(preds_binary, structure=closing_struct, iterations=4)
-                        preds_closed = binary_closing(preds_cleaned, structure=closing_struct, iterations=4).astype(np.uint8)
+                        # preds_cleaned = binary_opening(preds_binary, structure=closing_struct, iterations=4)
+                        # preds_closed = binary_closing(preds_cleaned, structure=closing_struct, iterations=4).astype(np.uint8)
+                        # Heavily CLOSE first to fuse the sparse projected 3D points into a solid blob
+                        preds_closed = binary_closing(preds_binary, structure=closing_struct, iterations=8)
+                        # Lightly OPEN to remove standalone noise pixels
+                        preds_closed = binary_opening(preds_closed, structure=closing_struct, iterations=2).astype(np.uint8)
                         labeled_preds, num_pred_objects = label(preds_closed)
                         extracted_pixel_centers = []
                         total_prediction_time = time.perf_counter() - start_time
@@ -1731,34 +1744,34 @@ def center_eval(config):
                             #     # Must have enough real 3D points and be flat (manholes are on flat pavement)
                             #     if len(local_3d_pts) < 30 or torch.std(local_3d_pts[:, 2]) > 0.05:
                             #         continue
-                            if pc is not None and len(pc) > 0:
-                                pc_np = pc.detach().cpu().numpy()
-                                # 1. Ist der Punkt auf dem Boden? (Filtert Bäume, Schilder, Autodächer, Poller)
-                                # Das unterste 10%-Perzentil im Patch ist fast immer die echte Straßenoberfläche
-                                road_z = np.percentile(pc_np[:, 2], 10)
-                                if abs(center[2] - road_z) > 0.20:  # Mehr als 20 cm über Straßenniveau -> Kein Gulli!
-                                    continue
+                            # if pc is not None and len(pc) > 0:
+                            #     pc_np = pc.detach().cpu().numpy()
+                            #     # 1. Ist der Punkt auf dem Boden? (Filtert Bäume, Schilder, Autodächer, Poller)
+                            #     # Das unterste 10%-Perzentil im Patch ist fast immer die echte Straßenoberfläche
+                            #     # road_z = np.percentile(pc_np[:, 2], 10)
+                            #     if abs(center[2] - road_z) > 0.20:  # Mehr als 20 cm über Straßenniveau -> Kein Gulli!
+                            #         continue
     
-                                # 2. Schneide einen Ring um den Gulli aus: Innen (Gulli, r <= 0.35m) vs. Außenring (Straße, 0.4m < r <= 0.8m)
-                                dx = pc_np[:, 0] - center[0]
-                                dy = pc_np[:, 1] - center[1]
-                                r_sq = dx**2 + dy**2
+                            #     # 2. Schneide einen Ring um den Gulli aus: Innen (Gulli, r <= 0.35m) vs. Außenring (Straße, 0.4m < r <= 0.8m)
+                            #     dx = pc_np[:, 0] - center[0]
+                            #     dy = pc_np[:, 1] - center[1]
+                            #     r_sq = dx**2 + dy**2
     
-                                inner_pts = pc_np[r_sq <= 0.35**2]
-                                outer_pts = pc_np[(r_sq > 0.40**2) & (r_sq <= 0.80**2)]
+                            #     inner_pts = pc_np[r_sq <= 0.35**2]
+                            #     outer_pts = pc_np[(r_sq > 0.40**2) & (r_sq <= 0.80**2)]
     
-                                # Ein echter Gullideckel liegt MITTEN auf einer geschlossenen Fahrbahn:
-                                # -> Sowohl innen als auch im Ring außenrum MÜSSEN Punkte sein!
-                                # (Filtert Patch-Ränder, Bordsteinkanten und isolierte Punkthaufen im Nichts)
-                                if len(inner_pts) < 40 or len(outer_pts) < 80:
-                                    continue
+                            #     # Ein echter Gullideckel liegt MITTEN auf einer geschlossenen Fahrbahn:
+                            #     # -> Sowohl innen als auch im Ring außenrum MÜSSEN Punkte sein!
+                            #     # (Filtert Patch-Ränder, Bordsteinkanten und isolierte Punkthaufen im Nichts)
+                            #     if len(inner_pts) < 40 or len(outer_pts) < 80:
+                            #         continue
     
-                                # 3. Der Außenring (die Straße um den Gulli) und der Gulli selbst müssen auf EXAKT 
-                                # derselben Höhe liegen und brettflach sein (Filtert Randsteine, Büsche, Gräben)
-                                if abs(np.median(inner_pts[:, 2]) - np.median(outer_pts[:, 2])) > 0.03: # max 3 cm Höhenversatz zur Straße!
-                                    continue
-                                if np.std(inner_pts[:, 2]) > 0.025 or np.std(outer_pts[:, 2]) > 0.04:   # Muss extrem flach sein!
-                                    continue
+                            #     # 3. Der Außenring (die Straße um den Gulli) und der Gulli selbst müssen auf EXAKT 
+                            #     # derselben Höhe liegen und brettflach sein (Filtert Randsteine, Büsche, Gräben)
+                            #     if abs(np.median(inner_pts[:, 2]) - np.median(outer_pts[:, 2])) > 0.03: # max 3 cm Höhenversatz zur Straße!
+                            #         continue
+                            #     if np.std(inner_pts[:, 2]) > 0.025 or np.std(outer_pts[:, 2]) > 0.04:   # Muss extrem flach sein!
+                            #         continue
 
                             total_localization_time = time.perf_counter() - additional_post_processing_time_start
                             final_elapsed_time = total_prediction_time + total_localization_time
@@ -1897,7 +1910,8 @@ def center_eval(config):
                             prediction=preds_prob,
                             mask_to_polygon_fn=mask_to_polygon,
                             min_confidence_peak=min_confidence_peak,
-                            known_radius_px=0.6
+                            known_radius_px=0.6,
+                            sigma=60  # standard: 3
                         )
 
                         if center_coords is None:

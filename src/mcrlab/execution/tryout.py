@@ -6934,14 +6934,14 @@ def tryout(config):
 
     # make_dataset_analysis(config)
 
-    # main_prediction_verification(config)
+    main_prediction_verification(config)
 
     
 
     # debug_check_bev_labels_and_preds(config)
 
 
-    manhole_patch_points_check(config)
+    # manhole_patch_points_check(config)
 
     
 

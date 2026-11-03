@@ -25,11 +25,11 @@ gt_extraction:
     # "/data/" "./output/" # "/data/2d_gt_patches"  "./output/"
     # rm -rf ../data/2d_gt_patches && mkdir ../data/2d_gt_patches && chmod -R 777 ../data/2d_gt_patches
     # "./mcr_maps" # "./output/eval_ground_truths_mean.json"
-    center_algorithm: "squares"    # "squares", "mean", "ransac", "mesqra"
+    center_algorithm: "mean"    # "squares", "mean", "ransac", "mesqra"
     debugging_path: "./output"  # None or "/path"
 
 center_eval:
-    center_extraction_method: "polygon_centroid"
+    center_extraction_method: "circle_least_squares"
     # "polygon_centroid", "circle_least_squares", "peak_maxima"
     #    2D:
     #     # for segmentations
@@ -60,8 +60,8 @@ center_eval:
     # run_in_only_pred_save_mode: True
     # pred_save_mode_saving_name: "2D_Seg_UNet_Segformer"
     run_mode: "load"  # save, load, normal (everything else)
-    pred_save_load_mode_saving_name: "SEG_UNET_EFFICIENTNET"
-    pred_save_load_mode_saving_path: "F:/Fraunhofer_Backup/saved_final_preds"  # "./saved_preds"  "/out/saved_preds"
+    pred_save_load_mode_saving_name: "3D_POINTCONV"  # SEG_UNET_EFFICIENTNET_FINETUNED, SEG_DPT_VIT_FINETUNED, SEG_DEEPLABV3_EFFICIENTNET_FINETUNED, HEATMAP_UNET_EFFICIENTNET, HEATMAP_DPT_VIT_PRETRAINED, HEATMAP_DEEPLABV3_EFFICIENTNET  
+    pred_save_load_mode_saving_path: "F:/Fraunhofer_Backup/saved_final_preds"  # "./saved_preds"
     clear_pred_save_load_only_model_folder: False
     clear_pred_save_load_folder: False
     process_3d_mode: "2d"   # 2d for projection or 3d for native usage, but choose extraction method carefully
@@ -71,9 +71,9 @@ inference:
   save_path: "./output/inference/eval_preds.json"
 
 model:
-  name: "traditional_2d_hough"  # "unet" "unetplusplus" "fpn" "deeplabv3" "deeplabv3plus" dpt"
+  name: "traditional_2d_dist_transform"  # "unet" "unetplusplus" "fpn" "deeplabv3" "deeplabv3plus" dpt"
   # not used: "pspnet"  "linknet" "manet" "pan" "upernet" "segformer"
-  # "traditional_2d_hough", "traditional_2d_contours", "traditional_3d_ransac", "traditional_3d_dbscan"
+  # "traditional_2d_hough", "traditional_2d_circularity", "traditional_2d_dist_transform"
   encoder: "timm-efficientnet-b7"  # resnet34, resnet50, resnet101, efficientnet-b7, mit_b5, densenet161, vgg19
   # for others:
   #    timm-efficientnet-b7 (5/6)
