@@ -17,7 +17,7 @@ import torch
 import open3d as o3d
 
 from scipy.spatial import KDTree, cKDTree
-from scipy.ndimage import label, center_of_mass, binary_closing
+from scipy.ndimage import label, center_of_mass, binary_closing, binary_opening
 from scipy.ndimage.morphology import generate_binary_structure
 from skimage.feature import peak_local_max
 from sklearn.cluster import DBSCAN
@@ -6445,6 +6445,7 @@ def run_prediction_verification(
                 # else:
                 #     pts_3d_world = (xyz_local * scale) + centroid
             else:
+                # continue  # Skip non-3D predictions that are not valid numpy arrays
                 stats["model_type"] = "2D"
                 probs_array = raw_pred
 
@@ -6484,7 +6485,8 @@ def run_prediction_verification(
 
                     # Support gt == 1 or any positive label != ignore_index
                     binary_gt_2d = (gt_np > 0) & (gt_np != ignore_index)
-                    binary_gt_2d = binary_closing(binary_gt_2d, structure=closing_struct, iterations=8).astype(np.uint8)
+                    binary_gt_2d = binary_closing(binary_gt_2d, structure=closing_struct, iterations=8)
+                    binary_gt_2d = binary_opening(binary_gt_2d, structure=closing_struct, iterations=2).astype(np.uint8)
                     pixel_count = int(np.sum(binary_gt_2d))
 
                     # Only plot patches that actually contain Ground Truth objects
@@ -6656,6 +6658,405 @@ def main_prediction_verification(config):
     )
 
 
+
+# Qualitative Comparison Plots
+def _lookup_patch_data(dataset, dataset_name, pc_id, x_start, y_start):
+    """Helper to cleanly extract a patch from a dataset."""
+    try:
+        gen = dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True)
+        return next(gen)
+    except Exception as e:
+         print(f"Failed to find patch {pc_id}_{x_start}_{y_start} in dataset {dataset_name}: {e}")
+         return None
+
+def generate_comparative_qualitative_plot(
+    config,
+    root_pred_dir,
+    target_patches,
+    model_configs,
+    save_path,
+    min_confidence=0.5,
+    ignore_index=255
+):
+    """
+    Creates a side-by-side qualitative comparison plot for selected patches across different models.
+
+    Args:
+        config: Your main config object.
+        root_pred_dir: Base directory containing model prediction folders.
+        target_patches: List of patch prefixes to plot, e.g., ["whu_0414_0_0", "sud_001_10_20"].
+        model_configs: List of dicts defining the models to compare:
+                       [{'dir': 'unet_b7_seg', 'name': 'U-Net Seg (2D)', 'type': '2D'}, ...]
+        save_path: Output file path for the plot.
+    """
+    # 1. Initialize Datasets
+    closing_struct = generate_binary_structure(2, 2)
+    candidate_min_points = getattr(config.center_eval, "candidate_min_points", 10)
+
+    # (Assume data loaders are initialized similarly to your previous script)
+    # This is pseudo-code for brevity; use your actual loader initialization here.
+    loaders = {
+        'whu': get_data_loader(config.data.name, config.data.path, type="all", transform=get_basic_transform(), batch_size=1, shuffle=False, preprocessed=True, return_train_format=True, return_dataset=True, bev_normalized=False),
+        'sud': get_data_loader(config.data.name_2, config.data.path_2, type="all", transform=get_basic_transform(), batch_size=1, shuffle=False, preprocessed=True, return_train_format=True, return_dataset=True, bev_normalized=config.data.normalization)
+    }
+
+    datasets = {
+        'whu': BEVDataset(path=loaders['whu'].point_cloud_paths, file_paths=[], has_labels=True, image_training=True, normalize=True, normalization_mode="local_minmax"),
+        'sud': BEVDataset(path=loaders['sud'].point_cloud_paths, file_paths=[], has_labels=True, image_training=True, normalize=True, normalization_mode="local_minmax")
+    }
+
+    num_patches = len(target_patches)
+    # Columns: Input, Ground Truth, Model 1, Model 2, Model 3...
+    num_cols = 2 + len(model_configs) 
+    
+    fig, axes = plt.subplots(num_patches, num_cols, figsize=(4 * num_cols, 4 * num_patches), layout="constrained")
+    if num_patches == 1:
+        axes = [axes] # ensure 2D iterable
+
+    for row_idx, patch_name in enumerate(target_patches):
+        print(f"Processing patch: {patch_name}")
+        
+        # Parse patch name
+        try:
+            prefix, x_start, y_start = patch_name.rsplit("_", 2)
+            dataset_str, pc_id = prefix.split("_", 1)
+        except ValueError:
+            print(f"Invalid patch name format: {patch_name}")
+            continue
+
+        dataset = datasets.get(dataset_str.lower())
+        if not dataset:
+            print(f"Dataset {dataset_str} not found.")
+            continue
+
+        patch_dict = _lookup_patch_data(dataset, dataset_str, pc_id, x_start, y_start)
+        if not patch_dict:
+            continue
+
+        # Extract Ground Truth and Input
+        bev_input = np.squeeze(patch_dict["pixel_values"].detach().cpu().numpy())
+        # if bev_input.ndim == 3: bev_input = bev_input[..., 1] # Extract intensity if 3-channel
+        if bev_input.ndim == 3: bev_input = bev_input[1, ...] # Extract intensity if 3-channel
+        # bev_input = bev_input[bev_input != 255]
+        alpha_map = alpha_map = ((bev_input != 255) & (bev_input != 0)).astype(float)
+        alpha_map = np.where(alpha_map == 0, 0.2, alpha_map)  # set small aplpa value for ignore index
+        
+        gt_labels = np.squeeze(patch_dict["labels"].detach().cpu().numpy())
+        valid_mask_2d = (gt_labels != ignore_index)
+        
+        binary_gt_2d = (gt_labels > 0) & (gt_labels != ignore_index)
+        binary_gt_2d = binary_closing(binary_gt_2d, structure=closing_struct, iterations=8)
+        binary_gt_2d = binary_opening(binary_gt_2d, structure=closing_struct, iterations=2).astype(np.uint8)
+
+        # Plot Input
+        ax_in = axes[row_idx][0]
+        ax_in.imshow(bev_input, cmap="plasma", alpha=alpha_map)
+        ax_in.set_title(f"Input: {patch_name}" if row_idx == 0 else "")
+        ax_in.axis("off")
+
+        # Plot Ground Truth
+        ax_gt = axes[row_idx][1]
+        ax_gt.imshow(binary_gt_2d, cmap="tab10", vmin=0, vmax=1)
+        ax_gt.set_title("Ground Truth" if row_idx == 0 else "")
+        ax_gt.axis("off")
+
+        # Process each model
+        for col_idx, model_info in enumerate(model_configs):
+            ax_mod = axes[row_idx][col_idx + 2]
+            ax_mod.axis("off")
+            
+            model_dir = os.path.join(root_pred_dir, model_info['dir'])
+            pred_file = os.path.join(model_dir, f"{patch_name}.npy")
+            
+            if row_idx == 0:
+                 ax_mod.set_title(model_info['name'])
+
+            if not os.path.exists(pred_file):
+                ax_mod.text(0.5, 0.5, "Missing", ha='center', va='center')
+                continue
+
+            try:
+                raw_pred = np.load(pred_file, allow_pickle=True)
+            except Exception as e:
+                ax_mod.text(0.5, 0.5, "Load Error", ha='center', va='center')
+                continue
+
+            if model_info['type'] == '3D':
+                grid_position = ax_mod.get_subplotspec()
+                ax_mod.remove()
+                ax_mod = fig.add_subplot(grid_position, projection='3d')
+
+                if not isinstance(raw_pred, np.ndarray) or raw_pred.dtype != object:
+                    ax_mod.text(0.5, 0.5, "Invalid 3D Format", ha='center', va='center')
+                    continue
+                
+                loaded_dict = raw_pred.item()
+                pts_3d_local = loaded_dict.get("points")
+                probs_array = loaded_dict.get("probs")
+                centroid = loaded_dict.get("centroid", np.zeros(3))
+                
+                if pts_3d_local is None or probs_array is None:
+                    ax_mod.text(0.5, 0.5, "Missing 3D Data", ha='center', va='center')
+                    continue
+
+                pts_3d_world = pts_3d_local[:, :3] + centroid
+                 
+                #  # Project to 2D for comparison
+                #  raw_pred_2d, valid_idx, row_indices, col_indices = project_3d_to_2d_bev(
+                #         pts_3d_world, probs_array, patch_dict["meta"]
+                #  )
+
+                #  probs_array = show in 3D
+
+                # Confidence threshold
+                mask_3d = probs_array >= min_confidence
+            
+                # Background and foreground
+                bg_idx = np.where(~mask_3d)[0]
+                fg_idx = np.where(mask_3d)[0]
+
+                # Limit background points for visualization
+                max_bg = max(1000, 25000 - len(fg_idx))
+
+                if len(bg_idx) > max_bg:
+                    bg_idx = np.random.choice(
+                        bg_idx, max_bg, replace=False
+                    )
+
+                # Plot background
+                ax_mod.scatter(
+                    pts_3d_world[bg_idx, 0],
+                    pts_3d_world[bg_idx, 1],
+                    pts_3d_world[bg_idx, 2],
+                    c="lightgray",
+                    s=1.0,
+                    alpha=0.25,
+                    label="Background"
+                )
+
+                # Plot foreground colored by prediction probability
+                if len(fg_idx) > 0:
+
+                    sc = ax_mod.scatter(
+                        pts_3d_world[fg_idx, 0],
+                        pts_3d_world[fg_idx, 1],
+                        pts_3d_world[fg_idx, 2],
+                        c=probs_array[fg_idx],
+                        cmap="viridis",
+                        vmin=0,
+                        vmax=1,
+                        s=5.0,
+                        alpha=0.95,
+                        label="Prediction"
+                    )
+
+                    fig.colorbar(
+                        sc,
+                        ax=ax_mod,
+                        fraction=0.046,
+                        pad=0.08,
+                        label="Probability"
+                    )
+
+                ax_mod.set_title(
+                    f"{model_info['name']}\n"
+                    f"Points: {len(pts_3d_world)} | "
+                    f"Positive: {len(fg_idx)}"
+                )
+
+                ax_mod.view_init(elev=55, azim=-60)
+
+                ax_mod.set_xlabel("X")
+                ax_mod.set_ylabel("Y")
+                ax_mod.set_zlabel("Z")
+
+                ax_mod.invert_yaxis()
+
+                # Equal aspect ratio
+                ax_mod.set_box_aspect((1, 1, 0.5))
+                 
+                 # orig_h, orig_w = raw_pred_2d.shape
+                #  grid_binary = np.zeros((orig_h, orig_w), dtype=np.uint8)
+                #  bin_mask_1d = (probs_array[valid_idx] >= min_confidence).astype(np.uint8)
+                #  np.maximum.at(grid_binary, (row_indices[valid_idx], col_indices[valid_idx]), bin_mask_1d)
+                #  binary_pred_2d = binary_closing(grid_binary, structure=closing_struct, iterations=8).astype(np.uint8)
+
+            else:
+                # 2D Model
+                probs_array = np.squeeze(raw_pred)
+                # _, binary_pred_2d = apply_confidence_threshold(probs_array, valid_mask_2d, min_confidence)
+
+                ax_mod.imshow(
+                    probs_array,
+                    cmap="viridis",
+                    vmin=0,
+                    vmax=1
+                )
+
+                ax_mod.set_title(model_info['name'])
+                ax_mod.axis("off")
+
+            # # Mask invalid areas if necessary
+            # if valid_mask_2d is not None:
+            #     binary_pred_2d = binary_pred_2d & valid_mask_2d
+
+            # ax_mod.imshow(probs_array, cmap="plasma")  # , vmin=0, vmax=1
+
+    plt.suptitle("Qualitative Comparison Across Modalities", fontsize=16, fontweight="bold")
+    plt.savefig(save_path, bbox_inches="tight", dpi=300)
+    plt.close()
+    print(f"Plot saved to {save_path}")
+
+
+def main_qualitative_comparison(config):
+    model_configs = [
+        {'dir': 'SEG_DEEPLABV3_EFFICIENTNET_FINETUNED', 'name': 'DeepLabV3 (2D Seg)', 'type': '2D'},
+        {'dir': 'HEATMAP_UNET_EFFICIENTNET', 'name': 'U-Net (2D Heatmap)', 'type': '2D'},
+        {'dir': '3D_PointNet2', 'name': 'PointNet++ (3D)', 'type': '3D'}
+    ]
+    # # target_patches = [
+    # #     "whu_0414_0_0",      # Example: A standard successful patch
+    # #     "whu_0500_10_20",    # Example: A patch where 3D fails
+    # #     "sud_001_50_50"      # Example: An Out-of-Distribution patch
+    # # ]
+    # target_patches = []
+    # for filename in os.listdir("F:/Fraunhofer_Backup/saved_final_preds/SEG_DEEPLABV3_EFFICIENTNET_FINETUNED"):
+    #     if filename.endswith("TIME.npy") or filename.startswith("sud"):
+    #         continue
+
+    #     if filename.endswith(".npy"):
+    #         target_patches.append(filename.replace(".npy", ""))
+
+    # 1. Load datasets ONCE here instead of inside the plotting function
+    loaders = {
+        'whu': get_data_loader(config.data.name, config.data.path, type="all", transform=get_basic_transform(), batch_size=1, shuffle=False, preprocessed=True, return_train_format=True, return_dataset=True, bev_normalized=False),
+        'sud': get_data_loader(config.data.name_2, config.data.path_2, type="all", transform=get_basic_transform(), batch_size=1, shuffle=False, preprocessed=True, return_train_format=True, return_dataset=True, bev_normalized=config.data.normalization)
+    }
+    datasets = {
+        'whu': BEVDataset(path=loaders['whu'].point_cloud_paths, file_paths=[], has_labels=True, image_training=True, normalize=True, normalization_mode="local_minmax"),
+        'sud': BEVDataset(path=loaders['sud'].point_cloud_paths, file_paths=[], has_labels=True, image_training=True, normalize=True, normalization_mode="local_minmax")
+    }
+
+    # 2. Gather all filenames
+    all_patches = []
+    pred_dir = "F:/Fraunhofer_Backup/saved_final_preds/SEG_DEEPLABV3_EFFICIENTNET_FINETUNED"
+    for filename in os.listdir(pred_dir):
+        if filename.endswith(".npy") and not filename.endswith("TIME.npy") and not filename.startswith("sud"):
+            all_patches.append(filename.replace(".npy", ""))
+
+    # 3. FILTER: Keep only patches that have manholes in the Ground Truth
+    target_patches = []
+    for patch_name in all_patches:
+        try:
+            prefix, x_start, y_start = patch_name.rsplit("_", 2)
+            dataset_str, pc_id = prefix.split("_", 1)
+            dataset = datasets.get(dataset_str.lower())
+            
+            patch_dict = _lookup_patch_data(dataset, dataset_str, pc_id, x_start, y_start)
+            if patch_dict:
+                gt_labels = np.squeeze(patch_dict["labels"].detach().cpu().numpy())
+                # Check if manhole pixels exist (> 0) and ignore border/invalid index (255)
+                # We use > 10 pixels to avoid filtering in noise/artifacts
+                if np.sum((gt_labels > 0) & (gt_labels != 255)) > 10:
+                    target_patches.append(patch_name)
+        except Exception as e:
+            print(f"Skipping {patch_name} during filter: {e}")
+
+    print(f"Filtered down to {len(target_patches)} patches containing manholes.")
+
+    # 4. Plot in batches of 3
+    for idx in range(0, len(target_patches), 3):
+        batch_patches = target_patches[idx:idx + 3]
+        generate_comparative_qualitative_plot(
+            config, 
+            "F:/Fraunhofer_Backup/saved_final_preds", 
+            batch_patches, 
+            model_configs, 
+            f"./output/qualitative_comparison/qualitative_comparison_{idx}.png"
+        )
+
+
+
+
+# def plot_manhole_samples_with_3d_and_bev(config, save_dir="./output/manhole_plots", ignore_index=255):
+#     """
+#     Iterates over WHU and SUD datasets, identifies all samples containing manholes,
+#     and exports a 2x2 grid per patch:
+#     - [0,0]: 3D Scatter (Colored by Intensity)
+#     - [0,1]: BEV Channel 0 (Height)
+#     - [1,0]: BEV Channel 1 (Intensity)
+#     - [1,1]: BEV Channel 2 (Density)
+    
+#     Alpha is set to 0.2 for ignore indices (0 and 255).
+#     Saves image as: {dataset}_{pc_id}_{x_start}_{y_start}.png
+#     """
+#     os.makedirs(save_dir, exist_ok=True)
+    
+#     loaders = {
+#         'whu': get_data_loader(config.data.name, config.data.path, type="all", transform=get_basic_transform(), preprocessed=True),
+#         'sud': get_data_loader(config.data.name_2, config.data.path_2, type="all", transform=get_basic_transform(), preprocessed=True)
+#     }
+
+#     datasets = {
+#         'whu': BEVDataset(path=loaders['whu'].point_cloud_paths, has_labels=True, normalize=True),
+#         'sud': BEVDataset(path=loaders['sud'].point_cloud_paths, has_labels=True, normalize=True)
+#     }
+
+#     for ds_name, dataset in datasets.items():
+#         print(f"Processing dataset: {ds_name}")
+#         all_file_paths = getattr(dataset, "file_paths", [f"tile_{i}.npy" for i in range(len(dataset))])
+
+#         for idx in tqdm(range(len(dataset)), desc=f"Scanning {ds_name}"):
+#             file_name = os.path.split(all_file_paths[idx])[-1]
+#             pc_id, x_start, y_start = dataset.extract_grid_identifier(file_name, as_float=False)
+
+#             try:
+#                 patch_dict = next(iter(dataset.get_patch_via_identifier(pc_id, x_start, y_start, return_generator=True)))
+#             except Exception as e:
+#                 continue
+
+#             labels = np.squeeze(patch_dict["labels"].detach().cpu().numpy())
+#             if not np.any((labels > 0) & (labels != ignore_index)):
+#                 continue  # Skip negative samples
+
+#             bev_input = np.squeeze(patch_dict["pixel_values"].detach().cpu().numpy())
+#             if bev_input.ndim == 3 and bev_input.shape[0] in [1, 3, 4, 5]:
+#                 bev_input = np.transpose(bev_input, (1, 2, 0))
+
+#             points_3d = patch_dict.get("points")
+#             if points_3d is not None:
+#                 points_3d = points_3d.detach().cpu().numpy()
+
+#             fig = plt.figure(figsize=(14, 12), layout="constrained")
+
+#             # 1. 3D Scatter Plot
+#             ax1 = fig.add_subplot(2, 2, 1, projection='3d')
+#             if points_3d is not None and len(points_3d) > 0:
+#                 px, py, pz = points_3d[:, 0], points_3d[:, 1], points_3d[:, 2]
+#                 intensity = points_3d[:, 3] if points_3d.shape[1] > 3 else pz
+#                 sc = ax1.scatter(px, py, pz, c=intensity, cmap='plasma', s=1.5, alpha=0.8)
+#                 fig.colorbar(sc, ax=ax1, fraction=0.046, pad=0.08, label="Intensity")
+#                 ax1.set_title(f"3D Scatter (Points: {len(points_3d)})")
+#                 ax1.view_init(elev=55, azim=-60)
+#                 ax1.invert_yaxis()
+
+#             # 2-4. BEV Channels
+#             num_channels = bev_input.shape[-1] if bev_input.ndim == 3 else 1
+#             for ch_idx in range(3):
+#                 ax = fig.add_subplot(2, 2, ch_idx + 2)
+#                 if ch_idx < num_channels:
+#                     ch_data = bev_input[..., ch_idx] if bev_input.ndim == 3 else bev_input
+#                     alpha_map = np.ones_like(ch_data, dtype=float)
+#                     alpha_map[(ch_data == 0) | (ch_data == ignore_index)] = 0.2
+#                     im = ax.imshow(ch_data, cmap='viridis', alpha=alpha_map)
+#                     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.08, label=f"Ch {ch_idx}")
+#                     ax.set_title(f"BEV Channel {ch_idx}")
+#                 ax.axis("off")
+
+#             full_patch_name = f"{ds_name}_{pc_id}_{x_start}_{y_start}"
+#             fig.suptitle(f"Patch: {full_patch_name}", fontsize=15, fontweight="bold")
+#             plt.savefig(os.path.join(save_dir, f"{full_patch_name}.png"), dpi=150)
+#             plt.close(fig)
 
 
 
@@ -6934,8 +7335,11 @@ def tryout(config):
 
     # make_dataset_analysis(config)
 
-    main_prediction_verification(config)
+    # main_prediction_verification(config)
 
+    main_qualitative_comparison(config)
+
+    # plot_manhole_samples_with_3d_and_bev(config)
     
 
     # debug_check_bev_labels_and_preds(config)

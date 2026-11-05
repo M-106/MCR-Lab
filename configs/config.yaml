@@ -1,4 +1,4 @@
-mode: center_eval    # custom, train, train_all, test, inference, tryout, preprocessing, gt_extraction, center_eval
+mode: tryout    # custom, train, train_all, test, inference, tryout, preprocessing, gt_extraction, center_eval
 
 
 train:
@@ -29,7 +29,7 @@ gt_extraction:
     debugging_path: "./output"  # None or "/path"
 
 center_eval:
-    center_extraction_method: "circle_least_squares"
+    center_extraction_method: "pca_plane_circle_least_squares"
     # "polygon_centroid", "circle_least_squares", "peak_maxima"
     #    2D:
     #     # for segmentations
@@ -60,11 +60,11 @@ center_eval:
     # run_in_only_pred_save_mode: True
     # pred_save_mode_saving_name: "2D_Seg_UNet_Segformer"
     run_mode: "load"  # save, load, normal (everything else)
-    pred_save_load_mode_saving_name: "3D_POINTCONV"  # SEG_UNET_EFFICIENTNET_FINETUNED, SEG_DPT_VIT_FINETUNED, SEG_DEEPLABV3_EFFICIENTNET_FINETUNED, HEATMAP_UNET_EFFICIENTNET, HEATMAP_DPT_VIT_PRETRAINED, HEATMAP_DEEPLABV3_EFFICIENTNET  
+    pred_save_load_mode_saving_name: "3D_PointNet2"  # SEG_UNET_EFFICIENTNET_FINETUNED, SEG_DPT_VIT_FINETUNED, SEG_DEEPLABV3_EFFICIENTNET_FINETUNED, HEATMAP_UNET_EFFICIENTNET, HEATMAP_DPT_VIT_PRETRAINED, HEATMAP_DEEPLABV3_EFFICIENTNET  
     pred_save_load_mode_saving_path: "F:/Fraunhofer_Backup/saved_final_preds"  # "./saved_preds"
     clear_pred_save_load_only_model_folder: False
     clear_pred_save_load_folder: False
-    process_3d_mode: "2d"   # 2d for projection or 3d for native usage, but choose extraction method carefully
+    process_3d_mode: "3d"   # 2d for projection or 3d for native usage, but choose extraction method carefully
 
 inference:
   checkpoint_path: "./output/checkpoint/2026_06_22_20_31_unet/checkpoint-1196/model.safetensors"
